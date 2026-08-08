@@ -1,7 +1,14 @@
 package main
 
-import "fmt"
+import (
+	"context"
+	"os"
+
+	"github.com/fpierri/backimage/internal/cli"
+)
 
 func main() {
-	fmt.Println("placeholder")
+	if err := cli.Execute(context.Background(), os.Args[1:]); err != nil {
+		os.Exit(cli.ExitCodeFor(err))
+	}
 }

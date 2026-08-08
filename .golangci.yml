@@ -1,0 +1,40 @@
+run:
+  timeout: 10m
+
+linters:
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - unused
+    - ineffassign
+    - gosimple
+    - misspell
+    - revive
+    - gosec
+    - bodyclose
+    - errorlint
+    - nilerr
+    - contextcheck
+    - noctx
+    - copyloopvar
+    - durationcheck
+    - makezero
+    - prealloc
+
+linters-settings:
+  errcheck:
+    check-blank: true
+  revive:
+    rules:
+      - name: exported
+  gosec:
+    excludes:
+      - G304   # file path from user input is this program's job
+
+issues:
+  exclude-rules:
+    - path: _test\.go$
+      linters:
+        - gosec
+        - errcheck
