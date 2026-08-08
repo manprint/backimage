@@ -1,0 +1,6 @@
+/dist/
+/bin/
+*.test
+coverage.out
+plan/BLOCKED.md
+.backimage-cache/
