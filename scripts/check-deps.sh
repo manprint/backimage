@@ -11,7 +11,7 @@ direct=$(go list -m -f '{{if not .Indirect}}{{.Path}}{{end}}' all 2>/dev/null | 
 
 fail=0
 for mod in $direct; do
-  if ! grep -q "^[0-9]* *|- *$mod —" "$DOC"; then
+  if ! grep -qF -- "- $mod —" "$DOC"; then
     echo "ERROR: module '$mod' is used but not documented in $DOC"
     fail=1
   fi

@@ -39,6 +39,7 @@ build-all:      # G4 (tutte le piattaforme)
 
 selfextract:    # binari embeddabili: SOLO linux/amd64 e linux/arm64
 	@for arch in amd64 arm64; do \
+	  rm -f internal/embedded/backimage-selfextract-linux-$$arch; \
 	  GOOS=linux GOARCH=$$arch go build -ldflags '-s -w' \
 	    -o internal/embedded/backimage-selfextract-linux-$$arch \
 	    ./cmd/backimage-selfextract || exit 1; \
@@ -50,7 +51,7 @@ test:           # G5
 	go test ./...
 
 race:           # G6
-	go test -race ./...
+	CGO_ENABLED=1 go test -race ./...
 
 cover:          # G7 — uso: make cover PKG=./pkg/archive/...
 	go test -coverprofile=coverage.out $(PKG)

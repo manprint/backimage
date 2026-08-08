@@ -36,8 +36,9 @@ func LoggerFrom(ctx context.Context) *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
 
-// loggerFor builds the slog logger for the given verbosity on errOut.
-func loggerFor(errOut io.Writer, verbose int) *slog.Logger {
+// NewLoggerFor builds the slog logger for the given verbosity on errOut.
+// Verbosity: 0=warn, 1=debug, 2+=trace.
+func NewLoggerFor(errOut io.Writer, verbose int) *slog.Logger {
 	level := slog.LevelWarn
 	switch {
 	case verbose >= 2:
@@ -49,16 +50,16 @@ func loggerFor(errOut io.Writer, verbose int) *slog.Logger {
 	return slog.New(h)
 }
 
-// reportError renders err to w: "error: ..." plus "hint: ..." when present.
-func reportError(w io.Writer, err error) {
+// ReportError renders err to stderr with its optional hint.
+func ReportError(err error) {
+	ReportErrorTo(os.Stderr, err)
+}
+
+// ReportErrorTo renders err to w: "error: ..." plus "hint: ..." when present.
+func ReportErrorTo(w io.Writer, err error) {
 	fmt.Fprintf(w, "error: %v\n", err)
 	var ce *Error
 	if errors.As(err, &ce) && ce.Hint != "" {
 		fmt.Fprintf(w, "hint:  %s\n", ce.Hint)
 	}
-}
-
-// defaultErrOut returns stderr, overridable by BACKIMAGE_TEST_STDERR in tests.
-func defaultErrOut() io.Writer {
-	return os.Stderr
 }

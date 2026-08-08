@@ -36,7 +36,7 @@ func TestErrorWithHintFormatting(t *testing.T) {
 	var out, errBuf bytes.Buffer
 	p := NewPrinter(&out, &errBuf, Options{})
 	p.Warnf("keep this")
-	reportError(&errBuf, New(KindUsage, "use --flag instead", "bad argument %q", "x"))
+	ReportErrorTo(&errBuf, New(KindUsage, "use --flag instead", "bad argument %q", "x"))
 	if out.Len() != 0 {
 		t.Fatalf("stdout must be empty, got %q", out.String())
 	}

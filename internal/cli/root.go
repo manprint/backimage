@@ -9,21 +9,37 @@ package cli
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 
 	"github.com/spf13/cobra"
 )
 
-// Execute builds the root command and runs it with the given arguments.
-func Execute(ctx context.Context, args []string) error {
-	return classify(rootWithArgs(ctx, args))
+// countVerbose counts -v/--verbose occurrences before cobra parses flags,
+// so the logger can be built with the right level.
+func countVerbose(args []string) int {
+	n := 0
+	for _, a := range args {
+		switch {
+		case a == "-v" || a == "--verbose":
+			n++
+		case strings.HasPrefix(a, "--verbose="):
+			n++
+		}
+	}
+	if n > 2 {
+		n = 2
+	}
+	return n
 }
 
-// rootWithArgs runs the root command with explicit arguments.
-func rootWithArgs(ctx context.Context, args []string) error {
+// Execute builds the root command and runs it with the given arguments.
+func Execute(ctx context.Context, args []string) error {
 	root := NewRootCommand()
 	root.SetArgs(args)
-	return root.ExecuteContext(ctx)
+	root.SetContext(WithLogger(ctx, NewLoggerFor(os.Stderr, countVerbose(args))))
+	err := root.ExecuteContext(ctx)
+	return classify(err)
 }
 
 // classify maps cobra-level usage errors (unknown command/flag) to KindUsage.
@@ -59,7 +75,6 @@ func NewRootCommand() *cobra.Command {
 		newVersionCommand(),
 	)
 
-	root.SetContext(context.Background())
 	return root
 }
 
