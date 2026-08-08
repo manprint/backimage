@@ -3,22 +3,22 @@
 > Aggiornare **dopo ogni sotto-fase verde**: spuntare la casella e aggiungere una riga al Log.
 > Una sotto-fase è verde solo se `make check` esce 0 **e** tutte le voci della sua Definition of Done sono spuntate.
 
-Stato progetto: **NON INIZIATO**
+Stato progetto: **IN CORSO**
 Versione corrente: `0.0.0`
-Ultima fase completata: —
+Ultima fase completata: 00
 
 ---
 
 ## Fase 00 — Fondamenta, build a due stadi, harness CI
-- [ ] 00.1 Scheletro repo, `go.mod`, albero directory
-- [ ] 00.2 Makefile e script di verifica
-- [ ] 00.3 `.golangci.yml` e configurazione lint
-- [ ] 00.4 CI GitHub Actions (matrice, job root, job docker, job qemu)
-- [ ] 00.5 `internal/buildinfo` e `cmd/backimage` root cobra + `version`
-- [ ] 00.6 `internal/cli`: flag globali, output umano/JSON, codici di uscita, logging
-- [ ] 00.7 Build a due stadi con `go:embed` (placeholder)
-- [ ] 00.8 Scheletro `docs/` + `docs/DEPENDENCIES.md`
-- [ ] **Gate fase 00** (G1–G6, G9, G10, G11)
+- [x] 00.1 Scheletro repo, `go.mod`, albero directory
+- [x] 00.2 Makefile e script di verifica
+- [x] 00.3 `.golangci.yml` e configurazione lint
+- [x] 00.4 CI GitHub Actions (matrice, job root, job docker, job qemu)
+- [x] 00.5 `internal/buildinfo` e `cmd/backimage` root cobra + `version`
+- [x] 00.6 `internal/cli`: flag globali, output umano/JSON, codici di uscita, logging
+- [x] 00.7 Build a due stadi con `go:embed` (placeholder)
+- [x] 00.8 Scheletro `docs/` + `docs/DEPENDENCIES.md`
+- [x] **Gate fase 00** (G1–G6, G9, G10, G11)
 
 ## Fase 01 — pkg/archive: fedeltà dei metadati
 - [ ] 01.1 Modello `Entry` e interfacce, `doc.go`
@@ -140,7 +140,7 @@ Ultima fase completata: —
 
 | Data | Sotto-fase | Commit | Gate superati | Note |
 |------|-----------|--------|---------------|------|
-| | | | | |
+| 2026-08-08 | 00.1–00.8 | 9431748, 73b2d06, 2242169, 84be04f | G1–G6, G9, G10, G11 | fase 00 verde |
 
 ---
 
