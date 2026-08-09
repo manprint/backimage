@@ -337,10 +337,10 @@ func runBackup(cmd *cobra.Command, args []string) error {
 		res.Ref, res.Digest, res.Files, res.BytesRaw, res.BytesStored, res.Layers, res.Chunks, res.DurationSeconds, res.SkippedBlobs, res.SkippedBytes)+
 		fmt.Sprintf("\n\ncomandi per recuperare i dati (impostare prima BACKUP_PASSPHRASE):\n"+
 			"  backimage:\n"+
-			"    printf '%%s\\n' \"$BACKUP_PASSPHRASE\" | backimage restore %s --extract --destination ./restore --no-preserve-owner --passphrase-stdin\n"+
+			"    printf '%%s\\n' \"$BACKUP_PASSPHRASE\" | backimage restore %s --extract --destination ./restore --no-preserve-owner --passphrase-stdin --remove-local-image\n"+
 			"  docker run:\n"+
-			"    docker run --rm -i -e BACKIMAGE_PASSPHRASE=\"$BACKUP_PASSPHRASE\" -v \"$PWD/restore:/restore\" %s extract --out /restore --no-preserve-owner",
-			res.Ref, res.Ref))
+			"    docker run --rm -i -e BACKIMAGE_PASSPHRASE=\"$BACKUP_PASSPHRASE\" -e BACKIMAGE_IMAGE_REF=\"%s\" -v \"$PWD/restore:/restore\" -v /var/run/docker.sock:/var/run/docker.sock %s extract --out /restore --no-preserve-owner --remove-local-image",
+			res.Ref, res.Ref, res.Ref))
 }
 
 func readDedupParams(cmd *cobra.Command) (chunk.CDCParams, error) {

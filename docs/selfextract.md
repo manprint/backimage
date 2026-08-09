@@ -9,16 +9,27 @@ docker run --rm -it registry.example/team/backup:tag list
 docker run --rm -i registry.example/team/backup:tag tar > backup.tar
 docker run --rm -v "$PWD/restore:/restore" registry.example/team/backup:tag \
   extract --out /restore
+
+# Rimuove l'immagine locale solo dopo un'estrazione riuscita.
+docker run --rm \
+  -e BACKIMAGE_PASSPHRASE="$BACKUP_PASSPHRASE" \
+  -e BACKIMAGE_IMAGE_REF="registry.example/team/backup:tag" \
+  -v "$PWD/restore:/restore" \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  registry.example/team/backup:tag \
+  extract --out /restore --remove-local-image
 ```
 
 ## Comandi
 
 - `info [--json]` legge solo il manifesto pubblico e non richiede segreti.
 - `list [-l] [--include GLOB] [--exclude GLOB] [--json]` elenca l'indice.
-- `tar [--no-verify]` scrive esclusivamente il tar in chiaro su stdout.
+- `tar [--cpus N] [--no-verify]` scrive esclusivamente il tar in chiaro su stdout.
 - `extract --out DIR` ripristina direttamente; supporta `--include`,
-  `--exclude`, `--strip-components N`, `--overwrite`,
-  `--no-preserve-owner` e `--json`.
+  `--exclude`, `--strip-components N`, `--cpus N`, `--overwrite`,
+  `--no-preserve-owner`, `--remove-local-image` e `--json`. Quest'ultimo
+  richiede `BACKIMAGE_IMAGE_REF` e il mount di `/var/run/docker.sock` e rimuove
+  l'immagine solo dopo il successo dell'estrazione.
 - `verify [--continue] [--json]` controlla tutti i digest memorizzati. Senza
   credenziali, su un backup cifrato, esegue una verifica parziale esplicita;
   con la chiave controlla anche autenticazione, plaintext e indice.

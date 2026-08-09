@@ -65,6 +65,11 @@ Common flags:
   --passphrase-file F  read the passphrase from file F
   --identity F         age private key file
 
+Extract flags:
+  --cpus N             maximum CPUs used during extraction (default: half available CPUs)
+  --remove-local-image remove the Docker image after successful extraction;
+                       requires BACKIMAGE_IMAGE_REF and /var/run/docker.sock
+
 The passphrase is also read from $BACKIMAGE_PASSPHRASE, or prompted on the
 controlling terminal when required.
 `)

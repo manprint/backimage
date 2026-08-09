@@ -16,6 +16,7 @@ Verificato da `make deps-check` (G9).
 - github.com/quic-go/quic-go — trasporto QUIC — fase 09
 - google.golang.org/protobuf — messaggi di controllo — fase 08
 - github.com/restic/chunker — CDC (dedup) — fase 10
+- github.com/moby/moby/client — rimozione esplicita delle immagini Docker locali — fase 07
 - github.com/stretchr/testify — asserzioni nei test — fase 00
 - github.com/dustin/go-humanize — formattazione dimensioni — fase 00
 
@@ -23,6 +24,7 @@ Verificato da `make deps-check` (G9).
 
 Il binario embedded (`cmd/backimage-selfextract`) può importare **solo**:
 `pkg/archive`, `pkg/compress`, `pkg/crypt`, `pkg/index`, stdlib,
-`filippo.io/age`, `golang.org/x/term`, `golang.org/x/sys` e le librerie di
-compressione. Vietati: cobra, go-containerregistry, quic-go, protobuf.
+`filippo.io/age`, `golang.org/x/term`, `golang.org/x/sys`, `pkg/docker` e le
+librerie di compressione. Vietati: cobra, go-containerregistry, quic-go,
+protobuf.
 Budget: ≤ 8 MB non compresso. Verificato da `make deps-check`.

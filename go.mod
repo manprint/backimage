@@ -6,6 +6,7 @@ require (
 	filippo.io/age v1.3.1
 	github.com/google/go-containerregistry v0.21.9
 	github.com/klauspost/compress v1.19.2
+	github.com/moby/moby/client v0.5.1
 	github.com/pierrec/lz4/v4 v4.1.28
 	github.com/quic-go/quic-go v0.61.0
 	github.com/restic/chunker v0.5.0
@@ -34,7 +35,6 @@ require (
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
 	github.com/moby/moby/api v1.55.0 // indirect
-	github.com/moby/moby/client v0.5.1 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/opencontainers/image-spec v1.1.1 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect

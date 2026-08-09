@@ -231,6 +231,34 @@ func TestExtractPartialStripAndValidation(t *testing.T) {
 	if exitCode(err) != exitUsage {
 		t.Fatalf("negative strip exit = %d", exitCode(err))
 	}
+	_, _, err = captureRun(t, "extract", "--root", f.root, "--out", t.TempDir(), "--cpus", "0")
+	if exitCode(err) != exitUsage {
+		t.Fatalf("invalid cpus exit = %d", exitCode(err))
+	}
+}
+
+func TestExtractRemovesLocalImageAfterSuccess(t *testing.T) {
+	f := newCommandFixture(t, false)
+	dst := filepath.Join(t.TempDir(), "restore")
+	t.Setenv("BACKIMAGE_IMAGE_REF", "syncbssuser/mindhunt:mindhunters-test")
+	oldRemove := removeDockerImage
+	t.Cleanup(func() { removeDockerImage = oldRemove })
+	var removed string
+	removeDockerImage = func(_ context.Context, ref string) error {
+		removed = ref
+		return nil
+	}
+
+	out, _, err := captureRun(t, "extract", "--root", f.root, "--out", dst, "--no-preserve-owner", "--remove-local-image")
+	if err != nil {
+		t.Fatalf("extract with image removal = %v", err)
+	}
+	if !strings.Contains(out, "estratti: 1 file") {
+		t.Fatalf("extract output = %q", out)
+	}
+	if removed != "syncbssuser/mindhunt:mindhunters-test" {
+		t.Fatalf("removed image = %q", removed)
+	}
 }
 
 func TestVerifyPartialFullJSONAndCorruption(t *testing.T) {

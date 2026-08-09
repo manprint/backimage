@@ -8,16 +8,20 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"golang.org/x/term"
 
 	"github.com/fpierri/backimage/pkg/archive"
+	"github.com/fpierri/backimage/pkg/cpu"
+	dockerd "github.com/fpierri/backimage/pkg/docker"
 	"github.com/fpierri/backimage/pkg/index"
 	"github.com/fpierri/backimage/pkg/recovery"
 )
 
 var stdoutIsTerminal = func() bool { return term.IsTerminal(int(os.Stdout.Fd())) }
+var removeDockerImage = dockerd.RemoveLocalImage
 
 func cmdInfo(_ context.Context, args []string) error {
 	var common commonOptions
@@ -97,10 +101,16 @@ func cmdList(ctx context.Context, args []string) error {
 func cmdTar(ctx context.Context, args []string) error {
 	var common commonOptions
 	fs := newFlagSet("tar", &common)
+	cpus := fs.Int("cpus", cpu.Default(), "maximum CPUs used during tar extraction (default: half available CPUs)")
 	noVerify := fs.Bool("no-verify", false, "skip plaintext digest verification (last resort)")
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
+	restoreCPUs, err := cpu.Apply(*cpus)
+	if err != nil {
+		return usageErrorf("--cpus: %v", err)
+	}
+	defer restoreCPUs()
 	if stdoutIsTerminal() {
 		return usageErrorf("tar scrive dati binari: reindirizza l'output, es. `docker run --rm -i IMAGE tar > backup.tar`")
 	}
@@ -125,7 +135,9 @@ func cmdExtract(ctx context.Context, args []string) error {
 	out := fs.String("out", "", "destination directory")
 	fs.Var(&includes, "include", "include glob (repeatable)")
 	fs.Var(&excludes, "exclude", "exclude glob (repeatable)")
+	cpus := fs.Int("cpus", cpu.Default(), "maximum CPUs used during extraction (default: half available CPUs)")
 	noOwner := fs.Bool("no-preserve-owner", false, "do not restore owner")
+	removeLocalImage := fs.Bool("remove-local-image", false, "remove the local Docker image after a successful extraction")
 	overwrite := fs.Bool("overwrite", false, "replace existing files")
 	strip := fs.Int("strip-components", 0, "remove leading path components")
 	asJSON := fs.Bool("json", false, "JSON output")
@@ -138,6 +150,11 @@ func cmdExtract(ctx context.Context, args []string) error {
 	if *strip < 0 {
 		return usageErrorf("--strip-components non può essere negativo")
 	}
+	restoreCPUs, err := cpu.Apply(*cpus)
+	if err != nil {
+		return usageErrorf("--cpus: %v", err)
+	}
+	defer restoreCPUs()
 	if !*overwrite {
 		if entries, err := os.ReadDir(*out); err == nil && len(entries) > 0 {
 			return usageErrorf("destinazione %s non vuota; usa --overwrite", *out)
@@ -192,6 +209,15 @@ func cmdExtract(ctx context.Context, args []string) error {
 	}
 	if producerErr != nil {
 		return withCode(exitIntegrity, producerErr)
+	}
+	if *removeLocalImage {
+		ref := strings.TrimSpace(os.Getenv("BACKIMAGE_IMAGE_REF"))
+		if ref == "" {
+			return usageErrorf("--remove-local-image richiede BACKIMAGE_IMAGE_REF")
+		}
+		if err := removeDockerImage(ctx, ref); err != nil {
+			return fmt.Errorf("rimozione immagine locale fallita: %w", err)
+		}
 	}
 	if *asJSON {
 		return json.NewEncoder(stdout).Encode(stats)

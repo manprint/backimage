@@ -14,7 +14,9 @@ import (
 	"golang.org/x/term"
 
 	"github.com/fpierri/backimage/pkg/archive"
+	"github.com/fpierri/backimage/pkg/cpu"
 	"github.com/fpierri/backimage/pkg/crypt"
+	dockerd "github.com/fpierri/backimage/pkg/docker"
 	"github.com/fpierri/backimage/pkg/index"
 	"github.com/fpierri/backimage/pkg/recovery"
 	"github.com/fpierri/backimage/pkg/registry"
@@ -33,9 +35,10 @@ type sourceFlags struct {
 }
 
 var (
-	fromRegistryCLI = restorepkg.FromRegistry
-	fromLayoutCLI   = restorepkg.FromOCILayout
-	fromDaemonCLI   = restorepkg.FromDaemon
+	fromRegistryCLI   = restorepkg.FromRegistry
+	fromLayoutCLI     = restorepkg.FromOCILayout
+	fromDaemonCLI     = restorepkg.FromDaemon
+	removeDockerImage = dockerd.RemoveLocalImage
 )
 
 func addSourceFlags(f *cobra.Command, repoAlias bool) {
@@ -162,7 +165,9 @@ func newRestoreCommand() *cobra.Command {
 	f.StringSlice("include", nil, "include glob (repeatable)")
 	f.StringSlice("exclude", nil, "exclude glob (repeatable)")
 	f.Int("strip-components", 0, "remove leading path components")
+	f.Int("cpus", cpu.Default(), "maximum CPUs used during restore (default: half available CPUs)")
 	f.Bool("no-preserve-owner", false, "do not preserve ownership")
+	f.Bool("remove-local-image", false, "remove the local Docker image after a successful restore")
 	f.Bool("overwrite", false, "replace an existing output")
 	f.Bool("no-verify", false, "skip plaintext chunk digest verification")
 	f.Int("jobs", 3, "parallel layer downloads")
@@ -179,6 +184,11 @@ func runRestore(cmd *cobra.Command, args []string) error {
 	if getFlagInt(cmd, "strip-components") < 0 {
 		return usageErrorf("--strip-components non può essere negativo")
 	}
+	restoreCPUs, err := cpu.Apply(getFlagInt(cmd, "cpus"))
+	if err != nil {
+		return usageErrorf("--cpus: %v", err)
+	}
+	defer restoreCPUs()
 	ctx := cmd.Context()
 	source, err := openSourceForCLI(ctx, refText, flags)
 	if err != nil {
@@ -227,9 +237,16 @@ func runRestore(cmd *cobra.Command, args []string) error {
 		}
 		return err
 	}
+	imageRemoved := false
+	if getFlagBool(cmd, "remove-local-image") {
+		if err := removeDockerImage(ctx, refText); err != nil {
+			return &Error{Kind: KindNetwork, Msg: "rimozione immagine locale fallita", Err: err}
+		}
+		imageRemoved = true
+	}
 	pr := NewPrinter(cmd.OutOrStdout(), cmd.ErrOrStderr(), mustOptions(cmd))
 	if mustOptions(cmd).JSON {
-		return printerResult(pr, map[string]any{"ok": true, "reference": refText, "extract": getFlagBool(cmd, "extract"), "duration": time.Since(started).String()})
+		return printerResult(pr, map[string]any{"ok": true, "reference": refText, "extract": getFlagBool(cmd, "extract"), "remove_local_image": imageRemoved, "duration": time.Since(started).String()})
 	}
 	pr.Infof("restore completato in %s", time.Since(started).Round(time.Millisecond))
 	return nil

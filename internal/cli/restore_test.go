@@ -215,6 +215,27 @@ func TestRestoreTarExtractPartialAndJSON(t *testing.T) {
 	}
 }
 
+func TestRestoreRemovesLocalImageAfterSuccess(t *testing.T) {
+	s, _ := newMockImageSource(t, false)
+	withMockSource(t, s)
+	oldRemove := removeDockerImage
+	t.Cleanup(func() { removeDockerImage = oldRemove })
+	var removed string
+	removeDockerImage = func(_ context.Context, ref string) error {
+		removed = ref
+		return nil
+	}
+
+	dst := filepath.Join(t.TempDir(), "extract")
+	_, _, err := runRoot(t, "restore", "example.test/repo:tag", "--extract", "-C", dst, "--no-preserve-owner", "--remove-local-image")
+	if err != nil {
+		t.Fatalf("restore with image removal = %v", err)
+	}
+	if removed != "example.test/repo:tag" {
+		t.Fatalf("removed image = %q", removed)
+	}
+}
+
 func TestRestoreWrongPassphraseBeforeBlob(t *testing.T) {
 	s, _ := newMockImageSource(t, true)
 	withMockSource(t, s)

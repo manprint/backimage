@@ -555,6 +555,7 @@ backimage restore [IMAGE] [flags]
 
 ```
       --cache-size string        maximum downloaded-layer cache size (default "2GiB")
+      --cpus int                 maximum CPUs used during restore (default: half available CPUs) (default 8)
   -C, --destination string       destination directory (default ".")
       --exclude strings          exclude glob (repeatable)
   -x, --extract                  extract instead of writing a tar
@@ -571,6 +572,7 @@ backimage restore [IMAGE] [flags]
       --passphrase-file string   read passphrase from a file
       --passphrase-stdin         read passphrase from stdin
       --platform string          source platform (default "linux/amd64")
+      --remove-local-image       remove the local Docker image after a successful restore
       --repo string              image reference (alias for positional IMAGE)
       --strip-components int     remove leading path components
 ```

@@ -271,7 +271,7 @@ mkdir -p ./restore
 printf '%s\n' "$BACKUP_PASSPHRASE" | \
 backimage restore docker.io/demoarchiveuser/mindhunters:mindhunters-test \
   --extract --destination ./restore \
-  --no-preserve-owner --passphrase-stdin
+  --no-preserve-owner --passphrase-stdin --remove-local-image --cpus 2
 
 # Solo PDF sotto documents, escludendo i temporanei.
 printf '%s\n' "$BACKUP_PASSPHRASE" | \
@@ -291,6 +291,15 @@ backimage restore --oci-layout ./oci-layout \
   --extract --destination ./restore-local \
   --passphrase-stdin < ./backup.pass
 ```
+
+`--remove-local-image` rimuove la reference locale dal Docker daemon solo
+dopo che il restore è terminato senza errori. Richiede che l'host esponga il
+Docker socket (`DOCKER_HOST` o `/var/run/docker.sock`). Se il restore fallisce,
+l'immagine non viene rimossa. `--cpus N` limita il budget CPU del restore;
+senza il flag il valore predefinito è metà dei processori disponibili, con
+minimo uno. Il limite viene applicato anche quando l'archivio usa gzip, lz4 o
+un altro algoritmo: per decoder non paralleli non crea parallelismo aggiuntivo,
+ma limita comunque il runtime Go dell'operazione.
 
 Per vedere i dati senza estrarli, usare l'indice: `inspect --files` sblocca
 l'immagine e `ls`/`find` elencano i path. `inspect --layers` e `verify --quick`
@@ -318,9 +327,11 @@ mkdir -p ./restore
 docker pull docker.io/demoarchiveuser/mindhunters:mindhunters-test
 docker run --rm \
   -e BACKIMAGE_PASSPHRASE="$BACKUP_PASSPHRASE" \
+  -e BACKIMAGE_IMAGE_REF="docker.io/demoarchiveuser/mindhunters:mindhunters-test" \
   -v "$PWD/restore:/restore" \
+  -v /var/run/docker.sock:/var/run/docker.sock \
   docker.io/demoarchiveuser/mindhunters:mindhunters-test \
-  extract --out /restore --no-preserve-owner
+  extract --out /restore --no-preserve-owner --remove-local-image --cpus 2
 ```
 
 Si può anche estrarre un tar e affidare la materializzazione agli strumenti
@@ -342,7 +353,10 @@ In modalità diretta Docker scarica l'immagine con `docker pull` oppure
 automaticamente al primo `docker run`; non serve installare `backimage` sul
 computer di destinazione. Il comando `extract` dell'immagine è il self-
 extractor incorporato e supporta anche `--include`, `--exclude`,
-`--strip-components` e `--no-preserve-owner`.
+`--strip-components` e `--no-preserve-owner`. Per usare
+`--remove-local-image` servono anche `BACKIMAGE_IMAGE_REF` e il mount del
+Docker socket mostrati nell'esempio; il flag forza la rimozione dell'immagine
+solo dopo un'estrazione riuscita.
 
 Per ispezionare senza copiare file:
 
@@ -593,7 +607,9 @@ Flag restore:
 | `--include GLOB` | — | Include glob; ripetibile |
 | `--exclude GLOB` | — | Esclude glob; ripetibile |
 | `--strip-components N` | `0` | Rimuove componenti iniziali dei path |
+| `--cpus N` | metà dei CPU disponibili | Limita i CPU usati durante il restore |
 | `--no-preserve-owner` | `false` | Non preserva ownership |
+| `--remove-local-image` | `false` | Rimuove l'immagine Docker locale dopo un restore riuscito |
 | `--overwrite` | `false` | Sovrascrive output esistenti |
 | `--no-verify` | `false` | Salta verifica digest plaintext |
 | `--jobs N` | `3` | Download layer paralleli |
