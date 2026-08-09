@@ -53,9 +53,11 @@ bin/backimage backup "$tree" --repo "$REPO" --tag t1 \
 docker pull --platform linux/amd64 "$IMAGE" >/dev/null
 
 echo "==> default info and list"
-docker run --rm "$IMAGE" | grep -q 'backup backimage'
-BACKIMAGE_PASSPHRASE="$secret" docker run --rm \
-	-e BACKIMAGE_PASSPHRASE "$IMAGE" list | grep -q 'tree/sub/small.txt'
+info_output="$(docker run --rm "$IMAGE")"
+grep -q 'backup backimage' <<<"$info_output"
+list_output="$(BACKIMAGE_PASSPHRASE="$secret" docker run --rm \
+	-e BACKIMAGE_PASSPHRASE "$IMAGE" list)"
+grep -q 'tree/sub/small.txt' <<<"$list_output"
 
 echo "==> canonical tar round-trip"
 BACKIMAGE_PASSPHRASE="$secret" docker run --rm \
