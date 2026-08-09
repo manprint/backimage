@@ -200,9 +200,12 @@ func TestRestoreTarExtractPartialAndJSON(t *testing.T) {
 		t.Fatal(err)
 	}
 	dst := filepath.Join(dir, "extract")
-	_, _, err = runRoot(t, "restore", "example.test/repo:tag", "--extract", "-C", dst, "--include", "**/file.txt", "--no-preserve-owner")
+	_, stderr, err := runRoot(t, "restore", "example.test/repo:tag", "--extract", "-C", dst, "--include", "**/file.txt", "--no-preserve-owner")
 	if err != nil {
 		t.Fatal(err)
+	}
+	if !strings.Contains(stderr, "restore:") {
+		t.Fatalf("restore progress = %q", stderr)
 	}
 	content, err := os.ReadFile(filepath.Join(dst, "root", "file.txt"))
 	if err != nil || string(content) != "restore me\n" {

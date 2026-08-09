@@ -17,6 +17,7 @@ import (
 	"github.com/fpierri/backimage/pkg/cpu"
 	dockerd "github.com/fpierri/backimage/pkg/docker"
 	"github.com/fpierri/backimage/pkg/index"
+	"github.com/fpierri/backimage/pkg/progress"
 	"github.com/fpierri/backimage/pkg/recovery"
 )
 
@@ -195,11 +196,20 @@ func cmdExtract(ctx context.Context, args []string) error {
 	if idx != nil {
 		xIncludes, xExcludes = nil, nil // the tar stream is already filtered
 	}
+	total := b.Manifest.Totals.BytesRaw
+	if idx != nil {
+		total = selectedBytes(selected)
+	}
+	report := func(done int64) {
+		fmt.Fprintln(stderr, progress.Message("estrazione", done, total))
+	}
+	report(0)
+	progressReader := progress.NewReader(pr, report)
 	x := archive.NewExtractor(archive.ExtractOptions{
 		PreserveOwner: !*noOwner, PreserveXattrs: true, Overwrite: *overwrite,
 		Includes: xIncludes, Excludes: xExcludes, StripComponents: *strip, Strict: true,
 	})
-	stats, extractErr := x.Extract(ctx, pr, *out)
+	stats, extractErr := x.Extract(ctx, progressReader, *out)
 	if extractErr != nil {
 		_ = pr.CloseWithError(extractErr)
 	}
@@ -224,6 +234,16 @@ func cmdExtract(ctx context.Context, args []string) error {
 	}
 	fmt.Fprintf(stdout, "estratti: %d file, %d directory, %d byte\n", stats.Files, stats.Dirs, stats.BytesRaw)
 	return nil
+}
+
+func selectedBytes(entries []index.FileEntry) int64 {
+	var total int64
+	for _, entry := range entries {
+		if entry.Size > 0 {
+			total += entry.Size
+		}
+	}
+	return total
 }
 
 func cmdVerify(ctx context.Context, args []string) error {

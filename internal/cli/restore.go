@@ -3,6 +3,7 @@ package cli
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -18,6 +19,7 @@ import (
 	"github.com/fpierri/backimage/pkg/crypt"
 	dockerd "github.com/fpierri/backimage/pkg/docker"
 	"github.com/fpierri/backimage/pkg/index"
+	"github.com/fpierri/backimage/pkg/progress"
 	"github.com/fpierri/backimage/pkg/recovery"
 	"github.com/fpierri/backimage/pkg/registry"
 	restorepkg "github.com/fpierri/backimage/pkg/restore"
@@ -227,7 +229,11 @@ func runRestore(cmd *cobra.Command, args []string) error {
 		return b.StreamTar(ctx, w, !getFlagBool(cmd, "no-verify"))
 	}
 	if getFlagBool(cmd, "extract") {
-		err = restoreExtract(cmd, stream, idx != nil)
+		total := b.Manifest.Totals.BytesRaw
+		if idx != nil {
+			total = selectedBytes(selected)
+		}
+		err = restoreExtract(cmd, stream, idx != nil, restoreProgress(cmd, total))
 	} else {
 		err = restoreTar(cmd, refText, stream)
 	}
@@ -291,7 +297,7 @@ func restoreTar(cmd *cobra.Command, refText string, stream func(io.Writer) error
 	return f.Close()
 }
 
-func restoreExtract(cmd *cobra.Command, stream func(io.Writer) error, alreadyFiltered bool) error {
+func restoreExtract(cmd *cobra.Command, stream func(io.Writer) error, alreadyFiltered bool, report func(int64)) error {
 	dest := getFlagString(cmd, "destination")
 	if dest == "" {
 		return usageErrorf("--destination non può essere vuota")
@@ -319,12 +325,16 @@ func restoreExtract(cmd *cobra.Command, stream func(io.Writer) error, alreadyFil
 	pr, pw := io.Pipe()
 	done := make(chan error, 1)
 	go func() { err := stream(pw); _ = pw.CloseWithError(err); done <- err }()
+	if report != nil {
+		report(0)
+	}
+	progressReader := progress.NewReader(pr, report)
 	x := archive.NewExtractor(archive.ExtractOptions{
 		PreserveOwner: !getFlagBool(cmd, "no-preserve-owner"), PreserveXattrs: true,
 		Overwrite: getFlagBool(cmd, "overwrite"), Includes: includes, Excludes: excludes,
 		StripComponents: getFlagInt(cmd, "strip-components"), Strict: true,
 	})
-	_, extractErr := x.Extract(cmd.Context(), pr, dest)
+	_, extractErr := x.Extract(cmd.Context(), progressReader, dest)
 	if extractErr != nil {
 		_ = pr.CloseWithError(extractErr)
 	}
@@ -333,6 +343,25 @@ func restoreExtract(cmd *cobra.Command, stream func(io.Writer) error, alreadyFil
 		return extractErr
 	}
 	return streamErr
+}
+
+func selectedBytes(entries []index.FileEntry) int64 {
+	var total int64
+	for _, entry := range entries {
+		if entry.Size > 0 {
+			total += entry.Size
+		}
+	}
+	return total
+}
+
+func restoreProgress(cmd *cobra.Command, total int64) func(int64) {
+	if mustOptions(cmd).Quiet {
+		return nil
+	}
+	return func(done int64) {
+		fmt.Fprintln(cmd.ErrOrStderr(), progress.Message("restore", done, total))
+	}
 }
 
 func defaultTarName(refText string) string {

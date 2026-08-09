@@ -215,9 +215,12 @@ func TestExtractPartialStripAndValidation(t *testing.T) {
 		t.Fatalf("missing out exit = %d", exitCode(err))
 	}
 	dst := filepath.Join(t.TempDir(), "restore")
-	out, _, err := captureRun(t, "extract", "--root", f.root, "--out", dst, "--include", "**/a.txt", "--strip-components", "1", "--no-preserve-owner")
+	out, stderr, err := captureRun(t, "extract", "--root", f.root, "--out", dst, "--include", "**/a.txt", "--strip-components", "1", "--no-preserve-owner")
 	if err != nil || !strings.Contains(out, "estratti: 1 file") {
 		t.Fatalf("extract = %q, %v", out, err)
+	}
+	if !strings.Contains(stderr, "estrazione:") {
+		t.Fatalf("extract progress = %q", stderr)
 	}
 	got, err := os.ReadFile(filepath.Join(dst, "a.txt"))
 	if err != nil || string(got) != "hello from selfextract\n" {

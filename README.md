@@ -451,6 +451,12 @@ minimo uno. Il limite viene applicato anche quando l'archivio usa gzip, lz4 o
 un altro algoritmo: per decoder non paralleli non crea parallelismo aggiuntivo,
 ma limita comunque il runtime Go dell'operazione.
 
+Durante `restore --extract` la CLI stampa su stderr l'avanzamento in byte e
+percentuale; l'immagine auto-estraente stampa lo stesso avanzamento con
+`docker run`. Gli aggiornamenti sono periodici per non riempire il terminale,
+mentre il riepilogo finale resta su stdout. Con `--json`, il JSON non viene
+mescolato ai messaggi di progresso.
+
 Per vedere i dati senza estrarli, usare l'indice: `inspect --files` sblocca
 l'immagine e `ls`/`find` elencano i path. `inspect --layers` e `verify --quick`
 invece leggono solo i metadati pubblici e non richiedono la passphrase;
