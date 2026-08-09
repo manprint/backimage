@@ -78,8 +78,8 @@ func recoveryInstructions(ref string, encrypted, runnable bool) string {
 	dockerPassphrase := ""
 	if encrypted {
 		appPrefix = "printf '%s\\n' \"$BACKUP_PASSPHRASE\" | "
-		appPassphrase = " --passphrase-stdin"
-		dockerPassphrase = " -e BACKIMAGE_PASSPHRASE=\"$BACKUP_PASSPHRASE\""
+		appPassphrase = " --passphrase-stdin"                                //nolint:gosec // Command suggestion, not a credential.
+		dockerPassphrase = " -e BACKIMAGE_PASSPHRASE=\"$BACKUP_PASSPHRASE\"" //nolint:gosec // Command suggestion, not a credential.
 	}
 
 	var out strings.Builder
@@ -91,8 +91,8 @@ func recoveryInstructions(ref string, encrypted, runnable bool) string {
 		fmt.Fprint(&out, "  docker run: non disponibile (backup creato con --runnable=false)\n")
 	}
 	fmt.Fprint(&out, "\nTips:\n")
-	fmt.Fprint(&out, "  - Se non vuoi ripristinare ownership e gruppi, aggiungi --no-preserve-owner al comando backimage o a extract.\n")
-	fmt.Fprint(&out, "  - Per limitare la CPU, aggiungi --cpus N al comando backimage o a extract.\n")
+	fmt.Fprint(&out, "  - Se non vuoi ripristinare ownership e gruppi, aggiungi --no-preserve-owner al comando backimage o a extract.\n") //nolint:misspell // Messaggio CLI italiano.
+	fmt.Fprint(&out, "  - Per limitare la CPU, aggiungi --cpus N al comando backimage o a extract.\n")                                    //nolint:misspell // Messaggio CLI italiano.
 	fmt.Fprint(&out, "  - Per estrarre solo una parte, aggiungi --include GLOB e/o --exclude GLOB.\n")
 	fmt.Fprint(&out, "  - Per rimuovere l'immagine Docker dopo un'estrazione riuscita, aggiungi --remove-local-image. Con docker run servono anche\n")
 	fmt.Fprintf(&out, "    -e BACKIMAGE_IMAGE_REF=\"%s\" e -v /var/run/docker.sock:/var/run/docker.sock.\n", ref)
