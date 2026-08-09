@@ -41,9 +41,11 @@ jobs:
       - run: go mod download
       - name: Install protobuf toolchain
         run: |
-          sudo apt-get update
-          sudo apt-get install -y protobuf-compiler
+          curl -fsSL -o /tmp/protoc.zip https://github.com/protocolbuffers/protobuf/releases/download/v27.3/protoc-27.3-linux-x86_64.zip
+          rm -rf /tmp/backimage-protoc
+          unzip -q /tmp/protoc.zip -d /tmp/backimage-protoc
           go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.34.2
+          echo "/tmp/backimage-protoc/bin" >> "$GITHUB_PATH"
           echo "$HOME/go/bin" >> "$GITHUB_PATH"
       - run: make check
       - run: make build-all
