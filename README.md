@@ -53,6 +53,285 @@ Le modalità di output di `backup` sono:
 | Tar | `--output tar --output-path FILE` | Scrive un artefatto locale |
 | Server remoto | `--remote HOST:PORT` | Invia i layer a `listen-remote` |
 
+## Compressione e protezione con password
+
+La pipeline è, in ordine, **archivio → chunk → compressione → cifratura →
+layer OCI**. La compressione riduce i dati prima della cifratura; cifrare prima
+renderebbe la compressione praticamente inefficace. Il default è `zstd` con il
+livello predefinito del codec (`--compression-level 0`), una buona scelta
+generale per velocità, dimensioni e interoperabilità.
+
+| Dati sorgente | Esempio | Scelta consigliata |
+| --- | --- | --- |
+| Testo, log, sorgenti, database dump | `--compression zstd` | Default; usare `--compression-level 4` se si privilegia il rapporto |
+| Immagini, video, zip, PDF già compressi | `--compression none` oppure `lz4` | Evita di spendere CPU per ottenere poco spazio |
+| Massimo supporto nei runtime OCI | `--compression gzip` | Compatibile con i runtime OCI comuni; `--compression-level 6` è il default del codec |
+| Archivio per banda molto limitata | `--compression xz --runnable=false` | Buon rapporto su testo, ma più lento e non eseguibile direttamente con `docker run` |
+
+Esempi eterogenei:
+
+```console
+# Default: zstd, cifrato, immagine eseguibile.
+backimage backup /srv/logs --repo ghcr.io/acme/backup --tag logs-daily
+
+# File già compressi: copia senza ulteriore compressione.
+backimage backup ./video.mp4 ./photos.zip \
+  --repo ghcr.io/acme/backup --tag media \
+  --compression none
+
+# Livello zstd più alto per un dump testuale archiviato a lungo termine.
+backimage backup ./database.sql --repo ghcr.io/acme/backup --tag db \
+  --compression zstd --compression-level 4
+
+# gzip per un'immagine leggibile da più runtime OCI possibile.
+backimage backup ./release.tar --repo ghcr.io/acme/backup --tag release \
+  --compression gzip --compression-level 6
+```
+
+`xz` e `lz4` usano media type OCI non standard: per questi codec occorre
+`--runnable=false` e l'immagine va trattata come artefatto da ripristinare con
+la CLI. Con il valore predefinito `--runnable`, preferire `zstd`, `gzip` o
+`none` quando si vuole anche `docker run IMAGE`.
+
+La protezione del backup è una passphrase age e **non** coincide con la
+password del registry. La cifratura è attiva per default: scegliere una delle
+seguenti modalità per fornire il segreto:
+
+```console
+# File protetto: non compare nella command line né nella lista dei processi.
+umask 077
+printf '%s\n' 'una-passphrase-lunga-e-unica' > backup.pass
+chmod 600 backup.pass
+backimage backup /srv/data --repo ghcr.io/acme/backup --tag daily \
+  --passphrase-file ./backup.pass
+
+# Stdin: utile in CI o quando il secret manager alimenta una pipe.
+printf '%s\n' "$BACKUP_PASSPHRASE" | \
+  backimage backup /srv/data --repo ghcr.io/acme/backup --tag ci \
+    --passphrase-stdin
+
+# Cifratura a chiave pubblica age; per il restore servirà la chiave privata.
+backimage backup /srv/data --repo ghcr.io/acme/backup --tag age \
+  --recipient 'age1...'
+backimage restore ghcr.io/acme/backup:age --extract -C ./restore \
+  --identity ./age-identity.txt
+```
+
+Per un backup cifrato, la stessa passphrase o identità va conservata per il
+restore. Non esiste un recupero tramite backdoor: se il segreto è perso, il
+contenuto cifrato non è recuperabile. `--no-encrypt` è adatto solo a dati già
+protetti da un altro livello e non va confuso con la password del login:
+
+```console
+# Solo per dati pubblici o cifrati altrove; il contenuto dell'immagine è in chiaro.
+backimage backup ./public-manifest.json --repo ghcr.io/acme/public \
+  --no-encrypt
+
+# Login al registry: il token non viene esposto negli argomenti.
+printf '%s\n' "$REGISTRY_TOKEN" | backimage login ghcr.io \
+  --username acme --password-stdin
+```
+
+## Backup di file, cartelle e percorsi misti
+
+La sintassi è `backimage backup <PATH...>`: ogni percorso dopo `backup` è una
+radice indipendente. Si possono quindi combinare un singolo file, più file,
+cartelle e percorsi assoluti nello stesso backup. Le virgolette proteggono i
+glob destinati a `--exclude` dalla shell.
+
+```console
+# 1. Un solo file.
+backimage backup ./config/app.yaml \
+  --repo ghcr.io/acme/backup --tag app-config
+
+# 2. Una cartella completa, ad esempio con log e sottocartelle.
+backimage backup /srv/application \
+  --repo ghcr.io/acme/backup --tag application
+
+# 3. Più file non contigui.
+backimage backup ./compose.yaml ./nginx.conf ./database.sql \
+  --repo ghcr.io/acme/backup --tag deployment-files
+
+# 4. Mix di cartelle e file: una directory applicativa più due file di sistema.
+backimage backup /var/lib/myapp /etc/myapp/app.conf ./README.md \
+  --repo ghcr.io/acme/backup --tag mixed
+
+# 5. Cartella con esclusioni ripetibili.
+backimage backup /home/alice \
+  --exclude 'home/alice/.cache/**' \
+  --exclude 'home/alice/Downloads/*.iso' \
+  --repo ghcr.io/acme/backup --tag home
+```
+
+Prima di leggere molti dati è utile controllare il piano senza pubblicare
+nulla. `--dry-run` non scrive sul registry; `--one-file-system` impedisce a una
+directory che contiene mount point di attraversare altri filesystem:
+
+```console
+backimage backup / --one-file-system \
+  --exclude 'proc/**' --exclude 'sys/**' --exclude 'dev/**' \
+  --repo ghcr.io/acme/backup --tag host \
+  --dry-run --json
+```
+
+I path passati sono anche la base dei nomi archiviati: usare `backimage ls` o
+`backimage find` per controllare l'indice prima di un ripristino selettivo.
+
+## Estrarre i dati dall'immagine
+
+### Con la CLI installata
+
+`restore --extract` materializza direttamente i file; senza `--extract`,
+`restore` produce invece un tar. Gli include e gli exclude possono essere
+ripetuti e sono utili per estrarre solo una parte di un backup:
+
+```console
+# Directory completa in una destinazione locale.
+mkdir -p ./restore
+backimage restore ghcr.io/acme/backup:daily \
+  --extract --destination ./restore \
+  --passphrase-file ./backup.pass
+
+# Solo PDF sotto documents, escludendo i temporanei.
+backimage restore ghcr.io/acme/backup:daily \
+  --extract --destination ./documents \
+  --include 'documents/**/*.pdf' \
+  --exclude 'documents/**/tmp/**' \
+  --passphrase-file ./backup.pass
+
+# Tar su disco, da ispezionare o trasferire.
+backimage restore ghcr.io/acme/backup:daily \
+  --output ./daily.tar --passphrase-file ./backup.pass
+
+# Sorgente locale invece del registry.
+backimage restore --oci-layout ./oci-layout \
+  --extract --destination ./restore-local \
+  --passphrase-stdin < ./backup.pass
+```
+
+Per vedere i dati senza estrarli, usare l'indice: `inspect --files` sblocca
+l'immagine e `ls`/`find` elencano i path. `inspect --layers` e `verify --quick`
+invece leggono solo i metadati pubblici e non richiedono la passphrase;
+`verify` completo è preferibile prima di un restore.
+
+```console
+backimage inspect ghcr.io/acme/backup:daily --files \
+  --passphrase-file ./backup.pass
+backimage ls ghcr.io/acme/backup:daily --long --include 'documents/**' \
+  --passphrase-file ./backup.pass
+backimage verify ghcr.io/acme/backup:daily \
+  --passphrase-file ./backup.pass
+```
+
+### Senza installare la CLI sul computer di destinazione
+
+Un'immagine runnable contiene il programma auto-estraente. Il computer di
+destinazione non deve installare `backimage`: basta Docker o un runtime OCI.
+Per scrivere su una directory dell'host, usare un bind mount:
+
+```console
+mkdir -p ./restore
+docker run --rm \
+  -e BACKIMAGE_PASSPHRASE="$BACKUP_PASSPHRASE" \
+  -v "$PWD/restore:/restore" \
+  ghcr.io/acme/backup:daily extract --out /restore
+```
+
+Si può anche estrarre un tar e affidare la materializzazione agli strumenti
+standard del sistema. Questo è il caso più fedele su Linux quando si devono
+ripristinare ownership, ACL, xattr, device e permessi speciali:
+
+```console
+docker run --rm -i \
+  -e BACKIMAGE_PASSPHRASE="$BACKUP_PASSPHRASE" \
+  ghcr.io/acme/backup:daily tar \
+  | sudo tar -xpf - -C /srv/restore \
+      --xattrs --acls --numeric-owner
+```
+
+Per ispezionare senza copiare file:
+
+```console
+docker run --rm ghcr.io/acme/backup:daily info
+docker run --rm \
+  -e BACKIMAGE_PASSPHRASE="$BACKUP_PASSPHRASE" \
+  ghcr.io/acme/backup:daily list -l --include 'documents/**'
+```
+
+Un layer cifrato o compresso con il formato proprietario di `backimage` non è
+estraibile con il solo `tar`: occorre `backimage` oppure il self-extractor
+incorporato nell'immagine. Dopo aver ottenuto il tar, invece, non serve più la
+CLI. Il comando `tar` scrive dati binari su stdout, quindi va sempre
+reindirizzato o collegato a un altro comando, mai lasciato su un terminale.
+
+## Permessi dei file sorgenti e uso di `sudo`
+
+Il backup legge i file con i permessi dell'utente che esegue il comando. Per
+una directory privata o per file già leggibili è preferibile l'utente normale:
+mantiene le credenziali del registry, usa la propria cache/checkpoint e riduce
+il rischio di leggere più dati del necessario.
+
+Usare `sudo` (o eseguire il processo come root) quando il backup deve includere
+file non leggibili, directory senza permesso di attraversamento, ACL/xattr
+protetti o metadati di sistema. Il root può leggere più contenuto, ma non
+risolve automaticamente problemi di mount, filesystem remoto o policy MAC
+(SELinux/AppArmor). Se alcuni file devono restare esclusi, è meglio usare
+`--exclude` invece di elevare l'intero processo.
+
+`sudo` usa normalmente la configurazione e la home di root: il login del
+registry e la cache dell'utente corrente non diventano automaticamente
+disponibili. Eseguire quindi il login come root, oppure passare esplicitamente
+un file credenziali/configurazione accessibile a root (per esempio tramite
+`BACKIMAGE_AUTH_FILE` e `--config`) e usare sempre un `--passphrase-file`
+leggibile dal processo privilegiato.
+
+| Situazione | Comando/strategia | Risultato |
+| --- | --- | --- |
+| File dell'utente leggibili | `backimage backup ./project ...` | Nessun `sudo`; scelta consigliata |
+| `/etc` o `/var/lib` con dati di sistema | `sudo backimage backup /etc/myapp /var/lib/myapp ...` | Include i file protetti e i relativi metadati |
+| File illeggibili non essenziali | `--allow-degraded` | Continua, ma il backup è parziale: registrare e correggere gli errori |
+| Ripristino in una directory dell'utente | `backimage restore --extract -C ./restore --no-preserve-owner ...` | L'utente conserva i file; ownership originale non applicata |
+| Ripristino fedele del sistema Linux | `backimage restore -o system.tar ...` poi `sudo tar -xpf ...` | Preserva ownership numerica, mode, ACL/xattr e device quando supportati |
+
+Esempi:
+
+```console
+# Utente normale: progetto e configurazione leggibili dall'utente corrente.
+backimage backup "$HOME/project" ./compose.yaml \
+  --repo ghcr.io/acme/backup --tag developer
+
+# Root: sorgenti protette; usare un passphrase file leggibile da root e una
+# directory temporanea esplicita se la TMPDIR dell'utente non è accessibile.
+sudo backimage backup /etc/ssh /var/lib/postgresql \
+  --repo ghcr.io/acme/backup --tag system \
+  --passphrase-file /root/secrets/backup.pass \
+  --temp-dir /var/tmp/backimage
+
+# Variante controllata: non attraversare filesystem montati e saltare cache.
+sudo backimage backup /srv \
+  --one-file-system --exclude 'srv/cache/**' \
+  --repo ghcr.io/acme/backup --tag srv
+
+# Ripristino non privilegiato in una directory posseduta dall'utente.
+backimage restore ghcr.io/acme/backup:developer --extract \
+  --destination ./restore --no-preserve-owner \
+  --passphrase-file ./backup.pass
+
+# Ripristino di sistema: prima ottenere il tar, poi applicarlo come root.
+backimage restore ghcr.io/acme/backup:system \
+  --output /tmp/system.tar --passphrase-file ./backup.pass
+sudo mkdir -p /srv/restore-system
+sudo tar -xpf /tmp/system.tar -C /srv/restore-system \
+  --xattrs --acls --numeric-owner
+```
+
+`--numeric-owner` durante il backup evita di risolvere i nomi utente/gruppo e
+conserva UID/GID numerici, utile tra host con database utenti diversi. Durante
+il restore, `--no-preserve-owner` è la scelta pratica per un utente non-root;
+per ownership, ACL, xattr, setuid/setgid, device e FIFO usare root su un
+filesystem che li supporti. Vedere [FIDELITY](docs/FIDELITY.md) per la matrice
+completa di fedeltà per sistema operativo e metodo di estrazione.
+
 ## Uso rapido
 
 ```console
