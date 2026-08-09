@@ -356,6 +356,9 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	res.BytesStored = bp.storedBytes()
 
 	// 5) images and multi-arch index.
+	if cfg.Progress != nil {
+		cfg.Progress("preparazione immagini OCI")
+	}
 	images, idx, err := bp.buildImages()
 	if err != nil {
 		return res, fmt.Errorf("build immagini: %w", err)
@@ -363,6 +366,9 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 
 	// 6) publish.
 	if cfg.Remote != nil {
+		if cfg.Progress != nil {
+			cfg.Progress("upload remoto: in corso")
+		}
 		payload, payloadErr := bp.remotePayload(images)
 		if payloadErr != nil {
 			return res, fmt.Errorf("remote payload: %w", payloadErr)
@@ -382,6 +388,9 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		bp.digest = remoteResult.Digest
 		bp.skipped = int(remoteResult.BlobsSkipped)
 	} else if cfg.Output == "" || cfg.Output == "registry" {
+		if cfg.Progress != nil {
+			cfg.Progress("upload registry: in corso")
+		}
 		if err := bp.pushRegistry(ctx, idx, images); err != nil {
 			return res, fmt.Errorf("push: %w", err)
 		}
@@ -621,6 +630,8 @@ type builder struct {
 	maxDataLayers    int
 	stats            archive.Stats
 	entries          []archive.Entry
+	progressBytes    int64
+	progressAt       time.Time
 	manifest         *index.Manifest
 	manifestBytes    []byte
 	chunkTable       *index.ChunkTable
@@ -661,6 +672,7 @@ func (s *spoolFile) Remove() {
 
 // build runs the streaming archive/split/compress/seal section.
 func (b *builder) build(ctx context.Context) error {
+	b.reportBuildProgress(true)
 	pr, pw := io.Pipe()
 	awErr := make(chan error, 1)
 	go func() {
@@ -740,6 +752,7 @@ func (b *builder) build(ctx context.Context) error {
 		})
 		b.chunkIdx++
 		b.plainBytes += ck.PlainBytes
+		b.reportBuildProgress(false)
 		if b.shouldRollLayer(sha256.Sum256(stored)) {
 			if err := b.rollLayer(); err != nil {
 				return err
@@ -753,7 +766,33 @@ func (b *builder) build(ctx context.Context) error {
 	if b.chunkIdx == 0 {
 		return ErrNoData
 	}
-	return b.rollLayer()
+	if err := b.rollLayer(); err != nil {
+		return err
+	}
+	b.reportBuildProgress(true)
+	return nil
+}
+
+// reportBuildProgress emits sparse updates for the expensive
+// archive/compress/encrypt stream. The estimate is the source byte count, so
+// tar headers and metadata can make the stream slightly larger.
+func (b *builder) reportBuildProgress(force bool) {
+	if b.cfg.Progress == nil || b.estimatedRaw <= 0 {
+		return
+	}
+	now := time.Now()
+	const minBytes = 16 << 20
+	if !force && !b.progressAt.IsZero() && now.Sub(b.progressAt) < 2*time.Second && b.plainBytes-b.progressBytes < minBytes {
+		return
+	}
+	percent := float64(b.plainBytes) * 100 / float64(b.estimatedRaw)
+	if percent > 100 {
+		percent = 100
+	}
+	b.cfg.Progress(fmt.Sprintf("dump: archiviazione/compressione/cifratura %.0f%% (%.1f/%.1f MiB, %d chunk)",
+		percent, float64(b.plainBytes)/(1<<20), float64(b.estimatedRaw)/(1<<20), b.chunkIdx))
+	b.progressBytes = b.plainBytes
+	b.progressAt = now
 }
 
 func safeLayerMaximum(target int64) int64 {
@@ -1243,18 +1282,36 @@ func (b *builder) pushRegistry(ctx context.Context, idx v1.ImageIndex, images ma
 	go func() {
 		defer close(done)
 		resumingReported := false
+		completedBlobs := 0
+		completedBytes := int64(0)
+		lastReport := time.Time{}
+		report := func(force bool) {
+			if b.cfg.Progress == nil {
+				return
+			}
+			now := time.Now()
+			if !force && !lastReport.IsZero() && now.Sub(lastReport) < 2*time.Second {
+				return
+			}
+			b.cfg.Progress(fmt.Sprintf("upload: %d blob completati (%.1f MiB)", completedBlobs, float64(completedBytes)/(1<<20)))
+			lastReport = now
+		}
 		for pr := range pch {
+			completedBlobs++
 			if pr.Skipped {
 				b.skipped++
 				b.skippedBytes += pr.Total
 			} else {
 				b.uploadedBytes += pr.Total
 			}
+			completedBytes += pr.Total
+			report(false)
 			if pr.FromCheckpoint && !resumingReported && b.cfg.Progress != nil {
 				b.cfg.Progress("resuming from checkpoint")
 				resumingReported = true
 			}
 		}
+		report(true)
 	}()
 	kc := b.cfg.Keychain
 	if kc == nil {

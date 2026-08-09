@@ -412,7 +412,7 @@ mkdir -p ./restore
 printf '%s\n' "$BACKUP_PASSPHRASE" | \
 backimage restore docker.io/demoarchiveuser/mindhunters:mindhunters-test \
   --extract --destination ./restore \
-  --no-preserve-owner --passphrase-stdin --remove-local-image --cpus 2
+  --passphrase-stdin
 
 # Solo PDF sotto documents, escludendo i temporanei.
 printf '%s\n' "$BACKUP_PASSPHRASE" | \
@@ -432,6 +432,15 @@ backimage restore --oci-layout ./oci-layout \
   --extract --destination ./restore-local \
   --passphrase-stdin < ./backup.pass
 ```
+
+Tips:
+
+- aggiungi `--no-preserve-owner` se non vuoi ripristinare ownership e gruppi;
+- aggiungi `--cpus N` per limitare la CPU usata dall'estrazione;
+- aggiungi `--remove-local-image` per rimuovere l'immagine locale dopo un
+  restore riuscito;
+- aggiungi `--include GLOB` e/o `--exclude GLOB` per un restore selettivo;
+- aggiungi `--overwrite` se la directory di destinazione non è vuota.
 
 `--remove-local-image` rimuove la reference locale dal Docker daemon solo
 dopo che il restore è terminato senza errori. Richiede che l'host esponga il
@@ -468,12 +477,21 @@ mkdir -p ./restore
 docker pull docker.io/demoarchiveuser/mindhunters:mindhunters-test
 docker run --rm \
   -e BACKIMAGE_PASSPHRASE="$BACKUP_PASSPHRASE" \
-  -e BACKIMAGE_IMAGE_REF="docker.io/demoarchiveuser/mindhunters:mindhunters-test" \
   -v "$PWD/restore:/restore" \
-  -v /var/run/docker.sock:/var/run/docker.sock \
   docker.io/demoarchiveuser/mindhunters:mindhunters-test \
-  extract --out /restore --no-preserve-owner --remove-local-image --cpus 2
+  extract --out /restore
 ```
+
+Tips:
+
+- aggiungi `--no-preserve-owner` a `extract` se non vuoi ripristinare ownership
+  e gruppi;
+- aggiungi `--cpus N` a `extract` per limitare la CPU;
+- per `--remove-local-image`, aggiungi a `docker run`:
+  `-e BACKIMAGE_IMAGE_REF="docker.io/demoarchiveuser/mindhunters:mindhunters-test"`,
+  `-v /var/run/docker.sock:/var/run/docker.sock` e a `extract`
+  `--remove-local-image`;
+- aggiungi `--include GLOB`, `--exclude GLOB` o `--overwrite` quando servono.
 
 Si può anche estrarre un tar e affidare la materializzazione agli strumenti
 standard del sistema. Questo è il caso più fedele su Linux quando si devono
@@ -496,7 +514,7 @@ computer di destinazione. Il comando `extract` dell'immagine è il self-
 extractor incorporato e supporta anche `--include`, `--exclude`,
 `--strip-components` e `--no-preserve-owner`. Per usare
 `--remove-local-image` servono anche `BACKIMAGE_IMAGE_REF` e il mount del
-Docker socket mostrati nell'esempio; il flag forza la rimozione dell'immagine
+Docker socket mostrati nei Tips; il flag forza la rimozione dell'immagine
 solo dopo un'estrazione riuscita.
 
 Per ispezionare senza copiare file:
@@ -635,6 +653,12 @@ stderr; `--json` lascia su stdout solo JSON strutturato.
 | `-v, --verbose` | Aumenta il log; ripetere (`-v` debug, `-vv` trace) |
 | `--no-color` | Disabilita i colori ANSI |
 | `--config FILE` | Percorso di configurazione (default `$XDG_CONFIG_HOME/backimage/config.yaml`) |
+
+Durante un backup interattivo vengono mostrati su stderr la stima delle
+sorgenti, l'avanzamento di archiviazione/compressione/cifratura, la
+preparazione delle immagini OCI e l'avanzamento dell'upload dei blob. Con
+`--quiet` questi messaggi vengono nascosti; con `--json` il risultato
+strutturato resta l'unico contenuto su stdout.
 
 ### `version`
 

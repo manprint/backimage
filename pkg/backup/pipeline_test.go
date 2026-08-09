@@ -136,6 +136,7 @@ func TestPipelineToOCILayout(t *testing.T) {
 		os.WriteFile(filepath.Join(tree, fmt.Sprintf("f%03d.bin", i)), make([]byte, size), 0o644)
 	}
 	outPath := filepath.Join(t.TempDir(), "layout")
+	var progress []string
 	res, err := Run(context.Background(), Config{
 		RootPaths:     []string{tree},
 		Ref:           "example.com/t/backup:tag1",
@@ -152,6 +153,7 @@ func TestPipelineToOCILayout(t *testing.T) {
 		OutputPath:    outPath,
 		CheckpointDir: t.TempDir(),
 		Resume:        true,
+		Progress:      func(msg string) { progress = append(progress, msg) },
 	})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
@@ -161,6 +163,16 @@ func TestPipelineToOCILayout(t *testing.T) {
 	}
 	if res.BytesRaw != int64(files*size) {
 		t.Fatalf("bytesRaw = %d, want %d", res.BytesRaw, files*size)
+	}
+	hasDumpProgress := false
+	for _, msg := range progress {
+		if strings.Contains(msg, "dump: archiviazione/compressione/cifratura") {
+			hasDumpProgress = true
+			break
+		}
+	}
+	if !hasDumpProgress {
+		t.Fatalf("missing dump progress: %v", progress)
 	}
 	if res.Encrypted {
 		t.Fatal("no-encrypt marcato cifrato")

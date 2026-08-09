@@ -139,16 +139,38 @@ func TestBackupOCILayoutSuccessHumanAndJSON(t *testing.T) {
 		if !asJSON {
 			for _, want := range []string{
 				"backimage restore example.test/team/success:t1",
-				"docker run --rm -i",
+				"docker run --rm -v \"$PWD/restore:/restore\"",
 				"example.test/team/success:t1 extract --out /restore",
+				"Tips:",
 			} {
 				if !strings.Contains(out, want) {
 					t.Fatalf("backup output missing %q: %q", want, out)
 				}
 			}
+			commands := strings.SplitN(out, "Tips:", 2)[0]
+			for _, unwanted := range []string{"--no-preserve-owner", "--remove-local-image", "/var/run/docker.sock", "BACKUP_PASSPHRASE"} {
+				if strings.Contains(commands, unwanted) {
+					t.Fatalf("recovery command contains tip-only option %q: %q", unwanted, commands)
+				}
+			}
 		}
 		if _, err := os.Stat(filepath.Join(layout, "index.json")); err != nil {
 			t.Fatalf("OCI layout missing: %v", err)
+		}
+	}
+}
+
+func TestRecoveryInstructionsEncryptedAndNonRunnable(t *testing.T) {
+	plain := recoveryInstructions("example.test/repo:plain", false, true)
+	if strings.Contains(strings.SplitN(plain, "Tips:", 2)[0], "BACKUP_PASSPHRASE") {
+		t.Fatalf("unencrypted recovery asks for a passphrase: %q", plain)
+	}
+
+	encrypted := recoveryInstructions("example.test/repo:encrypted", true, false)
+	commands := strings.SplitN(encrypted, "Tips:", 2)[0]
+	for _, want := range []string{"$BACKUP_PASSPHRASE", "--passphrase-stdin", "docker run: non disponibile"} {
+		if !strings.Contains(commands, want) {
+			t.Fatalf("encrypted recovery missing %q: %q", want, commands)
 		}
 	}
 }

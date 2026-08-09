@@ -72,6 +72,34 @@ func printerResult(pr Printer, v any) error {
 	return nil
 }
 
+func recoveryInstructions(ref string, encrypted, runnable bool) string {
+	appPrefix := ""
+	appPassphrase := ""
+	dockerPassphrase := ""
+	if encrypted {
+		appPrefix = "printf '%s\\n' \"$BACKUP_PASSPHRASE\" | "
+		appPassphrase = " --passphrase-stdin"
+		dockerPassphrase = " -e BACKIMAGE_PASSPHRASE=\"$BACKUP_PASSPHRASE\""
+	}
+
+	var out strings.Builder
+	fmt.Fprint(&out, "\n\ncomandi per recuperare i dati:\n")
+	fmt.Fprintf(&out, "  backimage:\n    %sbackimage restore %s --extract --destination ./restore%s\n", appPrefix, ref, appPassphrase)
+	if runnable {
+		fmt.Fprintf(&out, "  docker run:\n    docker run --rm%s -v \"$PWD/restore:/restore\" %s extract --out /restore\n", dockerPassphrase, ref)
+	} else {
+		fmt.Fprint(&out, "  docker run: non disponibile (backup creato con --runnable=false)\n")
+	}
+	fmt.Fprint(&out, "\nTips:\n")
+	fmt.Fprint(&out, "  - Se non vuoi ripristinare ownership e gruppi, aggiungi --no-preserve-owner al comando backimage o a extract.\n")
+	fmt.Fprint(&out, "  - Per limitare la CPU, aggiungi --cpus N al comando backimage o a extract.\n")
+	fmt.Fprint(&out, "  - Per estrarre solo una parte, aggiungi --include GLOB e/o --exclude GLOB.\n")
+	fmt.Fprint(&out, "  - Per rimuovere l'immagine Docker dopo un'estrazione riuscita, aggiungi --remove-local-image. Con docker run servono anche\n")
+	fmt.Fprintf(&out, "    -e BACKIMAGE_IMAGE_REF=\"%s\" e -v /var/run/docker.sock:/var/run/docker.sock.\n", ref)
+	fmt.Fprint(&out, "  - Se la directory di destinazione non è vuota, aggiungi --overwrite.\n")
+	return out.String()
+}
+
 func newBackupCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "backup <PATH...> --repo IMAGE [flags]",
@@ -335,12 +363,7 @@ func runBackup(cmd *cobra.Command, args []string) error {
 	}
 	return printerResult(pr, fmt.Sprintf("backup completato: %s\n  digest   %s\n  file     %d\n  byte raw %d\n  byte archiviati %d\n  layer    %d\n  chunk    %d\n  durata   %ds\n  saltati  %d (%d byte)",
 		res.Ref, res.Digest, res.Files, res.BytesRaw, res.BytesStored, res.Layers, res.Chunks, res.DurationSeconds, res.SkippedBlobs, res.SkippedBytes)+
-		fmt.Sprintf("\n\ncomandi per recuperare i dati (impostare prima BACKUP_PASSPHRASE):\n"+
-			"  backimage:\n"+
-			"    printf '%%s\\n' \"$BACKUP_PASSPHRASE\" | backimage restore %s --extract --destination ./restore --no-preserve-owner --passphrase-stdin --remove-local-image\n"+
-			"  docker run:\n"+
-			"    docker run --rm -i -e BACKIMAGE_PASSPHRASE=\"$BACKUP_PASSPHRASE\" -e BACKIMAGE_IMAGE_REF=\"%s\" -v \"$PWD/restore:/restore\" -v /var/run/docker.sock:/var/run/docker.sock %s extract --out /restore --no-preserve-owner --remove-local-image",
-			res.Ref, res.Ref, res.Ref))
+		recoveryInstructions(res.Ref, res.Encrypted, runnable))
 }
 
 func readDedupParams(cmd *cobra.Command) (chunk.CDCParams, error) {
