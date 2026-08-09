@@ -45,7 +45,7 @@ echo "==> blob deduplication: 5 unique layer blobs (1 exe + 1 meta + 3 data)"
 layers=()
 for arch in amd64 arm64; do
 	dg=$(echo "$m" | jq -r ".manifests[] | select(.platform.architecture == \"$arch\") | .digest")
-	mapfile -t ls < <(curl -sf -H "Accept: application/vnd.docker.distribution.manifest.v2+json" \
+	mapfile -t ls < <(curl -sf -H "Accept: application/vnd.docker.distribution.manifest.v2+json, application/vnd.oci.image.manifest.v1+json" \
 		"http://localhost:${PORT}/v2/test/img/manifests/${dg}" | jq -r '.layers[].digest')
 	layers+=("${ls[@]}")
 done
