@@ -96,6 +96,10 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
+      - name: Enable foreign-architecture containers
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64
       - name: Build test binary
         run: make embed
       - name: Run E2E phase
