@@ -47,6 +47,8 @@ jobs:
           go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.34.2
           echo "/tmp/backimage-protoc/bin" >> "$GITHUB_PATH"
           echo "$HOME/go/bin" >> "$GITHUB_PATH"
+      - name: Build embedded self-extract assets
+        run: make embed
       - run: make check
       - run: make build-all
       - run: make embed
