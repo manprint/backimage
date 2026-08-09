@@ -2,8 +2,8 @@
 
 `backimage` archivia, comprime e cifra file dentro immagini OCI multi-arch.
 L’immagine risultante è anche un programma auto-estraente: per un restore
-semplice può essere eseguita con `docker run`, senza installare backimage sul
-computer di destinazione.
+semplice può essere eseguita con `docker run`, senza dover installare il
+programma nel computer di destinazione.
 
 ## Installazione
 
