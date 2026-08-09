@@ -36,9 +36,8 @@ jobs:
         with:
           go-version-file: go.mod
           cache: true
-      - uses: golangci/golangci-lint-action@v8
-        with:
-          install-only: true
+      - name: Install golangci-lint
+        run: go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.8
       - run: go mod download
       - run: make check
       - run: make build-all
