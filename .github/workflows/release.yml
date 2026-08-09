@@ -1,0 +1,90 @@
+name: Release
+
+on:
+  push:
+    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing version tag to release
+        required: true
+        type: string
+
+permissions:
+  contents: write
+  id-token: write
+  packages: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  GOFLAGS: -mod=readonly
+
+jobs:
+  verify:
+    name: verify release source
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: golangci/golangci-lint-action@v8
+        with:
+          install-only: true
+      - run: go mod download
+      - run: make check
+      - run: make build-all
+      - run: make embed
+      - run: test -s bin/backimage
+      - run: ./bin/backimage version
+
+  goreleaser:
+    name: package and publish release
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    needs: verify
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.tag || github.ref }}
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: '~> v2'
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Install Cosign
+        uses: sigstore/cosign-installer@v3.8.1
+      - name: Sign archives and checksums
+        env:
+          COSIGN_EXPERIMENTAL: '1'
+        run: |
+          shopt -s nullglob
+          for artifact in dist/*.tar.gz dist/*.zip dist/checksums.txt; do
+            cosign sign-blob --yes \
+              --output-signature "${artifact}.sig" \
+              --output-certificate "${artifact}.pem" \
+              "${artifact}"
+          done
+      - name: Upload signatures
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+        run: |
+          shopt -s nullglob
+          gh release upload "$RELEASE_TAG" dist/*.sig dist/*.pem --clobber

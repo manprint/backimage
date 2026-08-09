@@ -1,0 +1,62 @@
+version: 2
+
+before:
+  hooks:
+    - go mod download
+    - make selfextract
+
+builds:
+  - id: backimage
+    main: ./cmd/backimage
+    binary: backimage
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+      - arm
+      - riscv64
+    goarm:
+      - '7'
+    ignore:
+      - goos: darwin
+        goarch: arm
+      - goos: darwin
+        goarch: riscv64
+      - goos: windows
+        goarch: arm
+      - goos: windows
+        goarch: riscv64
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X github.com/fpierri/backimage/internal/buildinfo.Version={{ .Version }} -X github.com/fpierri/backimage/internal/buildinfo.Commit={{ .Commit }} -X github.com/fpierri/backimage/internal/buildinfo.Date={{ .Date }}
+
+archives:
+  - formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files:
+      - README.md
+      - LICENSE*
+      - docs/**
+
+checksum:
+  name_template: checksums.txt
+  algorithm: sha256
+
+sboms:
+  - artifacts: archive
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - '^Merge '
+      - '^docs:'
+

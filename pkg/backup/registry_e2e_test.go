@@ -29,6 +29,7 @@ type memReg struct {
 	blobs     map[string][]byte
 	manifests map[string]string
 	ups       map[string][]byte
+	nextUp    uint64
 	putHits   int
 }
 
@@ -85,7 +86,11 @@ func (m *memReg) server() *httptest.Server {
 			delete(m.ups, id)
 			w.WriteHeader(http.StatusCreated)
 		case strings.HasSuffix(rest, "blobs/uploads/") && r.Method == http.MethodPost:
-			id := fmt.Sprintf("up%d", len(m.ups))
+			// Push uploads are concurrent. Using len(m.ups) reuses an ID as
+			// soon as another upload completes and makes this test registry
+			// nondeterministically overwrite an in-flight upload.
+			id := fmt.Sprintf("up%d", m.nextUp)
+			m.nextUp++
 			m.ups[id] = nil
 			w.Header().Set("Location", "/v2/"+rest+"uploads/"+id)
 			w.WriteHeader(http.StatusAccepted)
