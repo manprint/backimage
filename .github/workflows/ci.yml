@@ -34,6 +34,12 @@ jobs:
         run: go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.8
       - name: Download dependencies
         run: go mod download
+      - name: Install protobuf toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y protobuf-compiler
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.34.2
+          echo "$HOME/go/bin" >> "$GITHUB_PATH"
       - name: Build embedded self-extract assets
         run: make embed
       - name: Full project gate
