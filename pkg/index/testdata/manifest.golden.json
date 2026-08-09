@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "tool": {
+    "name": "backimage",
+    "version": "0.1.0"
+  },
+  "createdAt": "2026-08-08T18:34:12Z",
+  "sources": [
+    "/home/fabio/myfiles"
+  ],
+  "host": {
+    "hostname": "ws01",
+    "os": "linux",
+    "arch": "amd64"
+  },
+  "totals": {
+    "files": 42,
+    "dirs": 7,
+    "symlinks": 2,
+    "hardlinks": 1,
+    "devices": 0,
+    "bytesRaw": 1048576,
+    "bytesStored": 524288
+  },
+  "archive": {
+    "format": "tar-pax",
+    "compression": "zstd",
+    "compressionLevel": 2
+  },
+  "encryption": {
+    "enabled": true,
+    "kdf": "scrypt",
+    "aead": "aes-256-gcm",
+    "nonceMode": "random",
+    "recipients": [
+      "scrypt"
+    ]
+  },
+  "chunking": {
+    "strategy": "fixed",
+    "targetChunkBytes": 4194304,
+    "count": 9
+  },
+  "layers": [
+    {
+      "index": 0,
+      "digest": "sha256:abababababababababababababababababababababababababababababababab",
+      "chunkFrom": 0,
+      "chunkTo": 3,
+      "storedBytes": 4096
+    },
+    {
+      "index": 1,
+      "digest": "sha256:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd",
+      "chunkFrom": 4,
+      "chunkTo": 8,
+      "storedBytes": 8192
+    }
+  ],
+  "index": {
+    "path": "backup/index.json.zst.age",
+    "storedSha256": "sha256:efefefefefefefefefefefefefefefefefefefefefefefefefefefefefefefef",
+    "encrypted": true
+  }
+}
