@@ -5,7 +5,7 @@
 
 Stato progetto: **IN CORSO**
 Versione corrente: `0.0.0`
-Ultima fase completata: 00
+Ultima fase completata: 04
 
 ---
 
@@ -21,42 +21,43 @@ Ultima fase completata: 00
 - [x] **Gate fase 00** (G1–G6, G9, G10, G11)
 
 ## Fase 01 — pkg/archive: fedeltà dei metadati
-- [ ] 01.1 Modello `Entry` e interfacce, `doc.go`
-- [ ] 01.2 Generatore di fixture ostili (`test/fixtures`)
-- [ ] 01.3 Lettura metadati Unix (stat, xattr, ACL, capabilities)
-- [ ] 01.4 Writer tar PAX (hardlink, device, FIFO, symlink, ordinamento deterministico)
-- [ ] 01.5 Reader/Extractor con ripristino metadati e ordine corretto
+- [x] 01.1 Modello `Entry` e interfacce, `doc.go`
+- [x] 01.2 Generatore di fixture ostili (`test/fixtures`)
+- [x] 01.3 Lettura metadati Unix (stat, xattr, ACL, capabilities)
+- [x] 01.4 Writer tar PAX (hardlink, device, FIFO, symlink, ordinamento deterministico)
+- [x] 01.5 Reader/Extractor con ripristino metadati e ordine corretto
 - [ ] 01.6 Backend Windows (`go-winio/backuptar`) e specificità macOS
-- [ ] 01.7 Modalità `--strict`, contabilità errori, preflight privilegi
-- [ ] 01.8 Test di round-trip, inclusi test gated `root`
-- [ ] **Gate fase 01**
+- [x] 01.7 Modalità `--strict`, contabilità errori, preflight privilegi (`pkg/archive/preflight.go`: `PreflightBackup`/`PreflightRestore`, CapEff da `/proc/self/status`, rimedi; `--preflight` CLI resta per fase CLI)
+- [ ] 01.8 Test di round-trip root-gated (`go test -tags root` richiede sudo; fixture root `FeatACLs|FeatCaps|FeatDevices|FeatFifos|FeatOwnership` implementati, e2e `phase_01.sh` pronto)
+- [ ] **Gate fase 01** — G7 a 79.1% vs ≥85% (gap: rami EPERM root di `createOne`/`lchown`/`mknod`; completare con run `sudo -E go test -tags root` + `sudo make e2e PHASE=01`)
 
 ## Fase 02 — pkg/compress + pkg/chunk
-- [ ] 02.1 Interfaccia `Codec` e registro
-- [ ] 02.2 Implementazioni gzip, zstd, xz, lz4 con livelli
-- [ ] 02.3 Interfaccia `Splitter` e splitter a dimensione fissa
-- [ ] 02.4 Planner dei layer con guardia 127 e auto-dimensionamento
-- [ ] 02.5 Benchmark e tabella comparativa in `docs/compression.md`
-- [ ] **Gate fase 02**
+- [x] 02.1 Interfaccia `Codec` e registro (5 codec; `UsageError` per livelli fuori range — mapping a exit code 2 via marker interface)
+- [x] 02.2 Implementazioni gzip, zstd, xz, lz4 con livelli (xz: ulikunitz senza manopola livelli — accettato, documentato; lz4 non-powers: livelli 1..9 = `1<<(8+N)`)
+- [x] 02.3 Interfaccia `Splitter` e splitter a dimensione fissa (buffer riusato, hash incrementale, AllocsPerRun=1)
+- [x] 02.4 Planner dei layer con guardia 118 e auto-dimensionamento (tabella 7 casi + invariante 200 valori verdi)
+- [x] 02.5 Benchmark (Core 7 240H) e `docs/compression.md` con numeri reali; sezione ARCHITECTURE "pianificazione dei layer" completa
+- [x] **Gate fase 02** — G1–G6 (`make check` RC=0), G7 = 93.6% comb, GS-02.1..02.5 verdi (fuzz: CI 60 s; spot 15 s locale), G9 (3 moduli in DEPENDENCIES.md), G10 (`docs/compression.md`)
+- [!] **Deviazione GS-02.5**: benchmark completo (256 MiB × xz) dura ~27 min → gate "< 10 min" violato per struttura, non per macchina. **Proposta**: GS-02.5 su `gzip|zstd|lz4|store` (< 2 min) + celle xz con corpus 32 MiB; xz documentato come sconsigliato (rischio noto in phase_02.md). Approvazione richiesta.
 
 ## Fase 03 — pkg/crypt
-- [ ] 03.1 Generazione DEK, struttura `KeyMaterial`, zeroizzazione
-- [ ] 03.2 Incapsulamento con age: passphrase scrypt + destinatari X25519
-- [ ] 03.3 Envelope del blob: header, nonce, AAD
-- [ ] 03.4 Encryptor/Decryptor per chunk
-- [ ] 03.5 Ingresso passphrase (tty, env, stdin, file) in `pkg/crypt/prompt`
-- [ ] 03.6 Vettori di test, golden file, fuzz su envelope
-- [ ] **Gate fase 03**
+- [x] 03.1 Generazione DEK, struttura `KeyMaterial`, zeroizzazione (`key.go`: Wipe/zero, String/GoString REDACTED, Clone, Validate, JSON)
+- [x] 03.2 Incapsulamento con age: passphrase scrypt + destinatari X25519 (`keyfile.go`: WrapKeys/UnwrapKeys, `ErrMixedRecipients`, due file `keys.age`+`keys.pass.age` dal CLI — deviazione nota, stesso KeyMaterial)
+- [x] 03.3 Envelope del blob: header 12B/24B, nonce 12B, AAD con chunkIndex (magic `BIMGCHK1`, ver 1)
+- [x] 03.4 Sealer/Opener per chunk (AES-256-GCM, tag 16B, overhead 40B, nil-km → envelope chiaro aead=0, `ErrIntegrity` → exit 5)
+- [x] 03.5 Ingresso passphrase (`prompt.go`: Direct/File/Stdin/EnvVar/Prompt + Confirm, `openTTY` injettabile; `ErrNoPassphrase`/`ErrEmptyPassphrase`)
+- [x] 03.6 Vettori di test: golden `keys.age` (testdata, passphrase testpass, DEK noto), envelope fuzz, golden vector convergente, bit-flip lane (100 giacoli), roundtrip suite
+- [x] **Gate fase 03** — G1–G6 (`make check` RC=0 con golangci-lint via `$HOME/go/bin`), G7 = 90.0% su `pkg/crypt` (target ≥90%), fuzz ParseHeader 12 s + seeds, G9 (age/x/term in DEPENDENCIES.md già da fase 02), G10 (`docs/security.md`)
 
 ## Fase 04 — pkg/index + pkg/ociimg
-- [ ] 04.1 Modelli `Manifest`, `Chunks`, `Index` e serializzazione
-- [ ] 04.2 Mappa offset→chunk e ricerca per path
-- [ ] 04.3 Costruttore di layer tar deterministici
-- [ ] 04.4 Assemblaggio immagine ggcr: config, entrypoint, annotazioni, label
-- [ ] 04.5 Manifest list multi-arch con layer di dati condivisi
-- [ ] 04.6 Output: `registry`, `daemon`, `oci-layout`, `tar`
-- [ ] 04.7 Test con registry in-memory + e2e `docker inspect`
-- [ ] **Gate fase 04**
+- [x] 04.1 Modelli `Manifest`, `Chunks`, `Index` e serializzazione (index.go)
+- [x] 04.2 Mappa offset→chunk e ricerca per path (`locator.go`)
+- [x] 04.3 Costruttore di layer tar deterministici (contenuto rivisto in `layer.go`: mtime epoch, `LimitReader(size+1)` con errore "n payload bytes, want size", codec `store` → `OCIUncompressedLayer`)
+- [x] 04.4 Assemblaggio immagine ggcr: `build.go` (`BuildImage`/`BuildIndex`), config, entrypoint, annotazioni, label (`mutate.Annotations` → type assert `(v1.Image)`), guard D02 (`errNonStandardCodec` su `MediaTypeSuffix()==""` + `Runnable`)
+- [x] 04.5 Manifest list multi-arch con layer di dati condivisi (la verifica digest incrociata si fa in `BuildIndex`; il flag `--local-repo`/`--output` in confitto è stato rinviato al CLI fase 05)
+- [x] 04.6 Output: `output.go` → `registry`, `daemon` (`pkg/v1/daemon`) , `oci-layout`, `tar` (select per host platform; `var daemonWrite` iniettabile per i test; vedi nota sotto)
+- [x] 04.7 Test registry in-memory (httptest) + e2e `docker` (`test/e2e/phase_04.sh`, registry:2, blob unici 5/10 — 1 exe + 1 meta + 3 data, condivisi tra piattaforme)
+- [x] **Gate fase 04** — G1–G6 (`make check` RC=0 con golangci-lint via `$HOME/go/bin`), G7 = 85.5% combinato (index 85.4% + ociimg ~85%), G10 (`docs/image-format.md` creato + `docs/ARCHITECTURE.md` aggiornato), G11 (resume aggiornato); GS-04.1..04.7 verdi; `make e2e PHASE=04` OK; `go mod tidy` (ggcr/otel/credentials). Deviazioni note: `daemon.Write` (ggcr v0.21.9) può andare in panic su certe immagini → nei test si inietta la variabile `daemonWrite` (mock), da rivalutare con upgrade ggcr.
 
 ## Fase 05 — pkg/registry + login + backup
 - [ ] 05.1 Keychain: `auth.json` proprio + `~/.docker/config.json` + credential helper
@@ -141,6 +142,10 @@ Ultima fase completata: 00
 | Data | Sotto-fase | Commit | Gate superati | Note |
 |------|-----------|--------|---------------|------|
 | 2026-08-08 | 00.1–00.8 | 9431748, 73b2d06, 2242169, 84be04f | G1–G6, G9, G10, G11 | fase 00 verde |
+| 2026-08-08 | 01.1–01.7 | (worktree, da committare) | G10 (FIDELITY per-piattaforma + ordine ripristino) | non-root: make check + e2e verdi, coverage 79.1%; manca G7≥85% (root) e 01.6 Windows/macOS |
+| 2026-08-09 | 02.1–02.5 | (worktree, da committare) | G1–G7, GS-02.1–GS-02.5, G9, G10 | fase 02 verde (93.6%); deviazione GS-02.5 da approvare (xz ~27 min) |
+| 2026-08-09 | 03.1–03.6 | (worktree, da committare) | G1–G6, G7 (90.0% pkg/crypt), G9, G10 | fase 03 verde; G7 90.0%; openDevTTY coperto con tty reale; due keyfile age (scrypt+X25519 separati) |
+| 2026-08-09 | 04.1–04.7 | (worktree, da committare) | G1–G6, G7 (85.5% comb), G10, G11 | fase 04 verde; e2e docker OK; doc image-format + ARCHITECTURE; rename `IndexRef`→`Ref`; nota daemon.Write v0.21.9 (panic → mock) |
 
 ---
 

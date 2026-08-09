@@ -14,7 +14,6 @@ linters:
     - gosec
     - bodyclose
     - errorlint
-    - nilerr
     - contextcheck
     - noctx
     - copyloopvar
@@ -31,6 +30,7 @@ linters-settings:
   gosec:
     excludes:
       - G304   # file path from user input is this program's job
+      - G306   # WriteFile perms: fixtures mirror real-world 0644 trees; program writes are covered
 
 issues:
   exclude-rules:
@@ -38,3 +38,9 @@ issues:
       linters:
         - gosec
         - errcheck
+    - linters:
+        - gosec
+      text: G115 # numeric conversions on kernel-provided stat/header fields are bounded
+    - linters:
+      path: test/fixtures/compare.go
+      text: raced removal

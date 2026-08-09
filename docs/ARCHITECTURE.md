@@ -25,6 +25,28 @@ Config OCI:
 }
 ```
 
+### Assemblaggio dell'immagine (fase 04, `pkg/ociimg`)
+
+- Ordine dei layer per piattaforma (**contratto**): layer 0 = `/backimage`
+  (0755), layer 1 = `/backup` (metadati, 0644), layer 2..N = blob dati.
+  `/backimage` e `/backup` usano codec `store` (riproducibilità); i blob
+  dati usano il codec scelto.
+- Config: `Architecture`/`OS` dalla piattaforma; le etichette (vedi
+  `docs/image-format.md`) sono scritte sia nel config sia nelle
+  **annotazioni del manifest** (`mutate.Annotations`).
+- `BuildImage` (singola piattaforma) + `BuildIndex` (multi-arch): il
+  secondo verifica digest identici di meta+data tra piattaforme e ordina i
+  manifest per OS/arch.
+- Media type layer per codec: `store`=tar (ggcr `OCIUncompressedLayer`),
+  `gzip`=tar+gzip, `zstd`=tar+zstd; `xz`/`lz4` non hanno costante ggcr →
+  vietati per immagini eseguibili (guard `errNonStandardCodec`).
+- Se `--no-metadata`: `manifest.sources` nil → label `dev.backimage.sources`
+  omessa.
+- Target output (04.5): `registry` (remote.WriteIndex), `daemon`
+  (`pkg/v1/daemon.Write`, tarball docker-save temporaneo), `oci-layout`,
+  `tar`. Scelta del layer per piattaforma ospite: `--platform` o
+  runtime.goos/goarch, a errore se mancante.
+
 ### Comandi utente finale, senza backimage installato
 
 ```bash
@@ -97,3 +119,32 @@ Limite overlayfs: 127 layer → massimo **118 layer di dati** (1 binario + 1
 metadati + margine). Se la stima della dimensione supera il target, si
 **aumenta la dimensione del layer**, mai il numero. `ChunkBytes =
 clamp(layerBytes/64, 1 MiB, 64 MiB)`.
+
+Implementazione: `pkg/chunk.PlanLayers` (file `pkg/chunk/plan.go`), limiti di
+default in `LayerLimits{ MaxDataLayers: 118, MaxLayerBytes: 5 GiB,
+MinLayerBytes: 16 MiB, TargetLayerBytes: 1 GiB }`.
+
+### Algoritmo (02.4, da implementare esattamente così)
+
+1. `estimatedStoredBytes <= 0` → 1 layer, `LayerBytes = MinLayerBytes`, fine.
+2. `layerBytes = TargetLayerBytes`.
+3. `layerCount = ceil(estimated / layerBytes)`.
+4. Se `layerCount > MaxDataLayers`: `layerCount = MaxDataLayers`,
+   `layerBytes = ceil(estimated / layerCount)`, warning «backup grande:
+   dimensione layer portata a X per restare entro N layer (limite overlayfs)».
+5. Se `layerBytes < MinLayerBytes`: `layerBytes = MinLayerBytes`, ricalcolo di
+   `layerCount` (≤ MaxDataLayers per costruzione).
+6. Se `layerBytes > MaxLayerBytes`: warning «layer da X: alcuni registry
+   rifiutano blob così grandi» (non è un errore).
+7. `ChunkBytes = clamp(layerBytes / 64, 1 MiB, 64 MiB)`.
+
+Un singolo layer si dimensiona sul dato effettivo (mai sotto MinLayerBytes):
+100 MiB con target 1 GiB → layer da 100 MiB.
+
+### Ricalcolo al volo (fase 04)
+
+`estimatedStoredBytes` è una stima: la fase 05 la calcola come
+`bytesRaw * fattore` per codec (zstd 0.45, gzip 0.50, xz 0.35, lz4 0.65,
+store 1.0). Se il flusso reale supera `LayerCount * LayerBytes`, gli ultimi
+layer **crescono**, non se ne aggiungono: il numero di layer è vincolato dal
+gate overlayfs e non cambia durante lo streaming.

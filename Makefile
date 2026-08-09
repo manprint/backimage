@@ -24,7 +24,7 @@ vet:            # G2
 	go vet ./...
 
 lint:           # G3
-	golangci-lint run
+	$(HOME)/go/bin/golangci-lint run
 
 build:          # G4 (host)
 	go build -ldflags '$(LDFLAGS)' -o bin/$(BIN) ./cmd/backimage
