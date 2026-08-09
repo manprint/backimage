@@ -1,4 +1,4 @@
-//go:build unix
+//go:build unix || windows
 
 package archive
 
@@ -14,7 +14,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"syscall"
 	"time"
 )
 
@@ -75,8 +74,8 @@ func (w *tarWriter) AddRoot(ctx context.Context, root string) error {
 		return fmt.Errorf("lstat root %q: %w", root, err)
 	}
 	if w.opts.OneFileSystem && !w.devSet {
-		if stat, ok := st.Sys().(*syscall.Stat_t); ok {
-			w.devSeen = uint64(stat.Dev)
+		if dev, ok := fileDevice(st); ok {
+			w.devSeen = dev
 			w.devSet = true
 		}
 	}
@@ -139,7 +138,7 @@ func (w *tarWriter) walkDir(ctx context.Context, arcRoot, fsRoot string) error {
 		if st.IsDir() {
 			sub, err := os.ReadDir(it.full)
 			if err != nil {
-				if errors.Is(err, syscall.EACCES) || errors.Is(err, syscall.EPERM) {
+				if errors.Is(err, os.ErrPermission) {
 					// Unreadable directory (e.g. 0500): archive the dir itself
 					// and skip its contents; not an abort-worthy error.
 					if err2 := w.emitOne(ctx, rel, it.full, st); err2 != nil {
@@ -176,7 +175,7 @@ func (w *tarWriter) walkDir(ctx context.Context, arcRoot, fsRoot string) error {
 
 func (w *tarWriter) emitOne(ctx context.Context, arcPath, fsPath string, st os.FileInfo) error {
 	if w.opts.OneFileSystem && w.devSet {
-		if stat, ok := st.Sys().(*syscall.Stat_t); ok && uint64(stat.Dev) != w.devSeen {
+		if dev, ok := fileDevice(st); ok && dev != w.devSeen {
 			w.stats.Skipped++
 			return nil
 		}
@@ -286,9 +285,8 @@ func (w *tarWriter) writeEntry(ctx context.Context, e *Entry, fsPath string, st 
 		hdr.AccessTime = time.Time{}
 		hdr.ChangeTime = time.Time{}
 	}
-	if e.Type == TypeRegular && st.Sys() != nil {
-		if stt, ok := st.Sys().(*syscall.Stat_t); ok && stt.Nlink > 1 {
-			key := hardlinkKey{Dev: uint64(stt.Dev), Ino: stt.Ino}
+	if e.Type == TypeRegular {
+		if key, ok := fileIdentity(st); ok {
 			if first, seen := w.links[key]; seen {
 				e.Type = TypeHardlink
 				e.LinkTarget = first

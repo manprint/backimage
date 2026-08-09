@@ -18,11 +18,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/google/go-containerregistry/pkg/name"
-	"github.com/google/go-containerregistry/pkg/v1"
-	v1remote "github.com/google/go-containerregistry/pkg/v1/remote"
-	"golang.org/x/sys/unix"
-
 	"github.com/fpierri/backimage/pkg/archive"
 	"github.com/fpierri/backimage/pkg/chunk"
 	"github.com/fpierri/backimage/pkg/compress"
@@ -32,6 +27,9 @@ import (
 	"github.com/fpierri/backimage/pkg/registry"
 	backremote "github.com/fpierri/backimage/pkg/remote"
 	"github.com/fpierri/backimage/pkg/restore"
+	"github.com/google/go-containerregistry/pkg/name"
+	"github.com/google/go-containerregistry/pkg/v1"
+	v1remote "github.com/google/go-containerregistry/pkg/v1/remote"
 )
 
 // DefaultVersion is embedded in the archive manifest when the CLI does
@@ -577,11 +575,7 @@ func dedupKeyWarning(previous *dedupBase, cfg Config) string {
 
 // Statfs is overridable for tests.
 var statfs = func(dir string) (free int64, err error) {
-	var st unix.Statfs_t
-	if err := unix.Statfs(dir, &st); err != nil {
-		return 0, err
-	}
-	return int64(st.Bavail) * int64(st.Bsize), nil
+	return platformFreeSpace(dir)
 }
 
 func checkTempSpace(dir string, need int64) error {

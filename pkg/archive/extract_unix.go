@@ -111,7 +111,7 @@ func (x *extractor) Extract(ctx context.Context, r io.Reader, dest string) (Stat
 		if err := os.Chmod(d.path, headerMode(d.hdr)); err != nil {
 			return stats, x.maybe(fmt.Errorf("chmod dir %q: %w", d.path, err))
 		}
-		at := unix.Timespec{Nsec: unix.UTIME_OMIT}
+		at := unix.Timespec{Nsec: utimeOmit}
 		if !d.at.IsZero() {
 			at = unix.NsecToTimespec(d.at.UnixNano())
 		}
@@ -344,7 +344,7 @@ func (x *extractor) createOne(ctx context.Context, dest, target string, hdr *tar
 	// timestamps last (lutimes semantics: symlink-safe). atime is omitted
 	// when the archive carries no value for it (UTIME_OMIT keeps the
 	// extraction-time atime instead of clamping it to the epoch).
-	at := unix.Timespec{Nsec: unix.UTIME_OMIT}
+	at := unix.Timespec{Nsec: utimeOmit}
 	if !hdr.AccessTime.IsZero() {
 		at = unix.NsecToTimespec(hdr.AccessTime.UnixNano())
 	}

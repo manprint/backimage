@@ -9,7 +9,6 @@ import (
 	"strconv"
 	"sync"
 	"syscall"
-	"time"
 
 	"golang.org/x/sys/unix"
 )
@@ -25,8 +24,7 @@ func readMeta(path string, fi os.FileInfo, opts Options, e *Entry) error {
 	e.DevMajor = int64(unix.Major(uint64(st.Rdev)))
 	e.DevMinor = int64(unix.Minor(uint64(st.Rdev)))
 	e.ModTime = fi.ModTime()
-	e.AccessTime = syscallTimespecToTime(st.Atim)
-	e.ChangeTime = syscallTimespecToTime(st.Ctim)
+	e.AccessTime, e.ChangeTime = statTimes(st)
 	if !opts.NumericOwner {
 		e.Uname, e.Gname = resolveOwner(e.UID, e.GID)
 	}
@@ -40,10 +38,6 @@ func readMeta(path string, fi os.FileInfo, opts Options, e *Entry) error {
 		}
 	}
 	return nil
-}
-
-func syscallTimespecToTime(ts syscall.Timespec) time.Time {
-	return time.Unix(ts.Sec, ts.Nsec)
 }
 
 // readXattrs returns all extended attributes of path, following no symlinks.
