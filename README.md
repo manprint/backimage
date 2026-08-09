@@ -132,6 +132,147 @@ printf '%s\n' "$REGISTRY_TOKEN" | backimage login ghcr.io \
   --username acme --password-stdin
 ```
 
+## Autenticazione dei registry
+
+La password o il token del registry servono per leggere o pubblicare
+l'immagine OCI. Non sono la passphrase del backup: la prima autentica il
+registry, la seconda cifra e decifra i dati.
+
+### Login, elenco e logout
+
+Usare `--password-stdin` per non esporre il segreto nella lista dei processi.
+Per Docker Hub è consigliato un Personal Access Token (PAT), soprattutto se
+l'account usa la 2FA:
+
+```console
+# Login a Docker Hub.
+printf '%s\n' "$DOCKERHUB_PAT" | \
+  backimage login docker.io --username demoarchiveuser --password-stdin
+
+# Login a un secondo registry: i due login convivono.
+printf '%s\n' "$GHCR_PAT" | \
+  backimage login ghcr.io --username demoarchiveuser --password-stdin
+
+# Mostra i registry configurati, senza password o token.
+backimage login --list
+backimage login --list --json
+
+# Rimuove il login per un registry.
+backimage logout ghcr.io
+```
+
+`--token TOKEN` è un'alternativa quando si dispone già di un bearer token.
+`--password TOKEN` funziona, ma il segreto è visibile nella lista dei processi
+e quindi va evitato.
+
+### Dove vengono salvate le credenziali
+
+Il file usato da `backimage` è scelto in questo ordine:
+
+1. `BACKIMAGE_AUTH_FILE`, se impostata;
+2. `$XDG_CONFIG_HOME/backimage/auth.json`, se `XDG_CONFIG_HOME` è impostata;
+3. `$HOME/.config/backimage/auth.json`.
+
+Esempio per scegliere esplicitamente il file:
+
+```console
+export BACKIMAGE_AUTH_FILE="$HOME/.config/backimage/auth.json"
+backimage login --list
+```
+
+Il file usa il formato Docker `auths`, viene scritto atomicamente e ha permessi
+`0600`; viene rifiutato se è leggibile da gruppo o da altri utenti. È un file
+locale compatibile con l'autenticazione Docker, non un password manager
+cifrato: proteggerlo e non inserirlo in repository, immagini o backup pubblici.
+
+`backimage` cerca prima il proprio file. Se non trova una credenziale valida,
+usa la configurazione Docker e gli eventuali credential helper come fallback.
+Per questo `docker login` e `backimage login` possono riferirsi a file diversi;
+un login Docker riuscito non sostituisce automaticamente una vecchia
+credenziale presente nello store di `backimage`.
+
+### Login multipli: registry diversi e stesso registry
+
+È possibile avere più login nello stesso file, ma viene conservata una sola
+credenziale per ogni registry canonico:
+
+```console
+backimage login --list
+# Esempio di output: docker.io e ghcr.io
+```
+
+Un nuovo login allo stesso registry sostituisce quello precedente. I nomi
+`docker.io`, `index.docker.io` e `registry-1.docker.io` sono equivalenti: per
+Docker Hub rappresentano quindi lo stesso login.
+
+Il login è associato al registry, non al repository. Il comando seguente
+rimuove il login usato da tutti i repository Docker Hub dell'utente:
+
+```console
+backimage logout docker.io
+```
+
+Non esiste un logout per singolo repository, ad esempio
+`backimage logout docker.io/demoarchiveuser/mindhunters`. `backimage repo rm`
+elimina invece un manifest dal registry e non modifica le credenziali.
+
+Se servono account diversi sullo stesso registry, usare file di autenticazione
+separati e indicare lo stesso file anche al comando operativo:
+
+```console
+# Account A.
+printf '%s\n' "$ACCOUNT_A_PAT" | \
+  BACKIMAGE_AUTH_FILE="$HOME/.config/backimage/dockerhub-a.json" \
+  backimage login docker.io --username account_a --password-stdin
+
+# Account B.
+printf '%s\n' "$ACCOUNT_B_PAT" | \
+  BACKIMAGE_AUTH_FILE="$HOME/.config/backimage/dockerhub-b.json" \
+  backimage login docker.io --username account_b --password-stdin
+
+# Backup usando Account A.
+printf '%s\n' "$BACKUP_PASSPHRASE" | \
+  BACKIMAGE_AUTH_FILE="$HOME/.config/backimage/dockerhub-a.json" \
+  backimage backup ./mindhunters \
+    --repo docker.io/account_a/mindhunters \
+    --tag daily --passphrase-stdin --allow-degraded
+
+# Elenco dei login presenti nel file di Account B.
+BACKIMAGE_AUTH_FILE="$HOME/.config/backimage/dockerhub-b.json" \
+  backimage login --list
+```
+
+### Docker Hub: il login non garantisce il permesso di push
+
+Il login verifica che il PAT autentichi l'account. Il backup esegue poi un
+secondo controllo sul repository esatto e richiede lo scope `pull,push`:
+
+```console
+# Repository corretto: deve contenere namespace e nome.
+printf '%s\n' "$DOCKERHUB_PAT" | \
+  backimage login index.docker.io \
+    --username demoarchiveuser --password-stdin
+
+printf '%s\n' "$BACKUP_PASSPHRASE" | \
+  backimage backup ./mindhunters \
+    --repo docker.io/demoarchiveuser/mindhunters \
+    --tag mindhunters-test --passphrase-stdin --allow-degraded
+```
+
+Se il backup restituisce `credentials rejected by index.docker.io (401)`,
+`--allow-degraded` non è la soluzione: quel flag riguarda solo i privilegi
+locali. Controllare che il repository esista nell'account corretto e che il
+PAT abbia permesso di scrittura. Per eliminare una credenziale `backimage`
+vecchia e ripetere il login:
+
+```console
+backimage login --list
+backimage logout index.docker.io
+printf '%s\n' "$DOCKERHUB_PAT" | \
+  backimage login index.docker.io \
+    --username demoarchiveuser --password-stdin
+```
+
 ## Backup di file, cartelle e percorsi misti
 
 La sintassi è `backimage backup <PATH...>`: ogni percorso dopo `backup` è una

@@ -4,6 +4,10 @@
 token bearer con refresh proattivo, upload `POST` → `PATCH` a chunk → `PUT`,
 manifest OCI per piattaforma e image index multi-architettura.
 
+Per la guida utente end-to-end, con esempi di Docker Hub, login multipli e
+restore, vedere la sezione [Autenticazione dei registry](../README.md#autenticazione-dei-registry)
+nel README. Questa pagina raccoglie i dettagli tecnici del comportamento.
+
 ## Autenticazione
 
 ```sh
@@ -16,15 +20,24 @@ backimage logout REGISTRY
 Le credenziali sono risolte in ordine:
 
 1. credenziali esplicite;
-2. `$XDG_CONFIG_HOME/backimage/auth.json`;
-3. configurazione Docker e credential helper;
-4. accesso anonimo.
+2. `BACKIMAGE_AUTH_FILE`, se impostata, oppure
+   `$XDG_CONFIG_HOME/backimage/auth.json`;
+3. `$HOME/.config/backimage/auth.json` quando `XDG_CONFIG_HOME` non è impostata;
+4. configurazione Docker e credential helper;
+5. accesso anonimo.
 
 `auth.json` usa il formato Docker `auths`, viene scritto atomicamente con
 permessi 0600 e viene rifiutato se leggibile da gruppo o altri. I tre alias
 `docker.io`, `index.docker.io` e `registry-1.docker.io` sono equivalenti.
 `--token` salva un bearer token già pronto; dopo un 401 la richiesta viene
 ritentata una sola volta.
+
+Lo store contiene una sola credenziale per registry canonico: un nuovo login
+allo stesso registry sostituisce il precedente. `backimage login --list` mostra
+solo i registry configurati (`--json` produce JSON); `backimage logout REGISTRY`
+rimuove l'intero login del registry. Il logout non è disponibile a livello di
+repository: per usare account diversi sullo stesso registry occorre usare file
+separati tramite `BACKIMAGE_AUTH_FILE`.
 
 ## Compatibilità
 
