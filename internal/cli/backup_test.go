@@ -136,6 +136,17 @@ func TestBackupOCILayoutSuccessHumanAndJSON(t *testing.T) {
 		if !asJSON && !strings.Contains(out, "backup completato") {
 			t.Fatalf("backup output = %q", out)
 		}
+		if !asJSON {
+			for _, want := range []string{
+				"backimage restore example.test/team/success:t1",
+				"docker run --rm -i",
+				"example.test/team/success:t1 extract --out /restore",
+			} {
+				if !strings.Contains(out, want) {
+					t.Fatalf("backup output missing %q: %q", want, out)
+				}
+			}
+		}
 		if _, err := os.Stat(filepath.Join(layout, "index.json")); err != nil {
 			t.Fatalf("OCI layout missing: %v", err)
 		}

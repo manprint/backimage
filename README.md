@@ -179,6 +179,86 @@ I path passati sono anche la base dei nomi archiviati: usare `backimage ls` o
 
 ## Estrarre i dati dall'immagine
 
+### Esempio completo con Docker Hub
+
+Nell'esempio seguente `./mindhunters` è il percorso **locale** da archiviare,
+mentre `docker.io/demoarchiveuser/mindhunters` è il repository **remoto** su
+Docker Hub. Sono due cose diverse:
+
+```text
+backimage backup ./mindhunters \
+  --repo docker.io/demoarchiveuser/mindhunters \
+  --tag mindhunters-test
+                         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                         repository remoto e tag dell'immagine
+```
+
+Il repository dell'immagine deve contenere il namespace dell'utente o
+dell'organizzazione (`demoarchiveuser/mindhunters`). Il risultato sarà quindi
+la reference completa:
+
+```text
+docker.io/demoarchiveuser/mindhunters:mindhunters-test
+```
+
+Per Docker Hub è consigliato usare un Personal Access Token (PAT), soprattutto
+se l'account ha la 2FA. Il login di `backimage` verifica che le credenziali
+siano valide, ma il backup deve anche avere il permesso `push` sul repository
+esatto indicato da `--repo`:
+
+```console
+# Token Docker Hub, non la passphrase del backup.
+printf '%s\n' "$DOCKERHUB_PAT" | backimage login index.docker.io \
+  --username demoarchiveuser --password-stdin
+backimage login --list
+
+# `./mindhunters` è la directory locale sorgente.
+# `--allow-degraded` evita il blocco del preflight dei privilegi; non concede
+# accesso a file che l'utente non può leggere.
+printf '%s\n' "$BACKUP_PASSPHRASE" | \
+  backimage backup ./mindhunters \
+    --repo docker.io/demoarchiveuser/mindhunters \
+    --tag mindhunters-test \
+    --passphrase-stdin \
+    --allow-degraded
+```
+
+`docker login` e `backimage login` possono usare archivi diversi. `backimage`
+cerca prima le proprie credenziali in
+`$XDG_CONFIG_HOME/backimage/auth.json` (oppure `$HOME/.config/backimage/auth.json`)
+e poi usa la configurazione Docker come fallback. Un login riuscito per il
+registry non dimostra quindi che l'account possa fare push su ogni repository.
+Se l'account ha accesso solo a `demoarchiveuser/mindhunters`, usare quella
+reference completa e non `docker.io/demoarchiveuser`.
+
+#### Errore `credentials rejected ... (401)` durante il backup
+
+Questo errore non viene risolto da `--allow-degraded`: quel flag riguarda solo
+il preflight dei privilegi locali. Le cause più comuni sono:
+
+1. `--repo` punta al repository sbagliato: usare
+   `docker.io/demoarchiveuser/mindhunters`, non soltanto
+   `docker.io/demoarchiveuser`;
+2. il PAT è valido, ma l'utente non ha permesso di scrittura su quel repository;
+3. è stato eseguito `docker login`, ma `backimage` sta usando una vecchia
+   credenziale salvata nel proprio store;
+4. il login è stato eseguito come un altro utente o con una configurazione
+   Docker diversa.
+
+Per rinnovare esplicitamente la credenziale usata da `backimage`:
+
+```console
+backimage login --list
+backimage logout index.docker.io
+printf '%s\n' "$DOCKERHUB_PAT" | backimage login index.docker.io \
+  --username demoarchiveuser --password-stdin
+```
+
+Il login riuscito prova solo che il PAT autentica l'account; il successivo
+preflight di push verifica anche lo scope `pull,push` sul repository indicato.
+Su Docker Hub il repository deve esistere nell'account corretto oppure
+l'account deve avere un permesso equivalente tramite organizzazione/team.
+
 ### Con la CLI installata
 
 `restore --extract` materializza direttamente i file; senza `--extract`,
@@ -186,22 +266,25 @@ I path passati sono anche la base dei nomi archiviati: usare `backimage ls` o
 ripetuti e sono utili per estrarre solo una parte di un backup:
 
 ```console
-# Directory completa in una destinazione locale.
+# Download dei layer dal registry e estrazione diretta nella directory locale.
 mkdir -p ./restore
-backimage restore ghcr.io/acme/backup:daily \
+printf '%s\n' "$BACKUP_PASSPHRASE" | \
+backimage restore docker.io/demoarchiveuser/mindhunters:mindhunters-test \
   --extract --destination ./restore \
-  --passphrase-file ./backup.pass
+  --no-preserve-owner --passphrase-stdin
 
 # Solo PDF sotto documents, escludendo i temporanei.
-backimage restore ghcr.io/acme/backup:daily \
+printf '%s\n' "$BACKUP_PASSPHRASE" | \
+backimage restore docker.io/demoarchiveuser/mindhunters:mindhunters-test \
   --extract --destination ./documents \
   --include 'documents/**/*.pdf' \
   --exclude 'documents/**/tmp/**' \
-  --passphrase-file ./backup.pass
+  --no-preserve-owner --passphrase-stdin
 
-# Tar su disco, da ispezionare o trasferire.
-backimage restore ghcr.io/acme/backup:daily \
-  --output ./daily.tar --passphrase-file ./backup.pass
+# Download dei layer e salvataggio del tar, senza estrarlo.
+printf '%s\n' "$BACKUP_PASSPHRASE" | \
+backimage restore docker.io/demoarchiveuser/mindhunters:mindhunters-test \
+  --output ./mindhunters-test.tar --passphrase-stdin
 
 # Sorgente locale invece del registry.
 backimage restore --oci-layout ./oci-layout \
@@ -215,11 +298,12 @@ invece leggono solo i metadati pubblici e non richiedono la passphrase;
 `verify` completo è preferibile prima di un restore.
 
 ```console
-backimage inspect ghcr.io/acme/backup:daily --files \
+backimage inspect docker.io/demoarchiveuser/mindhunters:mindhunters-test --files \
   --passphrase-file ./backup.pass
-backimage ls ghcr.io/acme/backup:daily --long --include 'documents/**' \
+backimage ls docker.io/demoarchiveuser/mindhunters:mindhunters-test \
+  --long --include 'documents/**' \
   --passphrase-file ./backup.pass
-backimage verify ghcr.io/acme/backup:daily \
+backimage verify docker.io/demoarchiveuser/mindhunters:mindhunters-test \
   --passphrase-file ./backup.pass
 ```
 
@@ -231,10 +315,12 @@ Per scrivere su una directory dell'host, usare un bind mount:
 
 ```console
 mkdir -p ./restore
+docker pull docker.io/demoarchiveuser/mindhunters:mindhunters-test
 docker run --rm \
   -e BACKIMAGE_PASSPHRASE="$BACKUP_PASSPHRASE" \
   -v "$PWD/restore:/restore" \
-  ghcr.io/acme/backup:daily extract --out /restore
+  docker.io/demoarchiveuser/mindhunters:mindhunters-test \
+  extract --out /restore --no-preserve-owner
 ```
 
 Si può anche estrarre un tar e affidare la materializzazione agli strumenti
@@ -244,10 +330,19 @@ ripristinare ownership, ACL, xattr, device e permessi speciali:
 ```console
 docker run --rm -i \
   -e BACKIMAGE_PASSPHRASE="$BACKUP_PASSPHRASE" \
-  ghcr.io/acme/backup:daily tar \
-  | sudo tar -xpf - -C /srv/restore \
-      --xattrs --acls --numeric-owner
+  docker.io/demoarchiveuser/mindhunters:mindhunters-test tar \
+  > mindhunters-test.tar
+
+mkdir -p ./restore
+tar -xpf mindhunters-test.tar -C ./restore \
+  --no-same-owner --no-same-permissions
 ```
+
+In modalità diretta Docker scarica l'immagine con `docker pull` oppure
+automaticamente al primo `docker run`; non serve installare `backimage` sul
+computer di destinazione. Il comando `extract` dell'immagine è il self-
+extractor incorporato e supporta anche `--include`, `--exclude`,
+`--strip-components` e `--no-preserve-owner`.
 
 Per ispezionare senza copiare file:
 
@@ -289,7 +384,7 @@ leggibile dal processo privilegiato.
 | --- | --- | --- |
 | File dell'utente leggibili | `backimage backup ./project ...` | Nessun `sudo`; scelta consigliata |
 | `/etc` o `/var/lib` con dati di sistema | `sudo backimage backup /etc/myapp /var/lib/myapp ...` | Include i file protetti e i relativi metadati |
-| File illeggibili non essenziali | `--allow-degraded` | Continua, ma il backup è parziale: registrare e correggere gli errori |
+| Preflight dei privilegi non disponibile | `--allow-degraded` | Continua senza il preflight strict; non concede accesso ai file illeggibili |
 | Ripristino in una directory dell'utente | `backimage restore --extract -C ./restore --no-preserve-owner ...` | L'utente conserva i file; ownership originale non applicata |
 | Ripristino fedele del sistema Linux | `backimage restore -o system.tar ...` poi `sudo tar -xpf ...` | Preserva ownership numerica, mode, ACL/xattr e device quando supportati |
 
@@ -328,6 +423,8 @@ sudo tar -xpf /tmp/system.tar -C /srv/restore-system \
 `--numeric-owner` durante il backup evita di risolvere i nomi utente/gruppo e
 conserva UID/GID numerici, utile tra host con database utenti diversi. Durante
 il restore, `--no-preserve-owner` è la scelta pratica per un utente non-root;
+`--allow-degraded` è invece un'opzione del backup e non disabilita la
+preservazione dell'owner nei metadati archiviati;
 per ownership, ACL, xattr, setuid/setgid, device e FIFO usare root su un
 filesystem che li supporti. Vedere [FIDELITY](docs/FIDELITY.md) per la matrice
 completa di fedeltà per sistema operativo e metodo di estrazione.
@@ -447,7 +544,7 @@ Flag:
 | `--exclude GLOB` | — | Esclude un glob; ripetibile |
 | `--one-file-system` | `false` | Non attraversa mount point |
 | `--numeric-owner` | `false` | Non risolve nomi utente/gruppo |
-| `--allow-degraded` | `false` | Continua con file illeggibili |
+| `--allow-degraded` | `false` | Disattiva il preflight strict delle capability; non concede privilegi |
 | `--jobs N` | `3` | Upload paralleli |
 | `--platform OS/ARCH` | `linux/amd64,linux/arm64` | Piattaforme auto-estraenti; ripetibile |
 | `--no-metadata` | `false` | Omette i path sorgente dalle label |
@@ -504,8 +601,10 @@ Flag restore:
 Esempi:
 
 ```console
-backimage restore ghcr.io/team/dumps:daily -o daily.tar
-backimage restore ghcr.io/team/dumps:daily --extract -C restore \
+backimage restore docker.io/demoarchiveuser/mindhunters:mindhunters-test \
+  -o mindhunters-test.tar
+backimage restore docker.io/demoarchiveuser/mindhunters:mindhunters-test \
+  --extract -C restore \
   --include 'photos/**' --exclude 'photos/tmp/**'
 backimage restore --oci-layout ./layout --extract -C restore
 ```
