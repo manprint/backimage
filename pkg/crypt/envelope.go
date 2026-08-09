@@ -106,7 +106,12 @@ func ParseHeader(src []byte) (Header, int, error) {
 	return h, n, nil
 }
 
-// AAD builds the additional authenticated data for chunk index i.
+// AAD builds the additional authenticated data for a chunk. Random-nonce
+// blobs bind their position to detect a reordered chunk table. Convergent
+// blobs deliberately omit the position: a CDC boundary may move a matching
+// chunk to another index in a later backup, and binding that index would make
+// otherwise identical encrypted blobs different. The header, codec and nonce
+// remain authenticated in both modes.
 func AAD(h Header, chunkIndex uint32) []byte {
 	out := make([]byte, 16)
 	copy(out[0:8], envelopeMagic)
@@ -114,6 +119,8 @@ func AAD(h Header, chunkIndex uint32) []byte {
 	out[9] = byte(h.Codec)
 	out[10] = h.AEAD
 	out[11] = h.Flags
-	binary.BigEndian.PutUint32(out[12:16], chunkIndex)
+	if h.Flags&flagConvergent == 0 {
+		binary.BigEndian.PutUint32(out[12:16], chunkIndex)
+	}
 	return out
 }

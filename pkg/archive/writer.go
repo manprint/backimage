@@ -5,6 +5,8 @@ package archive
 import (
 	"archive/tar"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -24,6 +26,7 @@ type hardlinkKey struct {
 
 type tarWriter struct {
 	tw        *tar.Writer
+	w         io.Writer
 	opts      Options
 	stats     Stats
 	entries   []Entry
@@ -31,15 +34,32 @@ type tarWriter struct {
 	rootBases map[string]string // basename -> root, to detect collisions
 	devSeen   uint64            // device of the first root (OneFileSystem)
 	devSet    bool
+	written   int64 // total bytes emitted into the archive
 }
 
 func newWriter(w io.Writer, opts Options) *tarWriter {
-	return &tarWriter{
-		tw:        tar.NewWriter(w),
+	tw := &tarWriter{
+		w:         w,
 		opts:      opts,
 		links:     map[hardlinkKey]string{},
 		rootBases: map[string]string{},
 	}
+	tw.tw = tar.NewWriter(&counterWriter{w: w, n: &tw.written})
+	return tw
+}
+
+// counterWriter forwards writes while maintaining the emitted offset.
+type counterWriter struct {
+	w io.Writer
+	n *int64
+}
+
+func (c *counterWriter) Write(p []byte) (int, error) {
+	n, err := c.w.Write(p)
+	if c.n != nil {
+		*c.n += int64(n)
+	}
+	return n, err
 }
 
 func (w *tarWriter) AddRoot(ctx context.Context, root string) error {
@@ -327,11 +347,20 @@ func (w *tarWriter) writeEntry(ctx context.Context, e *Entry, fsPath string, st 
 			defer f.Close()
 		}
 	}
+	// archive/tar may defer the padding of the previous regular file until
+	// WriteHeader. Record the logical start of the next header, not the number
+	// of bytes which happened to reach the underlying writer so far.
+	e.TarOffset = (w.written + 511) &^ int64(511)
 	if err := w.tw.WriteHeader(hdr); err != nil {
 		return fmt.Errorf("tar header %q: %w", e.Path, err)
 	}
 	if e.Type == TypeRegular && f != nil {
-		n, err := io.Copy(w.tw, &ctxReader{ctx: ctx, r: f})
+		h := sha256.New()
+		n, err := io.Copy(io.MultiWriter(w.tw, h), &ctxReader{ctx: ctx, r: f})
+		if err != nil {
+			return fmt.Errorf("copy %q: %w", fsPath, err)
+		}
+		e.SHA256 = hex.EncodeToString(h.Sum(nil))
 		if err != nil {
 			return fmt.Errorf("copy %q: %w", fsPath, err)
 		}

@@ -167,6 +167,8 @@ func BuildImage(opts BuildOptions) (v1.Image, error) {
 		return nil, err
 	}
 	img = mutate.Annotations(img, labels).(v1.Image)
+	img = mutate.ConfigMediaType(img, types.OCIConfigJSON)
+	img = mutate.MediaType(img, types.OCIManifestSchema1)
 	return img, nil
 }
 

@@ -1,0 +1,119 @@
+syntax = "proto3";
+
+package backimage.v1;
+
+option go_package = "github.com/fpierri/backimage/pkg/protocol";
+
+message Hello {
+  string client_version = 1;
+  uint32 protocol_version = 2;
+  string session_id = 3;
+  string auth_token = 4;
+}
+
+message HelloAck {
+  string server_version = 1;
+  uint32 protocol_version = 2;
+  uint64 max_bytes = 3;
+  repeated string allowed_repo_prefixes = 4;
+  bool resumable = 5;
+  repeated string known_blob_digests = 6;
+}
+
+message BackupStart {
+  string reference = 1;
+  bytes manifest_json = 2;
+  uint32 layer_count = 3;
+  uint64 estimated_bytes = 4;
+  repeated Platform platforms = 5;
+  bytes selfextract_amd64 = 6;
+  bytes selfextract_arm64 = 7;
+  bytes metadata_layer = 8;
+}
+
+message Platform {
+  string os = 1;
+  string architecture = 2;
+}
+
+message LayerStart {
+  uint32 index = 1;
+  uint64 size = 2;
+  string sha256 = 3;
+  string diff_id = 4;
+  string media_type = 5;
+}
+
+message LayerEnd {
+  uint32 index = 1;
+  string digest = 2;
+}
+
+message Token {
+  string value = 1;
+  int64 expires_at_unix = 2;
+  string repository = 3;
+  repeated string actions = 4;
+  bool anonymous = 5;
+}
+
+message TokenRequest {
+  string repository = 1;
+  repeated string actions = 2;
+}
+
+message Progress {
+  uint32 layer = 1;
+  uint64 uploaded = 2;
+  bool skipped = 3;
+}
+
+message BackupEnd {
+  string digest = 1;
+  uint64 bytes_uploaded = 2;
+  uint32 blobs_skipped = 3;
+}
+
+message Error {
+  uint32 kind = 1;
+  string message = 2;
+  string hint = 3;
+}
+
+message ClientMessage {
+  oneof msg {
+    Hello hello = 1;
+    BackupStart backup_start = 2;
+    LayerStart layer_start = 3;
+    LayerEnd layer_end = 4;
+    Token token = 5;
+    Error error = 6;
+    Cancel cancel = 7;
+  }
+}
+
+message ServerMessage {
+  oneof msg {
+    HelloAck hello_ack = 1;
+    TokenRequest token_request = 2;
+    Progress progress = 3;
+    BackupEnd backup_end = 4;
+    Error error = 5;
+    LayerAck layer_ack = 6;
+    BackupAck backup_ack = 7;
+  }
+}
+
+message BackupAck {
+  bool ready = 1;
+  TokenRequest token_request = 2;
+}
+
+message LayerAck {
+  uint32 index = 1;
+  bool skipped = 2;
+}
+
+message Cancel {
+  string reason = 1;
+}

@@ -37,6 +37,8 @@ type Entry struct {
 	DevMajor   int64
 	DevMinor   int64
 	Xattrs     map[string][]byte // raw values; keys include the namespace, e.g. "user.foo", "system.posix_acl_access"
+	TarOffset  int64             // byte offset of this entry's header in the archive (valid after Close)
+	SHA256     string            // hex sha256 of the payload, regular files only
 }
 
 // Validate reports whether the entry is internally consistent and safe to extract.

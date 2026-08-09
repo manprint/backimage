@@ -73,6 +73,17 @@ func NewRootCommand() *cobra.Command {
 
 	root.AddCommand(
 		newVersionCommand(),
+		newLoginCommand(),
+		newBackupCommand(),
+		newLogoutCommand(),
+		newRestoreCommand(),
+		newInspectCommand(),
+		newLSCommand(),
+		newFindCommand(),
+		newVerifyCommand(),
+		newDoctorCommand(),
+		newRepoCommand(),
+		newListenRemoteCommand(),
 	)
 
 	return root

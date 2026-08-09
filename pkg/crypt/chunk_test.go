@@ -83,7 +83,14 @@ func TestSealConvergent(t *testing.T) {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(a, b) {
-		t.Fatal("convergent seals must be identical for same payload+index")
+		t.Fatal("convergent seals must be identical for same payload")
+	}
+	shifted, err := s.Seal(nil, 7, codec, []byte("same"), sha)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(a, shifted) {
+		t.Fatal("convergent seals must survive a changed chunk index")
 	}
 	c, err := s.Seal(nil, 0, codec, []byte("different"), sha256Sum([]byte("different")))
 	if err != nil {
@@ -95,12 +102,28 @@ func TestSealConvergent(t *testing.T) {
 	if h, _, err := ParseHeader(a); err != nil || h.Flags&flagConvergent == 0 {
 		t.Fatalf("convergent seal must set flag: h=%+v err=%v", h, err)
 	}
-	got, _, err := o.Open(nil, 0, a)
+	got, _, err := o.Open(nil, 7, a)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !bytes.Equal(got, []byte("same")) {
 		t.Fatal("convergent open mismatch")
+	}
+	seen := map[[nonceLen]byte]bool{}
+	for i := 0; i < 100; i++ {
+		payload := []byte{byte(i), byte(i >> 8)}
+		blob, err := s.Seal(nil, uint32(i+1), codec, payload, sha256Sum(payload))
+		if err != nil {
+			t.Fatal(err)
+		}
+		h, _, err := ParseHeader(blob)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if seen[h.Nonce] {
+			t.Fatalf("convergent nonce reused for distinct payload %d", i)
+		}
+		seen[h.Nonce] = true
 	}
 }
 

@@ -1,0 +1,407 @@
+package cli
+
+import (
+	"errors"
+	"fmt"
+	"os"
+	"os/signal"
+	"strconv"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/spf13/cobra"
+
+	"github.com/fpierri/backimage/internal/buildinfo"
+	"github.com/fpierri/backimage/internal/embedded"
+	"github.com/fpierri/backimage/pkg/backup"
+	"github.com/fpierri/backimage/pkg/chunk"
+	"github.com/fpierri/backimage/pkg/crypt"
+	"github.com/fpierri/backimage/pkg/registry"
+	backremote "github.com/fpierri/backimage/pkg/remote"
+)
+
+func flagErr(name string, err error) {
+	panic(fmt.Sprintf("flag %s: %v", name, err))
+}
+
+func getFlagString(cmd *cobra.Command, name string) string {
+	v, err := cmd.Flags().GetString(name)
+	if err != nil {
+		flagErr(name, err)
+	}
+	return v
+}
+
+func getFlagInt(cmd *cobra.Command, name string) int {
+	v, err := cmd.Flags().GetInt(name)
+	if err != nil {
+		flagErr(name, err)
+	}
+	return v
+}
+
+func getFlagUint64(cmd *cobra.Command, name string) uint64 {
+	v, err := cmd.Flags().GetUint64(name)
+	if err != nil {
+		flagErr(name, err)
+	}
+	return v
+}
+
+func getFlagBool(cmd *cobra.Command, name string) bool {
+	v, err := cmd.Flags().GetBool(name)
+	if err != nil {
+		flagErr(name, err)
+	}
+	return v
+}
+
+func getFlagStrings(cmd *cobra.Command, name string) []string {
+	v, err := cmd.Flags().GetStringSlice(name)
+	if err != nil {
+		flagErr(name, err)
+	}
+	return v
+}
+
+func printerResult(pr Printer, v any) error {
+	if err := pr.Result(v); err != nil {
+		return New(KindGeneric, "", "%v", err)
+	}
+	return nil
+}
+
+func newBackupCommand() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "backup <PATH...> --repo IMAGE [flags]",
+		Short: "archive, encrypt and push a backup to an OCI registry",
+		Args:  cobra.MinimumNArgs(1),
+		RunE:  runBackup,
+	}
+	f := cmd.Flags()
+	f.String("repo", "", "target repository, e.g. ghcr.io/me/dumps")
+	f.String("tag", "latest", "backup tag")
+	f.Bool("timestamp", false, "append a timestamp to the tag")
+	f.String("timestamp-format", "20060102T150405Z", "Go layout for --timestamp")
+	f.String("compression", "zstd", "zstd|gzip|xz|lz4|none")
+	f.Int("compression-level", 0, "codec level (0 = codec default)")
+	f.String("max-layer-size", "1GiB", "target layer size, e.g. 512MiB, 2GiB")
+	f.Bool("encrypt", true, "encrypt chunks (default)")
+	f.Bool("no-encrypt", false, "disable encryption (exclusive with --encrypt)")
+	f.String("passphrase-file", "", "read the passphrase from a file")
+	f.Bool("passphrase-stdin", false, "read the passphrase from stdin")
+	f.StringSlice("recipient", nil, "age public key (repeatable)")
+	f.String("age-identity", "", "age identity file used to reuse a deduplication key")
+	f.Bool("dedup", false, "enable content-defined incremental deduplication (reveals chunk equality)")
+	f.String("dedup-chunk-min", "", "advanced CDC minimum chunk size")
+	f.String("dedup-chunk-avg", "", "advanced CDC average chunk size")
+	f.String("dedup-chunk-max", "", "advanced CDC maximum chunk size")
+	f.String("dedup-polynomial", "", "advanced Rabin polynomial (0x...) for CDC")
+	f.Bool("local-repo", false, "output to the Docker daemon instead of a registry")
+	f.String("output", "registry", "registry|daemon|oci-layout|tar")
+	f.String("output-path", "", "destination for oci-layout/tar")
+	f.StringSlice("exclude", nil, "glob pattern to exclude (repeatable)")
+	f.Bool("one-file-system", false, "do not cross mount points")
+	f.Bool("numeric-owner", false, "do not resolve user/group names")
+	f.Bool("allow-degraded", false, "continue despite unreadable files")
+	f.Int("jobs", 3, "parallel uploads")
+	f.StringSlice("platform", []string{"linux/amd64", "linux/arm64"}, "self-extract platforms (repeatable)")
+	f.Bool("no-metadata", false, "omit source paths from labels")
+	f.Bool("dry-run", false, "print the plan and exit without writing")
+	f.Bool("resume", true, "resume from the checkpoint if present")
+	f.Bool("runnable", true, "build runnable images (false allows non-standard codecs)")
+	f.String("temp-dir", "", "spool directory (default $TMPDIR)")
+	f.String("created", "", "fixed RFC3339 image creation time (reproducible builds)")
+	f.String("remote", "", "send layers to a remote backimage server")
+	f.Bool("udp", false, "use QUIC instead of TCP for --remote")
+	f.String("tls-pin", "", "remote server certificate SHA-256 fingerprint")
+	f.String("tls-ca", "", "PEM CA bundle for the remote server")
+	f.String("tls-cert", "", "PEM client certificate for mTLS")
+	f.String("tls-key", "", "PEM client private key for mTLS")
+	f.String("auth-token", "", "pre-shared remote authentication token")
+	f.String("auth-token-file", "", "read the remote authentication token from a file")
+	f.Bool("server-side-compress", false, "ask the remote server to compress (server sees plaintext)")
+	addQUICExperimentalFlags(cmd)
+	return cmd
+}
+
+func runBackup(cmd *cobra.Command, args []string) error {
+	opts, err := parseOptions(cmd.Root())
+	if err != nil {
+		return err
+	}
+	pr := NewPrinter(cmd.OutOrStdout(), cmd.ErrOrStderr(), opts)
+
+	repo := getFlagString(cmd, "repo")
+	if repo == "" {
+		return New(KindUsage, "", "missing --repo")
+	}
+	tag := getFlagString(cmd, "tag")
+	if ts := getFlagBool(cmd, "timestamp"); ts {
+		layout := getFlagString(cmd, "timestamp-format")
+		tag += "-" + time.Now().UTC().Format(layout)
+	}
+	ref := strings.TrimSuffix(repo, "/") + ":" + tag
+
+	compression := getFlagString(cmd, "compression")
+	if compression == "none" {
+		compression = "store"
+	}
+	level := getFlagInt(cmd, "compression-level")
+	maxLayerStr := getFlagString(cmd, "max-layer-size")
+	maxLayer, err := parseSize(maxLayerStr)
+	if err != nil {
+		return New(KindUsage, "", "max-layer-size: %v", err)
+	}
+	dedup := getFlagBool(cmd, "dedup")
+	if dedup && !cmd.Flags().Changed("max-layer-size") {
+		// Smaller default layers make the content-defined boundaries useful for
+		// normal incremental backups while leaving the non-dedup default intact.
+		maxLayer = 64 << 20
+	}
+	dedupParams, err := readDedupParams(cmd)
+	if err != nil {
+		return New(KindUsage, "", "%v", err)
+	}
+	if dedup {
+		if _, err := chunk.NormalizeCDCParams(dedupParams); err != nil {
+			return New(KindUsage, "", "%v", err)
+		}
+	}
+	encrypt := getFlagBool(cmd, "encrypt")
+	if noEncrypt := getFlagBool(cmd, "no-encrypt"); noEncrypt {
+		if encrypt && !cmd.Flags().Changed("encrypt") {
+			encrypt = false
+		} else if encrypt {
+			return New(KindUsage, "", "cannot combine --encrypt and --no-encrypt")
+		}
+	}
+
+	passfile := getFlagString(cmd, "passphrase-file")
+	passStdin := getFlagBool(cmd, "passphrase-stdin")
+	recipients := getFlagStrings(cmd, "recipient")
+	ageIdentity := getFlagString(cmd, "age-identity")
+	if !encrypt && (passfile != "" || passStdin || len(recipients) > 0 || ageIdentity != "") {
+		return New(KindUsage, "", "passphrase/recipient given but encryption disabled")
+	}
+	if ageIdentity != "" && !dedup {
+		return New(KindUsage, "", "--age-identity requires --dedup")
+	}
+
+	var passFn func() ([]byte, error)
+	if encrypt && (passfile != "" || passStdin) {
+		src := crypt.PassphraseSource{
+			File:    passfile,
+			Stdin:   passStdin,
+			Prompt:  true,
+			Confirm: true,
+		}
+		passFn = func() ([]byte, error) {
+			p, err := crypt.ReadPassphrase(src)
+			if err != nil {
+				if errors.Is(err, crypt.ErrEmptyPassphrase) || errors.Is(err, crypt.ErrNoPassphrase) {
+					return nil, New(KindUsage, "", "passphrase: %v", err)
+				}
+				return nil, New(KindGeneric, "", "passphrase: %v", err)
+			}
+			return p, nil
+		}
+	}
+
+	runnable := getFlagBool(cmd, "runnable")
+	platforms := getFlagStrings(cmd, "platform")
+
+	output := getFlagString(cmd, "output")
+	if localRepo := getFlagBool(cmd, "local-repo"); localRepo {
+		if cmd.Flags().Changed("output") {
+			return New(KindUsage, "", "--local-repo cannot be combined with --output")
+		}
+		output = "daemon"
+	}
+	outputPath := getFlagString(cmd, "output-path")
+
+	store, err := registry.NewStore(authFilePath())
+	if err != nil {
+		return New(KindGeneric, "", "credential store: %v", err)
+	}
+	kc := registry.NewKeychain(nil, store)
+	var remoteUploader backup.RemoteUploader
+	if remoteAddr := getFlagString(cmd, "remote"); remoteAddr != "" {
+		if output != "registry" {
+			return New(KindUsage, "", "--remote cannot be combined with --output %s", output)
+		}
+		remoteUploader, err = newBackupRemote(cmd, ref, remoteAddr, kc)
+		if err != nil {
+			return err
+		}
+		if getFlagBool(cmd, "server-side-compress") {
+			pr.Warnf("--server-side-compress requested: the server may see plaintext; protocol v1 still sends client-built layers")
+		}
+	} else if getFlagBool(cmd, "server-side-compress") {
+		return New(KindUsage, "", "--server-side-compress requires --remote")
+	}
+
+	resume := getFlagBool(cmd, "resume")
+	tempDir := getFlagString(cmd, "temp-dir")
+	excludes := getFlagStrings(cmd, "exclude")
+	oneFS := getFlagBool(cmd, "one-file-system")
+	numOwner := getFlagBool(cmd, "numeric-owner")
+	degraded := getFlagBool(cmd, "allow-degraded")
+	noMeta := getFlagBool(cmd, "no-metadata")
+	dryRun := getFlagBool(cmd, "dry-run")
+	jobs := getFlagInt(cmd, "jobs")
+
+	cfg := backup.Config{
+		RootPaths:     append([]string(nil), args...),
+		Ref:           ref,
+		Compression:   compression,
+		Level:         level,
+		MaxLayerSize:  maxLayer,
+		Jobs:          jobs,
+		Version:       buildinfo.Version,
+		Encrypt:       encrypt,
+		Passphrase:    passFn,
+		Recipients:    recipients,
+		Dedup:         dedup,
+		DedupParams:   dedupParams,
+		AgeIdentity:   ageIdentity,
+		Exclude:       excludes,
+		OneFileSystem: oneFS,
+		NumericOwner:  numOwner,
+		AllowDegraded: degraded,
+		NoMetadata:    noMeta,
+		Runnable:      runnable,
+		Platforms:     platforms,
+		TempDir:       tempDir,
+		Resume:        resume,
+		Keychain:      kc,
+		Store:         store,
+		DryRun:        dryRun,
+		Output:        output,
+		OutputPath:    outputPath,
+		Remote:        remoteUploader,
+		Created:       getFlagString(cmd, "created"),
+		SelfExtract:   embedded.SelfExtract,
+	}
+	if err := backup.Validate(cfg); err != nil {
+		return New(KindUsage, "", "%v", err)
+	}
+
+	if cfg.Runnable && compression != "zstd" && compression != "gzip" && compression != "none" {
+		// runnable images only allow standard codecs; the plan gates this.
+		if compression == "lz4" || compression == "xz" || compression == "store" {
+			return New(KindUsage, "", "--runnable=true non ammette il codec %q: usare --runnable=false", compression)
+		}
+	}
+
+	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+
+	prog := func(msg string) {
+		if opts.Quiet {
+			return
+		}
+		pr.Infof("%s", msg)
+	}
+	cfg.Progress = prog
+
+	res, err := backup.Run(ctx, cfg)
+	if err != nil {
+		if ctx.Err() != nil {
+			return New(KindInterrupted, "", "backup interrotto")
+		}
+		if errors.Is(err, backup.ErrNoData) {
+			return New(KindGeneric, "", "%v", err)
+		}
+		var remoteErr *backremote.Error
+		if errors.As(err, &remoteErr) && remoteErr.Kind >= uint32(KindGeneric) && remoteErr.Kind <= uint32(KindInterrupted) {
+			return New(Kind(remoteErr.Kind), remoteErr.Hint, "%s", remoteErr.Message)
+		}
+		if isNetworkErr(err) || strings.Contains(err.Error(), "registry") || strings.Contains(err.Error(), "push") {
+			return New(KindNetwork, "", "%v", err)
+		}
+		return New(KindGeneric, "", "%v", err)
+	}
+
+	if dryRun {
+		if err := pr.Result(fmt.Sprintf("dry-run: %d file, %d byte, %d layer, %d chunk (nessuna scrittura)", res.Files, res.BytesRaw, res.Layers, res.Chunks)); err != nil {
+			return New(KindGeneric, "", "%v", err)
+		}
+		return nil
+	}
+	if opts.JSON {
+		return printerResult(pr, res)
+	}
+	return printerResult(pr, fmt.Sprintf("backup completato: %s\n  digest   %s\n  file     %d\n  byte raw %d\n  byte archiviati %d\n  layer    %d\n  chunk    %d\n  durata   %ds\n  saltati  %d (%d byte)",
+		res.Ref, res.Digest, res.Files, res.BytesRaw, res.BytesStored, res.Layers, res.Chunks, res.DurationSeconds, res.SkippedBlobs, res.SkippedBytes))
+}
+
+func readDedupParams(cmd *cobra.Command) (chunk.CDCParams, error) {
+	var p chunk.CDCParams
+	for _, flag := range []struct {
+		name string
+		dst  *int64
+	}{
+		{"dedup-chunk-min", &p.Min},
+		{"dedup-chunk-avg", &p.Avg},
+		{"dedup-chunk-max", &p.Max},
+	} {
+		value := getFlagString(cmd, flag.name)
+		if value == "" {
+			continue
+		}
+		size, err := parseSize(value)
+		if err != nil {
+			return p, fmt.Errorf("--%s: %w", flag.name, err)
+		}
+		*flag.dst = size
+	}
+	if value := getFlagString(cmd, "dedup-polynomial"); value != "" {
+		polynomial, err := strconv.ParseUint(value, 0, 64)
+		if err != nil {
+			return p, fmt.Errorf("--dedup-polynomial: %w", err)
+		}
+		p.Polynomial = polynomial
+	}
+	return p, nil
+}
+
+// parseSize parses sizes like "512MiB", "1GiB", "1048576".
+func isNetworkErr(err error) bool {
+	return errors.Is(err, syscall.ECONNREFUSED) ||
+		errors.Is(err, syscall.ECONNRESET) ||
+		errors.Is(err, syscall.EHOSTUNREACH) ||
+		strings.Contains(err.Error(), "SCHEME/HOST") ||
+		strings.Contains(err.Error(), "connection refused")
+}
+
+func parseSize(s string) (int64, error) {
+	if s == "" {
+		return 0, nil
+	}
+	tests := []struct {
+		suffix string
+		mult   int64
+	}{
+		{"TiB", 1 << 40}, {"GiB", 1 << 30}, {"MiB", 1 << 20}, {"KiB", 1 << 10},
+		{"KB", 1000}, {"MB", 1000 * 1000}, {"GB", 1000 * 1000 * 1000},
+		{"K", 1 << 10}, {"M", 1 << 20}, {"G", 1 << 30}, {"T", 1 << 40},
+		{"B", 1},
+	}
+	for _, u := range tests {
+		if strings.HasSuffix(s, u.suffix) {
+			num := strings.TrimSpace(strings.TrimSuffix(s, u.suffix))
+			v, err := strconv.ParseInt(num, 10, 64)
+			if err != nil || v < 0 || (u.mult != 0 && v > (1<<63-1)/u.mult) {
+				return 0, fmt.Errorf("dimensione %q non valida", s)
+			}
+			return v * u.mult, nil
+		}
+	}
+	v, err := strconv.ParseInt(strings.TrimSpace(s), 10, 64)
+	if err != nil || v < 0 {
+		return 0, fmt.Errorf("dimensione %q non valida (es. 512MiB, 2GiB)", s)
+	}
+	return v, nil
+}

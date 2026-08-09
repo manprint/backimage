@@ -60,63 +60,64 @@ Ultima fase completata: 04
 - [x] **Gate fase 04** — G1–G6 (`make check` RC=0 con golangci-lint via `$HOME/go/bin`), G7 = 85.5% combinato (index 85.4% + ociimg ~85%), G10 (`docs/image-format.md` creato + `docs/ARCHITECTURE.md` aggiornato), G11 (resume aggiornato); GS-04.1..04.7 verdi; `make e2e PHASE=04` OK; `go mod tidy` (ggcr/otel/credentials). Deviazioni note: `daemon.Write` (ggcr v0.21.9) può andare in panic su certe immagini → nei test si inietta la variabile `daemonWrite` (mock), da rivalutare con upgrade ggcr.
 
 ## Fase 05 — pkg/registry + login + backup
-- [ ] 05.1 Keychain: `auth.json` proprio + `~/.docker/config.json` + credential helper
-- [ ] 05.2 Comandi `login` / `logout`
-- [ ] 05.3 Token provider effimero con refresh e `RoundTripper` con retry su 401
-- [ ] 05.4 Push parallelo, backoff, checkpoint di ripresa
-- [ ] 05.5 Comando `backup`: flag completi, pipeline, progresso
-- [ ] 05.6 e2e su `registry:2` con fixture da 2 GB + test di ripresa
-- [ ] **Gate fase 05**
+- [x] 05.1 Keychain stratificata: store Docker-compatible 0600/lazy/atomico, Docker config + helper, alias Hub, errori non inghiottiti, bearer token pronto
+- [x] 05.2 Comandi `login` / `logout`: verifica prima del salvataggio, stdin/TTY/token, conflitti, list JSON senza segreti
+- [x] 05.3 Token provider effimero: margine 60 s, coalescenza successi/errori, auth anonima/basic/bearer, body 401 riavvolto e risposta chiusa
+- [x] 05.4 Push parallelo: config+layer OCI, PATCH `Location`, backoff/429, manifest piattaforma prima dell'index, checkpoint serializzato e validato
+- [x] 05.5 Comando `backup`: validazione usage, preflight registry anticipato, dry-run senza prompt/rete/scritture, layer file-backed, progresso/resume
+- [x] 05.6 e2e `registry:2`: backup cifrato, `docker pull`, riuso blob, interruzione/ripresa, permessi, secret scan, refresh/coalescenza; slow test reale 2 GiB
+- [x] **Gate fase 05** — G1–G6 (`make check` RC=0), G7 = 85.0% combinato (`pkg/registry` + `pkg/backup`), G8 (`make e2e PHASE=05` smoke verde; fixture default 2 GiB), GS-05.1..05.7 verdi, G10 (`docs/backup.md`, `docs/registries.md`), revisione Codex ultra completata
 
 ## Fase 06 — Binario auto-estraente
-- [ ] 06.1 Scheletro `cmd/backimage-selfextract` (stdlib `flag`)
-- [ ] 06.2 Sottocomando `info`
-- [ ] 06.3 Sottocomando `list`
-- [ ] 06.4 Sottocomando `tar` (stdout)
-- [ ] 06.5 Sottocomando `extract`
-- [ ] 06.6 Sottocomando `verify`
-- [ ] 06.7 Budget dimensione + `go:embed` reale nel binario principale
-- [ ] 06.8 e2e `docker run` da host pulito, amd64 e arm64 (qemu)
-- [ ] **Gate fase 06**
+- [x] 06.1 Scheletro `cmd/backimage-selfextract` (stdlib `flag`), codici di uscita allineati e nessuna dipendenza vietata
+- [x] 06.2 Sottocomando `info` (solo manifesto, umano/JSON)
+- [x] 06.3 Sottocomando `list` (filtri, long, JSON, passphrase/age)
+- [x] 06.4 Sottocomando `tar` (stdout binario pulito, guardia TTY, digest per chunk, memoria costante)
+- [x] 06.5 Sottocomando `extract` (completo/selettivo, strip-components, parent e hardlink, <3 chunk nel test mirato)
+- [x] 06.6 Sottocomando `verify` (parziale senza chiave, completo, continue, JSON)
+- [x] 06.7 Budget dimensione + `go:embed` reale: amd64 4.219.042 B, arm64 3.997.858 B
+- [x] 06.8 e2e `docker run` da host pulito, amd64 e arm64 con qemu temporaneo; tar/extract/list/info/verify e casi negativi verdi
+- [x] **Gate fase 06** — `make check`, coverage comando 81,6%, e2e multiarch, ELF embedded, dimensione e dipendenze verdi; corretti anche digest wire `sha256:` e offset tar su padding differito
 
 ## Fase 07 — restore / inspect / verify / ls / doctor
-- [ ] 07.1 Lettura layer da registry senza spacchettare
-- [ ] 07.2 `restore` → tar (default), `--extract`, `--destination`
-- [ ] 07.3 Restore parziale `--include` / `--exclude`
-- [ ] 07.4 `inspect` (scarica solo l'indice), `ls`, `find`
-- [ ] 07.5 `verify`
-- [ ] 07.6 `doctor`
-- [ ] 07.7 Output `--json` su tutti i comandi
-- [ ] 07.8 Matrice e2e completa
-- [ ] **Gate fase 07 — MILESTONE v0.1.0**
+- [x] 07.1 Source lazy da registry/OCI-layout/daemon, metadata-only e cache LRU 2 GiB verificata
+- [x] 07.2 `restore` → tar (default), `--extract`, `--destination`, stdout e overwrite sicuri
+- [x] 07.3 Restore parziale `--include` / `--exclude`, nuovo tar valido, parent/hardlink e meno di 3 chunk
+- [x] 07.4 `inspect` (zero layer dati), `ls`, `find` con formato condiviso col selfextract
+- [x] 07.5 `verify` quick/full/continue e mapping integrità
+- [x] 07.6 `doctor` umano/JSON con rimedi ed exit 3 sui privilegi obbligatori
+- [x] 07.7 Output `--json` valido su tutti i comandi
+- [x] 07.8 E2E registry + OCI-layout: tar, extract completo/selettivo, parità list e stop pre-data su passphrase errata
+- [x] **Gate fase 07 — MILESTONE v0.1.0** — `make check`, coverage combinata 85,7%, E2E e docs generati verdi
+- [ ] Tag Git `v0.1.0` — differito alla consegna/release per non taggare un worktree non ancora committato
 
 ## Fase 08 — Trasporto TCP/TLS, protocollo, listen-remote
-- [ ] 08.1 Schema protobuf dei messaggi di controllo
-- [ ] 08.2 Framing e codec di frame
-- [ ] 08.3 Interfacce `Dialer`/`Listener`, impl. TCP+TLS1.3 e mTLS
-- [ ] 08.4 Macchina a stati della sessione lato server
-- [ ] 08.5 Flusso `TokenRefresh`
-- [ ] 08.6 Quote, ACL sui repo, limiti di concorrenza
+- [x] 08.1 Schema protobuf dei messaggi di controllo
+- [x] 08.2 Framing e codec di frame
+- [x] 08.3 Interfacce `Dialer`/`Listener`, impl. TCP+TLS1.3 e mTLS
+- [x] 08.4 Macchina a stati della sessione lato server
+- [x] 08.5 Flusso `TokenRefresh`
+- [x] 08.6 Quote, ACL sui repo, limiti di concorrenza
 - [ ] 08.7 Client `--remote`, pipeline lato client
-- [ ] 08.8 Ripresa da checkpoint dopo caduta di connessione
-- [ ] 08.9 e2e a due processi + fault injection
+- [x] 08.8 Ripresa da checkpoint dopo caduta di connessione
+- [x] 08.9 e2e a due processi + fault injection
 - [ ] **Gate fase 08**
 
 ## Fase 09 — Trasporto QUIC
-- [ ] 09.1 Impl. QUIC dietro la stessa interfaccia
-- [ ] 09.2 Flag `--udp` su client e server, ALPN, certificati
-- [ ] 09.3 Tuning: stream, buffer, GSO
-- [ ] 09.4 Harness di benchmark con `netem` (matrice RTT × loss)
+- [x] 09.1 Impl. QUIC dietro la stessa interfaccia
+- [x] 09.2 Flag `--udp` su client e server, ALPN, certificati
+- [ ] 09.3 Tuning: stream, buffer, GSO (flag presenti; protocol v1 resta mono-stream)
+- [x] 09.4 Harness di benchmark con `netem` (matrice RTT × loss)
 - [ ] 09.5 `docs/transport-benchmark.md` con numeri e raccomandazione
 - [ ] **Gate fase 09**
 
 ## Fase 10 — Dedup content-defined
-- [ ] 10.1 Splitter FastCDC/Rabin dietro `Splitter`
-- [ ] 10.2 Confini di layer content-defined
-- [ ] 10.3 Modalità nonce convergente e DEK stabile per repo
-- [ ] 10.4 Skip via `HEAD /blobs/<digest>` e statistiche
-- [ ] 10.5 e2e: backup, mutazione dell'1 %, secondo backup, asserzione sui byte caricati
-- [ ] **Gate fase 10**
+- [x] 10.1 Splitter FastCDC/Rabin dietro `Splitter`
+- [x] 10.2 Confini di layer content-defined
+- [x] 10.3 Modalità nonce convergente e DEK stabile per repo
+- [x] 10.4 Skip via `HEAD /blobs/<digest>` e statistiche
+- [x] 10.5 e2e: backup, mutazione dell'1 %, secondo backup, asserzione sui byte caricati
+- [ ] **Gate fase 10** (revisione crittografica Opus obbligatoria)
 
 ## Fase 11 — repo / retention / adapter vendor
 - [ ] 11.1 Interfaccia `RegistryAdapter` con capability flag
@@ -146,9 +147,24 @@ Ultima fase completata: 04
 | 2026-08-09 | 02.1–02.5 | (worktree, da committare) | G1–G7, GS-02.1–GS-02.5, G9, G10 | fase 02 verde (93.6%); deviazione GS-02.5 da approvare (xz ~27 min) |
 | 2026-08-09 | 03.1–03.6 | (worktree, da committare) | G1–G6, G7 (90.0% pkg/crypt), G9, G10 | fase 03 verde; G7 90.0%; openDevTTY coperto con tty reale; due keyfile age (scrypt+X25519 separati) |
 | 2026-08-09 | 04.1–04.7 | (worktree, da committare) | G1–G6, G7 (85.5% comb), G10, G11 | fase 04 verde; e2e docker OK; doc image-format + ARCHITECTURE; rename `IndexRef`→`Ref`; nota daemon.Write v0.21.9 (panic → mock) |
+| 2026-08-09 | 05.1–05.6 | (worktree, da committare) | G1–G8, GS-05.1–GS-05.7, G10, review | fase 05 verde; real registry pull; coverage 85.0%; slow 2 GiB peak heap 60 MiB; corretti config blob, ordine manifest, PATCH Location, retry body, checkpoint concorrenti e dry-run |
+| 2026-08-09 | 06.1–06.8 | (worktree, da committare) | G1–G10, GS-06.1–GS-06.10 | fase 06 verde; selfextract 4,22/4,00 MB, coverage 81,6%, e2e amd64+arm64/qemu; restore selettivo; digest wire e TarOffset corretti |
+| 2026-08-09 | 07.1–07.8 | (worktree, da committare) | G1–G10, GS-07.1–GS-07.7 | fase 07 verde; source lazy registry/layout/daemon, cache LRU, coverage 85,7%, e2e registry+layout; tag v0.1.0 differito alla release |
+| 2026-08-09 | 08.1–08.9 (parziale) | (worktree, da committare) | G1–G10, GS-08.1, GS-08.3–GS-08.6, GS-08.8–GS-08.9 | protocollo protobuf e framing 4 MiB, TLS/mTLS/pin, ACL/quote/token refresh, registry diskless, ripresa e2e reale; manca GS-08.2 no-full-layer-spool e compressione server-side reale |
+| 2026-08-09 | 09.1–09.5 (parziale) | (worktree, da committare) | G1–G6, G7 (85,3% transport), G8, GS-09.1–GS-09.3 | QUIC TLS1.3/ALPN, UDP+also-TCP, e2e registry/restart/crossed transports; harness creato e smoke reale, campagna netem 4 GiB non eseguita senza root |
+| 2026-08-09 | 10.1–10.5 | (worktree, da committare) | G7 (92,6% chunk), G8, GS-10.1, GS-10.4–GS-10.5, GS-10.7 | CDC Rabin con polinomio fisso, layer content-addressed/content-defined, DEK convergente riusata solo con manifest compatibile, metriche HEAD e `repo stats`; e2e 4 GiB: 4.304.158.550 → 1.043.787.983 B (24,25%), verify+restore di t1/t2 OK; manca soltanto revisione Opus GS-10.3/G11 |
 
 ---
 
 ## Blocchi aperti
 
-Nessuno. (Se ce n'è uno, il dettaglio sta in `plan/BLOCKED.md`.)
+- Fase 08: il client costruisce ancora layer OCI nel suo spool prima della
+  trasmissione; il protocollo v1 richiede il digest del layer prima dello stream
+  e non implementa compressione server-side. Non dichiarare GS-08.2/08.7 verdi.
+- Fase 09: l'harness richiede root+`tc` per la matrice netem da 4 GiB. I layer
+  non possono essere distribuiti su più stream senza cambiare l'interfaccia
+  mono-stream esplicitamente fissata dal piano; `--x-quic-streams` rifiuta quindi
+  valori diversi da `1`.
+- Fase 10: la revisione crittografica indipendente richiesta dal piano (Opus,
+  G11/GS-10.3) non può essere auto-certificata dal codice. Il gate resta aperto
+  fino a quella revisione.

@@ -83,17 +83,22 @@ type ArchiveInfo struct {
 
 // EncryptionInfo describes how chunks are encrypted.
 type EncryptionInfo struct {
-	Enabled    bool     `json:"enabled"`
-	KDF        string   `json:"kdf"`
-	AEAD       string   `json:"aead"`
-	NonceMode  string   `json:"nonceMode"`
-	Recipients []string `json:"recipients"`
+	Enabled        bool     `json:"enabled"`
+	KDF            string   `json:"kdf"`
+	AEAD           string   `json:"aead"`
+	NonceMode      string   `json:"nonceMode"`
+	KeyFingerprint string   `json:"keyFingerprint,omitempty"`
+	Recipients     []string `json:"recipients"`
 }
 
 // ChunkingInfo describes the chunker.
 type ChunkingInfo struct {
 	Strategy         string `json:"strategy"`
+	MinChunkBytes    int64  `json:"minChunkBytes,omitempty"`
 	TargetChunkBytes int64  `json:"targetChunkBytes"`
+	MaxChunkBytes    int64  `json:"maxChunkBytes,omitempty"`
+	Polynomial       uint64 `json:"polynomial,omitempty"`
+	BoundaryFallback bool   `json:"boundaryFallback,omitempty"`
 	Count            int    `json:"count"`
 }
 
@@ -158,6 +163,9 @@ func ReadManifest(r io.Reader) (*Manifest, error) {
 	}
 	if m.Chunking.Strategy == "" || m.Chunking.TargetChunkBytes <= 0 {
 		return nil, fmt.Errorf("%w: chunking missing", ErrBadSchema)
+	}
+	if m.Chunking.Strategy == "cdc" && (m.Chunking.MinChunkBytes <= 0 || m.Chunking.MaxChunkBytes <= 0 || m.Chunking.Polynomial == 0) {
+		return nil, fmt.Errorf("%w: CDC chunking parameters missing", ErrBadSchema)
 	}
 	if m.Index.Path == "" {
 		return nil, fmt.Errorf("%w: index.path missing", ErrBadSchema)

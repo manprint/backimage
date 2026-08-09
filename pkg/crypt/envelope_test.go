@@ -110,6 +110,9 @@ func TestAADBindsChunkIndex(t *testing.T) {
 	if bytes.Equal(AAD(h, 0), AAD(h2, 0)) {
 		t.Fatal("AAD must bind flags")
 	}
+	if !bytes.Equal(AAD(h2, 0), AAD(h2, 1)) {
+		t.Fatal("convergent AAD must not bind the movable chunk index")
+	}
 }
 
 func TestMarshalHeaderTooSmall(t *testing.T) {

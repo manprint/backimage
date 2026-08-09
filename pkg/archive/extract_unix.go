@@ -69,6 +69,18 @@ func (x *extractor) Extract(ctx context.Context, r io.Reader, dest string) (Stat
 		if !x.matches(name) {
 			continue
 		}
+		name, ok := stripComponents(name, x.opts.StripComponents)
+		if !ok {
+			continue
+		}
+		hdr.Name = name
+		if hdr.Typeflag == tar.TypeLink {
+			link, keep := stripComponents(CleanPath(hdr.Linkname), x.opts.StripComponents)
+			if !keep {
+				continue
+			}
+			hdr.Linkname = link
+		}
 		target, err := safeJoin(dest, name)
 		if err != nil {
 			return stats, x.maybe(err)
@@ -114,6 +126,17 @@ func (x *extractor) Extract(ctx context.Context, r io.Reader, dest string) (Stat
 		}
 	}
 	return stats, nil
+}
+
+func stripComponents(name string, count int) (string, bool) {
+	if count <= 0 {
+		return name, name != ""
+	}
+	parts := strings.Split(strings.Trim(name, "/"), "/")
+	if len(parts) <= count {
+		return "", false
+	}
+	return strings.Join(parts[count:], "/"), true
 }
 
 func (x *extractor) matches(name string) bool {

@@ -41,6 +41,16 @@ for phase in 00 01 02 03 04 05 06 07 08 09 10 11 12; do
   fi
 done
 
+if phase_done 07 && [ -f docs/cli.md ]; then
+  generated=$(mktemp)
+  trap 'rm -f "$generated"' EXIT
+  bash scripts/generate-cli-docs.sh "$generated"
+  if ! cmp -s docs/cli.md "$generated"; then
+    echo "FAIL: docs/cli.md is stale; run scripts/generate-cli-docs.sh"
+    fail=1
+  fi
+fi
+
 if [ -f README.md ] && [ -x bin/backimage ]; then
   cmds=$(grep -oE 'backimage [a-z][a-z-]+' README.md | awk '{print $2}' | sort -u || true)
   for c in $cmds; do

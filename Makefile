@@ -12,9 +12,9 @@ export CGO_ENABLED := 0
 PLATFORMS := linux/amd64 linux/arm64 linux/arm linux/riscv64 \
              darwin/amd64 darwin/arm64 windows/amd64 windows/arm64
 
-.PHONY: check fmt vet lint build build-all test race cover e2e deps-check docs-check clean selfextract embed
+.PHONY: check fmt vet lint build build-all test race cover e2e bench-transport deps-check docs-check proto-check clean selfextract embed
 
-check: fmt vet lint build test race deps-check docs-check   ## gate unico
+check: fmt vet lint build test race deps-check docs-check proto-check   ## gate unico
 
 fmt:            # G1 — fallisce se ci sono file non formattati
 	@out="$$(gofmt -l . | grep -v '^vendor/' || true)"; \
@@ -54,17 +54,25 @@ race:           # G6
 	CGO_ENABLED=1 go test -race ./...
 
 cover:          # G7 — uso: make cover PKG=./pkg/archive/...
-	go test -coverprofile=coverage.out $(PKG)
+	go test -coverprofile=coverage.raw.out $(PKG)
+	@{ head -n 1 coverage.raw.out; tail -n +2 coverage.raw.out | grep -v '\.pb\.go:'; } > coverage.out
+	@rm -f coverage.raw.out
 	@go tool cover -func=coverage.out | tail -1
 
 e2e:            # G8 — uso: make e2e PHASE=04
 	bash test/e2e/phase_$(PHASE).sh
+
+bench-transport: # GS-09.4 — benchmark TCP/QUIC, richiede root per netem completo
+	bash test/bench/transport/run.sh
 
 deps-check:     # G9
 	bash scripts/check-deps.sh
 
 docs-check:     # G10
 	bash scripts/check-docs.sh
+
+proto-check:    # GS-08.9
+	bash scripts/check-proto.sh
 
 clean:
 	rm -rf bin dist coverage.out internal/embedded/backimage-selfextract-*

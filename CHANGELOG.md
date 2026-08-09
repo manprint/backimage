@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Skeleton del repository, build a due stadi, harness CI (`make check`).
-- Comando `backimage version` con output umano e JSON.
+- Compressori (gzip/lz4/xz/zstd), chunking fisso con planner a layer (fase 02).
+- Crittografia age: passphrase e keyfile, envelope deterministico (fase 03).
+- Index di backup, layer deterministici e assemblaggio immagine OCI multi-arch (fase 04).
+- Push verso registry con token flow, ripristino di sessione (checkpoint), retry su 429/5xx (fase 05).
+- Pipeline `backimage backup`: stima, preflight privilegi, streaming archive→chunk→seal→layer, checkpoint, pubblicazione su registry/daemon/OCI-Layout/tar, output umano/JSON (fase 05.5).
+- Comando `backimage login` con store chiavi da registro.
+- Test e2e pipeline→registry con registry in-memory (idempotenza, resume, dedup blob).
+- Skeleton del comando `backimage version` con output umano e JSON.
 - Infrastruttura di errore/exit-code (`Kind` + hint) e stampante umano/JSON.

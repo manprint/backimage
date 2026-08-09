@@ -6,8 +6,12 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"os"
 	"strings"
+	"syscall"
 	"testing"
+
+	"github.com/spf13/cobra"
 )
 
 func TestNewPrinterText(t *testing.T) {
@@ -18,6 +22,87 @@ func TestNewPrinterText(t *testing.T) {
 	}
 	if out.String() != "hello\n" {
 		t.Fatalf("stdout = %q", out.String())
+	}
+}
+
+func TestFlagHelpersAndPrinterErrors(t *testing.T) {
+	cmd := &cobra.Command{Use: "x"}
+	cmd.Flags().String("s", "value", "")
+	cmd.Flags().Int("i", 3, "")
+	cmd.Flags().Bool("b", true, "")
+	cmd.Flags().StringSlice("ss", []string{"a"}, "")
+	if getFlagString(cmd, "s") != "value" || getFlagInt(cmd, "i") != 3 || !getFlagBool(cmd, "b") || len(getFlagStrings(cmd, "ss")) != 1 {
+		t.Fatal("flag helper values")
+	}
+	func() {
+		defer func() {
+			if recover() == nil {
+				t.Fatal("missing flag did not panic")
+			}
+		}()
+		_ = getFlagString(cmd, "missing")
+	}()
+	if err := printerResult(NewPrinter(&failingCLIWriter{}, io.Discard, Options{}), "x"); ExitCodeFor(err) != int(KindGeneric) {
+		t.Fatalf("printer failure = %v", err)
+	}
+	if _, err := parseOptions(&cobra.Command{}); err == nil {
+		t.Fatal("parseOptions accepted a root without persistent flags")
+	}
+}
+
+type failingCLIWriter struct{}
+
+func (*failingCLIWriter) Write([]byte) (int, error) { return 0, io.ErrClosedPipe }
+
+func TestNetworkErrorsAndAuthPath(t *testing.T) {
+	for _, err := range []error{syscall.ECONNREFUSED, syscall.ECONNRESET, syscall.EHOSTUNREACH, errors.New("connection refused by peer"), errors.New("bad SCHEME/HOST")} {
+		if !isNetworkErr(err) {
+			t.Errorf("not network: %v", err)
+		}
+	}
+	if isNetworkErr(errors.New("other")) {
+		t.Fatal("generic error classified as network")
+	}
+	t.Setenv("BACKIMAGE_AUTH_FILE", "/tmp/custom-auth.json")
+	if authFilePath() != "/tmp/custom-auth.json" {
+		t.Fatalf("auth path = %q", authFilePath())
+	}
+	t.Setenv("BACKIMAGE_AUTH_FILE", "")
+	t.Setenv("XDG_CONFIG_HOME", "/tmp/config-home")
+	if authFilePath() != "/tmp/config-home/backimage/auth.json" {
+		t.Fatalf("xdg auth path = %q", authFilePath())
+	}
+}
+
+func TestAuthHomePromptAndDirectLogoutBranches(t *testing.T) {
+	t.Setenv("BACKIMAGE_AUTH_FILE", "")
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("HOME", t.TempDir())
+	if !strings.HasSuffix(authFilePath(), "/.config/backimage/auth.json") {
+		t.Fatalf("home auth path = %q", authFilePath())
+	}
+
+	oldIn, oldErr := os.Stdin, os.Stderr
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	w.Close()
+	errFile, err := os.CreateTemp(t.TempDir(), "stderr")
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdin, os.Stderr = r, errFile
+	_ = promptOnTTY("password")
+	os.Stdin, os.Stderr = oldIn, oldErr
+	r.Close()
+	errFile.Close()
+
+	root := NewRootCommand()
+	logout := newLogoutCommand()
+	root.AddCommand(logout)
+	if err := runLogout(logout, []string{"a", "b"}); ExitCodeFor(err) != int(KindUsage) {
+		t.Fatalf("direct logout args = %v", err)
 	}
 }
 

@@ -1,6 +1,6 @@
 # Modelo di sicurezza
 
-Versione: 1 · Aggiornato: fase 03 · Applicabile a: envelope `BIMGCHK1`, keyfile age, CLI (`--passphrase`, `--convergent`).
+Versione: 1 · Aggiornato: fase 10 · Applicabile a: envelope `BIMGCHK1`, keyfile age, CLI (`--dedup`).
 
 ## Catena di elaborazione (ordine invariabile)
 
@@ -16,8 +16,8 @@ riduce la superficie di attacco laterale via side-channel di lunghezza.
 
 | Componente | Generazione | Uso |
 |---|---|---|
-| DEK (256 bit) | `crypto/rand`, una per backup | AES-256-GCM per ogni chunk (derivato da chiave estesa) |
-| NonceKey (256 bit) | `crypto/rand`, una per backup | HMAC-SHA256 per derivazione nonce convergenti |
+| DEK (256 bit) | `crypto/rand`, una per backup; riusata solo da `--dedup` con chiave precedente convergente | AES-256-GCM per ogni chunk |
+| NonceKey (256 bit) | `crypto/rand`, insieme alla DEK | HMAC-SHA256 per derivazione nonce convergenti |
 | Wrap (age scrypt) | passphrase utente | scrypt 2^18 (age); unwrap una tantum, mai per chunk |
 | Wrap (age X25519) | coppia di chiavi utente | `keys.age` |
 
@@ -48,22 +48,38 @@ Overhead per chunk cifrato: 40 byte (24 header + 16 tag).
   test `TestNoncesNeverRepeat`). AES-GCM con chiave singola: limite pratico
   ≈ 2³² chunk cifrati con la stessa DEK; con 1 MiB/chunk → ≈ 4 EiB. Al di là
   ri-generare un nuovo backup (nuova DEK).
-- Modalità convergente (`--convergent`, opt-in, CLI richiede conferma):
-  nonce = HMAC-SHA256(KeyNonce, sha256(plaintext_chunk))[0:12]. Per chunk
-  identici → nonce identico → ciphertext identico → dedup. Trade-off noto e
-  accettato: rivela l'uguaglianza di blocchi ("chunk equality oracle"). Il
-  nonce è derivato da KeyNonce + digest del payload **già compresso e cifrato**;
-  non è possibile risalire al plaintext dal blocco. È vietato usare `--convergent`
-  per dati di piccola cardinalità se l'avversario può scegliere plaintext noti.
-- No riutilizzo nonce tra modalità: GCM con nonce ripetuti = perdita totale di
-  confidenzialità. Le due modalità hanno header flags distinti; l'opener rifiuta
-  flag sconosciuti.
+- Modalità convergente (`--dedup`, opt-in):
+  `nonce = HMAC-SHA256(NonceKey, sha256(plaintext_chunk))[0:12]`. Per chunk
+  identici con la stessa chiave → nonce e ciphertext identici → dedup. Il digest
+  è quello del chunk in chiaro, prima di compressione e cifratura; la chiave HMAC
+  impedisce di ricavare il nonce da un dizionario pubblico. Questa modalità
+  rivela comunque l'uguaglianza dei chunk a chi osserva il registry.
+- No riutilizzo nonce tra modalità: il client riusa una `KeyMaterial` solo se il
+  manifest precedente dichiara già `nonceMode: convergent`; da `random` a
+  `convergent` genera sempre una nuova chiave. GCM con nonce ripetuti sotto la
+  stessa DEK sarebbe una perdita totale di confidenzialità.
+
+### Trade-off della deduplica
+
+`--dedup` non è attivo di default. Con esso, un osservatore del registry può
+dedurre quali chunk e layer sono condivisi fra due backup e stimare quanto sono
+cambiati i dati. Non ottiene il plaintext né la DEK. Usare la modalità normale
+per dati con elevato rischio di analisi delle modifiche o con un avversario che
+possa scegliere contenuti noti.
+
+Il manifest espone solo `encryption.keyFingerprint`, i primi 8 byte di
+`SHA-256(DEK)`: serve a verificare il riuso della chiave, non permette di
+ricostruirla.
 
 ### AAD (authenticated data)
 
-Per ogni chunk: `magic(8) | version | codec | aead | flags (4 | 1+1+1+1) | uint32be(chunkIndex)`.
-Il chunkIndex è SOGGETTO a AAD: un blocco spostato di posizione (reorder,
-remap indice) viene rifiutato con `ErrIntegrity` (exit code 5).
+Per ogni chunk: `magic(8) | version | codec | aead | flags | uint32be(chunkIndex)`.
+In modalità normale il chunkIndex è soggetto a AAD: un blocco spostato di
+posizione viene rifiutato con `ErrIntegrity` (exit code 5). In modalità
+convergente i quattro byte di indice sono zero: un confine CDC può spostare lo
+stesso chunk a un altro indice nel backup successivo e legarlo all'indice
+annullerebbe la dedup. Header, codec, flag e nonce restano autenticati; un chunk
+con plaintext differente ha un nonce HMAC differente e non supera GCM.
 
 ## Trattamento dei segreti nel runtime
 

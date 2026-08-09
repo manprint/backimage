@@ -57,10 +57,11 @@ func NewExtractor(opts ExtractOptions) Extractor { return extractorFor(opts) }
 
 // ExtractOptions controls restore behaviour.
 type ExtractOptions struct {
-	PreserveOwner  bool     // default true; requires privileges
-	PreserveXattrs bool     // default true
-	Overwrite      bool     // default false: existing files cause an error
-	Includes       []string // if non-empty, only matching paths are extracted
-	Excludes       []string
-	Strict         bool // default true
+	PreserveOwner   bool     // default true; requires privileges
+	PreserveXattrs  bool     // default true
+	Overwrite       bool     // default false: existing files cause an error
+	Includes        []string // if non-empty, only matching paths are extracted
+	Excludes        []string
+	StripComponents int  // remove this many leading path components
+	Strict          bool // default true
 }
