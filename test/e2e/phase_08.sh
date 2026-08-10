@@ -1,5 +1,7 @@
 #!/usr/bin/env bash
-# Phase 08 e2e: real two-process TCP/TLS remote backup and restart resume.
+# Phase 08 e2e: legacy layer protocol (--remote-mode layers) over TCP/TLS,
+# two real processes, restart-safe resume. Streaming (v2) lives in
+# phase_08_stream.sh.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
@@ -72,7 +74,7 @@ start_server
 created=2026-08-09T10:00:00Z
 bin/backimage backup "$work/tree" --repo "$REPO" --tag t1 \
 	--remote "127.0.0.1:${REMOTE_PORT}" --tls-ca "$work/server.crt" \
-	--auth-token-file "$work/token" --no-encrypt --allow-degraded \
+	--auth-token-file "$work/token" --remote-mode layers --no-encrypt --allow-degraded \
 	--max-layer-size 8MiB --temp-dir "$work/tmp" --created "$created" --json >"$work/remote.json"
 bin/backimage backup "$work/tree" --repo "$REPO" --tag local \
 	--no-encrypt --allow-degraded --max-layer-size 8MiB --temp-dir "$work/tmp" \
@@ -95,7 +97,7 @@ start_server
 dd if=/dev/urandom of="$work/tree/random.bin" bs=1M count=96 status=none
 bin/backimage backup "$work/tree" --repo "$REPO" --tag resumed \
 	--remote "127.0.0.1:${REMOTE_PORT}" --tls-ca "$work/server.crt" \
-	--auth-token-file "$work/token" --no-encrypt --allow-degraded \
+	--auth-token-file "$work/token" --remote-mode layers --no-encrypt --allow-degraded \
 	--max-layer-size 8MiB --temp-dir "$work/tmp" --created 2026-08-09T10:01:00Z \
 	--json >"$work/resumed.json" 2>"$work/resumed.err" &
 client_pid=$!
@@ -116,11 +118,11 @@ echo "==> ACL, authentication, TLS downgrade, metrics, diskless invariant"
 set +e
 bin/backimage backup "$work/tree" --repo "${HOST}/denied/x" --tag t1 \
 	--remote "127.0.0.1:${REMOTE_PORT}" --tls-ca "$work/server.crt" \
-	--auth-token-file "$work/token" --no-encrypt --allow-degraded --json >/dev/null 2>"$work/acl.err"
+	--auth-token-file "$work/token" --remote-mode layers --no-encrypt --allow-degraded --json >/dev/null 2>"$work/acl.err"
 acl_rc=$?
 bin/backimage backup "$work/tree" --repo "$REPO" --tag noauth \
 	--remote "127.0.0.1:${REMOTE_PORT}" --tls-ca "$work/server.crt" \
-	--no-encrypt --allow-degraded --json >/dev/null 2>"$work/auth.err"
+	--remote-mode layers --no-encrypt --allow-degraded --json >/dev/null 2>"$work/auth.err"
 auth_rc=$?
 openssl s_client -connect "127.0.0.1:${REMOTE_PORT}" -tls1_2 </dev/null >/dev/null 2>&1
 tls12_rc=$?

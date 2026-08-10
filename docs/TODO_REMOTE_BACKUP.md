@@ -1,5 +1,11 @@
 # TODO: remote backup end-to-end
 
+> **Stato 2026-08-10: implementato come protocollo v2 (`--remote-mode stream`,
+> default).** Il client invia solo il flusso tar; archiviazione, chunking,
+> compressione, cifratura, layer OCI, dedup e push sono sul server. Dettagli in
+> [remote.md](remote.md), [protocol.md](protocol.md) e [security.md](security.md).
+> Restano aperti i due punti elencati in "Verifiche non ancora eseguite".
+
 ## Obiettivo
 
 Quando viene usato `--remote`, l’applicazione locale deve svolgere solo il
@@ -11,9 +17,32 @@ Il job deve poter creare un backup di 50 GB con circa 1 GB libero sulla
 macchina che lo avvia. Non deve quindi essere necessario mantenere localmente
 né l’archivio completo né tutti i layer temporanei.
 
-## Stato attuale
+## Stato attuale (protocollo v2, `--remote-mode stream`)
 
-Il protocollo remoto v1 non raggiunge questo obiettivo:
+- il client esegue solo scansione e `tar`, inviato in frame da 1 MiB; non crea
+  archivio, chunk, layer o spool locali;
+- il server esegue chunking, compressione, cifratura, indice dei file, layer
+  OCI, `HEAD` di deduplica e push, spoolando un layer per volta in `--work-dir`;
+- `StreamProgress` riporta al client stato per ricezione/push/pubblicazione;
+- `--server-side-compress` è un alias di questa modalità ed è un errore d'uso
+  con `--remote-mode layers`;
+- passphrase e key file restano sul client; DEK e dati in chiaro sono visibili
+  al server (scelta esplicita, documentata in `docs/security.md`);
+- ACL `--allow-repo`, quote, rate limit e token effimeri sono invariati.
+
+Misure eseguite: e2e `test/e2e/phase_08_stream.sh` (256 MiB, TCP e QUIC, spool
+client ≤ 4 MiB) e prova di scala 4 GiB (vedi `plan/resume.md`).
+
+## Verifiche non ancora eseguite
+
+1. Campagna reale da 50 GiB con 1 GiB effettivamente liberi sul client.
+2. Ripresa a metà stream: v2 non ha checkpoint intra-stream, il retry rilegge la
+   sorgente (i layer già pubblicati restano saltati dal `HEAD`). Se serve la
+   ripresa per layer, usare `--remote-mode layers`.
+
+## Stato precedente (protocollo v1, ora `--remote-mode layers`)
+
+Il protocollo remoto v1 non raggiunge l'obiettivo:
 
 - il client locale legge i dati, crea l’archivio, divide i chunk, comprime e
   cifra;

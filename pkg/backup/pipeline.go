@@ -73,6 +73,9 @@ type Config struct {
 	Output        string // registry|daemon|oci-layout|tar
 	OutputPath    string
 	Remote        RemoteUploader
+	// RemoteStream selects the streaming remote protocol (v2): the server
+	// runs the entire pipeline and the client keeps no layers on disk.
+	RemoteStream RemoteStreamUploader
 
 	// SelfExtract yields the static restore binary for a GOARCH. When nil,
 	// platforms are built without an executable (Runnable must be false).
@@ -148,11 +151,18 @@ func Validate(cfg Config) error {
 	if cfg.Output == "daemon" && cfg.OutputPath != "" {
 		return errors.New("--output daemon non usa --output-path")
 	}
-	if cfg.Remote != nil && cfg.Output != "" && cfg.Output != "registry" {
+	if cfg.Remote != nil && cfg.RemoteStream != nil {
+		return errors.New("only one remote protocol can be selected")
+	}
+	if cfg.remote() && cfg.Output != "" && cfg.Output != "registry" {
 		return errors.New("--remote requires registry output")
 	}
 	return nil
 }
+
+// remote reports whether this run publishes through a remote server, in any
+// of the two protocols.
+func (c Config) remote() bool { return c.Remote != nil || c.RemoteStream != nil }
 
 // Run executes the pipeline. Order is fixed by the plan document.
 func Run(ctx context.Context, cfg Config) (Result, error) {
@@ -204,6 +214,9 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 
 	// Resolve credentials and prove repository access before spending time on
 	// the estimate/archive. A dry-run is deliberately network-free (GS-05.7).
+	// A streaming run still proves registry access up front: the client brokers
+	// the tokens the server will use, and a 50 GiB stream must not discover a
+	// credential problem at the end.
 	if !cfg.DryRun && cfg.Remote == nil && (cfg.Output == "" || cfg.Output == "registry") {
 		ref, rerr := name.ParseReference(cfg.Ref)
 		if rerr != nil {
@@ -221,7 +234,7 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	// A previous manifest is only read for an actual direct-registry dedup
 	// backup. Dry runs remain strictly network-free.
 	var previous *dedupBase
-	if cfg.Dedup && !cfg.DryRun && cfg.Remote == nil && (cfg.Output == "" || cfg.Output == "registry") {
+	if cfg.Dedup && !cfg.DryRun && cfg.Remote == nil && (cfg.Output == "" || cfg.Output == "registry" || cfg.RemoteStream != nil) {
 		previous, err = findDedupBase(ctx, cfg)
 		if err != nil {
 			if cfg.Progress != nil {
@@ -297,13 +310,16 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		return res, nil
 	}
 
-	// 3) temp space check.
+	// 3) temp space check. Streaming runs keep no layer on this host, so the
+	// requirement collapses to the transport buffers.
 	if cfg.TempDir == "" {
 		cfg.TempDir = os.TempDir()
 	}
-	need := int64(cfg.Jobs) * plan.LayerBytes
-	if err := checkTempSpace(cfg.TempDir, need); err != nil {
-		return res, err
+	if cfg.RemoteStream == nil {
+		need := int64(cfg.Jobs) * plan.LayerBytes
+		if err := checkTempSpace(cfg.TempDir, need); err != nil {
+			return res, err
+		}
 	}
 
 	// Key material is created only after all cheap/preflight checks and never
@@ -345,6 +361,17 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		level = def
 	}
 	bp := &builder{cfg: cfg, codec: codec, plan: plan, km: km, passphrase: passphrase, level: level, createdAt: createdAt, cdcParams: cdcParams, estimatedRaw: est.Bytes, maxDataLayers: 118}
+
+	// 4-bis) streaming remote: the server owns the pipeline from here on.
+	if cfg.RemoteStream != nil {
+		res, err = bp.runStream(ctx, est, res)
+		if err != nil {
+			return res, err
+		}
+		res.DurationSeconds = elapsedSeconds(start)
+		return res, nil
+	}
+
 	if err := bp.build(ctx); err != nil {
 		if errors.Is(err, ErrNoData) {
 			return res, ErrNoData
@@ -433,11 +460,16 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		cfg.Progress(fmt.Sprintf("dedup: %d blob gia' presenti (%d byte risparmiati)", res.SkippedBlobs, res.SkippedBytes))
 		cfg.Progress(fmt.Sprintf("upload: %d byte", res.UploadedBytes))
 	}
-	res.DurationSeconds = int64(time.Since(start).Round(time.Second) / time.Second)
-	if res.DurationSeconds < 1 {
-		res.DurationSeconds = 1
-	}
+	res.DurationSeconds = elapsedSeconds(start)
 	return res, nil
+}
+
+func elapsedSeconds(start time.Time) int64 {
+	seconds := int64(time.Since(start).Round(time.Second) / time.Second)
+	if seconds < 1 {
+		return 1
+	}
+	return seconds
 }
 
 // Estimate is the result of the light, non-modifying walk.
@@ -1245,29 +1277,10 @@ func platString(p v1.Platform) string {
 
 // buildKeyFiles wraps the KeyMaterial for the configured recipients.
 func (b *builder) buildKeyFiles() (map[string][]byte, error) {
-	files := map[string][]byte{}
-	if len(b.cfg.Recipients) == 0 && b.passphrase == nil {
-		return files, nil
+	if b.km == nil {
+		return map[string][]byte{}, nil
 	}
-	write := func(name string, rcpt crypt.Recipients) error {
-		var buf bytes.Buffer
-		if err := crypt.WrapKeys(&buf, b.km, rcpt); err != nil {
-			return err
-		}
-		files[name] = buf.Bytes()
-		return nil
-	}
-	if b.passphrase != nil {
-		if err := write("keys.pass.age", crypt.Recipients{Passphrase: b.passphrase}); err != nil {
-			return nil, err
-		}
-	}
-	if len(b.cfg.Recipients) > 0 {
-		if err := write("keys.age", crypt.Recipients{AgeKeys: b.cfg.Recipients}); err != nil {
-			return nil, err
-		}
-	}
-	return files, nil
+	return wrapKeyFiles(b.km, b.passphrase, b.cfg.Recipients)
 }
 
 // cleanup removes any leftover temp files.

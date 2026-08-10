@@ -70,6 +70,12 @@ type SessionConfig struct {
 	IdleTimeout  time.Duration
 	Now          func() time.Time
 	Metrics      *Metrics
+	// TempDir holds the per-layer spool of streaming (v2) sessions. Only the
+	// layer currently being assembled is written there.
+	TempDir string
+	// ProgressInterval throttles the StreamProgress messages sent while a
+	// streaming session receives data.
+	ProgressInterval time.Duration
 }
 
 // Session receives one strict protocol stream.
@@ -91,7 +97,17 @@ func NewSession(cfg SessionConfig, sink Sink) (*Session, error) {
 	if cfg.Now == nil {
 		cfg.Now = time.Now
 	}
+	if cfg.ProgressInterval <= 0 {
+		cfg.ProgressInterval = 2 * time.Second
+	}
 	return &Session{cfg: cfg, sink: sink}, nil
+}
+
+// Streaming reports whether this server can run protocol v2 sessions, where
+// the whole pipeline lives on the server.
+func (s *Session) Streaming() bool {
+	_, ok := s.sink.(StreamCommitter)
+	return ok
 }
 
 type sessionState uint8
@@ -101,11 +117,13 @@ const (
 	stateGreeted
 	stateReady
 	stateReceiving
+	stateStreaming
 	stateClosed
 )
 
 type runState struct {
 	state      sessionState
+	version    uint32
 	sessionID  string
 	start      *protocol.BackupStart
 	reference  string
@@ -118,6 +136,10 @@ type runState struct {
 	started    time.Time
 	skipped    bool
 	skipCount  uint32
+
+	// streaming (protocol v2) state
+	ingest       *ingest
+	lastProgress time.Time
 }
 
 // Run serves the stream until the backup commits or a protocol error occurs.
@@ -174,8 +196,12 @@ func (s *Session) control(ctx context.Context, stream transport.Stream, rs *runS
 		return s.layerStart(ctx, stream, rs, m.LayerStart)
 	case *protocol.ClientMessage_LayerEnd:
 		return s.layerEnd(ctx, stream, rs, m.LayerEnd)
+	case *protocol.ClientMessage_StreamStart:
+		return s.streamStart(ctx, stream, rs, m.StreamStart)
+	case *protocol.ClientMessage_StreamEnd:
+		return s.streamEnd(ctx, stream, rs, m.StreamEnd)
 	case *protocol.ClientMessage_Token:
-		if rs.state != stateReady && rs.state != stateReceiving {
+		if rs.state != stateReady && rs.state != stateReceiving && rs.state != stateStreaming {
 			return s.unexpected(ctx, stream, rs, "Token")
 		}
 		// The registry sink may implement TokenConsumer. Session never logs or stores it.
@@ -211,9 +237,10 @@ func (s *Session) hello(ctx context.Context, stream transport.Stream, rs *runSta
 	if hello == nil || strings.TrimSpace(hello.SessionId) == "" {
 		return s.fail(ctx, stream, rs, ErrorUsage, "Hello.session_id is required", "")
 	}
-	if hello.ProtocolVersion != protocol.Version {
+	if !protocol.Supported(hello.ProtocolVersion) {
 		return s.fail(ctx, stream, rs, ErrorUsage,
-			fmt.Sprintf("incompatible protocol version: client=%d server=%d", hello.ProtocolVersion, protocol.Version), "upgrade client or server")
+			fmt.Sprintf("incompatible protocol version: client=%d server=%d..%d", hello.ProtocolVersion, protocol.MinVersion, protocol.Version),
+			"upgrade client or server")
 	}
 	if len(s.cfg.AuthToken) != 0 && subtle.ConstantTimeCompare([]byte(hello.AuthToken), s.cfg.AuthToken) != 1 {
 		return s.fail(ctx, stream, rs, ErrorAuth, "client authentication failed", "check --auth-token")
@@ -223,10 +250,12 @@ func (s *Session) hello(ctx context.Context, stream transport.Stream, rs *runSta
 		return s.fail(ctx, stream, rs, ErrorNetwork, "cannot inspect resumable blobs", err.Error())
 	}
 	rs.sessionID = hello.SessionId
+	rs.version = hello.ProtocolVersion
 	rs.state = stateGreeted
 	return protocol.WriteServerMessage(stream, &protocol.ServerMessage{Msg: &protocol.ServerMessage_HelloAck{HelloAck: &protocol.HelloAck{
 		ServerVersion:       s.cfg.Version,
-		ProtocolVersion:     protocol.Version,
+		ProtocolVersion:     rs.version,
+		Streaming:           rs.version >= 2 && s.Streaming(),
 		MaxBytes:            s.cfg.MaxBytes,
 		AllowedRepoPrefixes: append([]string(nil), s.cfg.AllowedRepos...),
 		Resumable:           true,
@@ -301,6 +330,9 @@ func (s *Session) layerStart(ctx context.Context, stream transport.Stream, rs *r
 }
 
 func (s *Session) data(ctx context.Context, stream transport.Stream, rs *runState, payload []byte) error {
+	if rs.state == stateStreaming {
+		return s.streamData(ctx, stream, rs, payload)
+	}
 	if rs.state != stateReceiving || rs.current == nil || rs.skipped {
 		return s.fail(ctx, stream, rs, ErrorUsage, "unexpected Data frame", "send LayerStart and wait for LayerAck")
 	}
@@ -328,19 +360,27 @@ func (s *Session) data(ctx context.Context, stream transport.Stream, rs *runStat
 	}
 	rs.received += int64(len(payload))
 	rs.totalBytes += uint64(len(payload))
-	if s.cfg.RateLimit > 0 {
-		target := rs.started.Add(time.Duration(float64(rs.totalBytes) / float64(s.cfg.RateLimit) * float64(time.Second)))
-		if delay := target.Sub(s.cfg.Now()); delay > 0 {
-			timer := time.NewTimer(delay)
-			defer timer.Stop()
-			select {
-			case <-timer.C:
-			case <-ctx.Done():
-				return ctx.Err()
-			}
-		}
+	return s.throttle(ctx, rs)
+}
+
+// throttle enforces --rate-limit on the bytes accepted so far.
+func (s *Session) throttle(ctx context.Context, rs *runState) error {
+	if s.cfg.RateLimit == 0 {
+		return nil
 	}
-	return nil
+	target := rs.started.Add(time.Duration(float64(rs.totalBytes) / float64(s.cfg.RateLimit) * float64(time.Second)))
+	delay := target.Sub(s.cfg.Now())
+	if delay <= 0 {
+		return nil
+	}
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 func (s *Session) layerEnd(ctx context.Context, stream transport.Stream, rs *runState, end *protocol.LayerEnd) error {
@@ -411,6 +451,10 @@ func (s *Session) fail(ctx context.Context, stream transport.Stream, rs *runStat
 }
 
 func (s *Session) abort(ctx context.Context, rs *runState) {
+	if rs.ingest != nil {
+		rs.ingest.Abort()
+		rs.ingest = nil
+	}
 	if rs.receiver != nil {
 		if err := rs.receiver.Abort(ctx); err != nil && s.cfg.Metrics != nil {
 			s.cfg.Metrics.addError(ErrorNetwork)

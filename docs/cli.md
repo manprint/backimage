@@ -78,11 +78,12 @@ backimage backup <PATH...> --repo IMAGE [flags]
       --password string           passphrase (visible in shell history and process listings)
       --platform strings          self-extract platforms (repeatable) (default [linux/amd64,linux/arm64])
       --recipient strings         age public key (repeatable)
-      --remote string             send layers to a remote backimage server
+      --remote string             delegate the backup to a remote backimage server
+      --remote-mode string        stream: the server runs the whole pipeline (default); layers: legacy client-side pipeline (default "stream")
       --repo string               target repository, e.g. ghcr.io/me/dumps
       --resume                    resume from the checkpoint if present (default true)
       --runnable                  build runnable images (false allows non-standard codecs) (default true)
-      --server-side-compress      deprecated: protocol v1 always compresses on the client
+      --server-side-compress      deprecated alias of --remote-mode stream (already the default)
       --tag string                backup tag (default "latest")
       --temp-dir string           spool directory (default $TMPDIR)
       --timestamp                 append a timestamp to the tag
@@ -238,13 +239,13 @@ backimage listen-remote [flags]
       --max-sessions int         maximum concurrent sessions (default 4)
       --metrics-address string   listen address for /healthz and /metrics
       --rate-limit string        bytes per second per session (0 = unlimited) (default "0")
-      --spool                    enable disk spool fallback
+      --spool                    deprecated: the streaming protocol always spools one layer at a time
       --tls-ca string            PEM CA bundle used to authenticate mTLS clients
       --tls-cert string          PEM server certificate
       --tls-key string           PEM server private key
       --tls-self-signed          generate an ephemeral certificate and print its SHA-256 pin
       --udp                      use QUIC instead of TCP
-      --work-dir string          fallback spool directory (unused unless --spool)
+      --work-dir string          directory for the per-layer spool of streaming sessions (default $TMPDIR)
 ```
 
 ### Options inherited from parent commands

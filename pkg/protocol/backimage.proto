@@ -18,6 +18,9 @@ message HelloAck {
   repeated string allowed_repo_prefixes = 4;
   bool resumable = 5;
   repeated string known_blob_digests = 6;
+  // streaming reports whether the server runs the whole pipeline itself
+  // (protocol v2): the client only sends the raw archive stream.
+  bool streaming = 7;
 }
 
 message BackupStart {
@@ -72,6 +75,85 @@ message BackupEnd {
   string digest = 1;
   uint64 bytes_uploaded = 2;
   uint32 blobs_skipped = 3;
+  // Fields below are only populated by the streaming protocol (v2), where the
+  // server owns the pipeline and therefore owns these counters.
+  uint64 raw_bytes = 4;
+  uint64 stored_bytes = 5;
+  uint32 layers = 6;
+  uint32 chunks = 7;
+  int64 files = 8;
+}
+
+// StreamStart opens a protocol v2 session: the client only ships the raw tar
+// stream, the server performs chunking, compression, encryption, layer
+// assembly and the registry push.
+message StreamStart {
+  string reference = 1;
+  string tool_version = 2;
+  string created = 3; // RFC3339, empty = server wall clock
+  ArchiveConfig archive = 4;
+  EncryptionConfig encryption = 5;
+  repeated Platform platforms = 6;
+  bool runnable = 7;
+  uint64 estimated_bytes = 8;
+  int64 estimated_files = 9;
+  repeated string sources = 10; // empty with --no-metadata
+  HostInfo host = 11;
+  bool dedup = 12;
+  CDCParams cdc = 13;
+  uint64 max_layer_bytes = 14;
+}
+
+message ArchiveConfig {
+  string compression = 1;
+  int32 level = 2;
+}
+
+message CDCParams {
+  uint64 min = 1;
+  uint64 avg = 2;
+  uint64 max = 3;
+  uint64 polynomial = 4;
+}
+
+message HostInfo {
+  string hostname = 1;
+  string os = 2;
+  string arch = 3;
+}
+
+// EncryptionConfig carries the data encryption key to the server, which needs
+// it to seal chunks and the file index. The passphrase never leaves the
+// client: key_files holds the age-wrapped copies stored inside the image.
+message EncryptionConfig {
+  bool enabled = 1;
+  bytes dek = 2;
+  string nonce_mode = 3; // random|convergent
+  map<string, bytes> key_files = 4;
+  repeated string recipients = 5;
+  string key_fingerprint = 6;
+  // nonce_key is only used by the convergent mode; it must be the same key
+  // stored in the age key files so that later backups deduplicate.
+  bytes nonce_key = 7;
+}
+
+message StreamAck {
+  bool ready = 1;
+  TokenRequest token_request = 2;
+}
+
+message StreamEnd {
+  uint64 raw_bytes = 1;
+}
+
+message StreamProgress {
+  string stage = 1; // receiving|archiving|compressing|encrypting|pushing|publishing
+  uint64 received_bytes = 2;
+  uint64 stored_bytes = 3;
+  uint64 uploaded_bytes = 4;
+  uint32 layers = 5;
+  uint32 layers_skipped = 6;
+  uint32 chunks = 7;
 }
 
 message Error {
@@ -89,6 +171,8 @@ message ClientMessage {
     Token token = 5;
     Error error = 6;
     Cancel cancel = 7;
+    StreamStart stream_start = 8;
+    StreamEnd stream_end = 9;
   }
 }
 
@@ -101,6 +185,8 @@ message ServerMessage {
     Error error = 5;
     LayerAck layer_ack = 6;
     BackupAck backup_ack = 7;
+    StreamAck stream_ack = 8;
+    StreamProgress stream_progress = 9;
   }
 }
 

@@ -105,6 +105,91 @@ func TestRegistrySinkStreamsAndPublishesIndex(t *testing.T) {
 	}
 }
 
+func TestRegistrySinkCommitStreamPublishesServerBuiltImage(t *testing.T) {
+	srv := httptest.NewServer(gcrregistry.New())
+	defer srv.Close()
+	reference := strings.TrimPrefix(srv.URL, "http://") + "/e2e/stream:t1"
+	ref, err := name.ParseReference(reference, name.Insecure)
+	if err != nil {
+		t.Fatal(err)
+	}
+	broker := NewTokenBroker(time.Second)
+	broker.ProvideToken(&protocol.Token{
+		Value: "memory-only", Repository: ref.Context().RepositoryStr(), Actions: []string{"pull", "push"},
+		ExpiresAtUnix: time.Now().Add(time.Hour).Unix(),
+	})
+	sink, err := NewRegistrySink(RegistrySinkOptions{
+		Broker: broker, ChunkSize: 32 << 20,
+		SelfExtract: func(arch string) ([]byte, error) { return []byte("selfextract-" + arch), nil },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	codec, _ := compress.Get("store")
+	dataLayer, err := ociimg.NewLayer([]ociimg.LayerFile{{
+		Path: "/backup/data/000000.blob", Mode: 0o644, Size: 6,
+		Open: func() (io.ReadCloser, error) { return io.NopCloser(strings.NewReader("stream")), nil },
+	}}, codec, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	digest, _ := dataLayer.Digest()
+	diffID, _ := dataLayer.DiffID()
+	size, _ := dataLayer.Size()
+	mediaType, _ := dataLayer.MediaType()
+	content, _ := dataLayer.Compressed()
+	compressed, _ := io.ReadAll(content)
+	_ = content.Close()
+	upload, err := sink.OpenBlob(context.Background(), reference, digest.String(), size)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := upload.Write(compressed); err != nil {
+		t.Fatal(err)
+	}
+	if err := upload.Commit(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+
+	commit := StreamCommit{
+		SessionID: "session", Reference: reference,
+		Start: &protocol.StreamStart{
+			Reference: reference, Runnable: false,
+			Platforms: []*protocol.Platform{{Os: "linux", Architecture: "amd64"}, {Os: "linux", Architecture: "arm64"}},
+		},
+		Manifest:   validRemoteManifest(t, digest.String(), size),
+		ChunkTable: &index.ChunkTable{SchemaVersion: 1, Chunks: []index.Chunk{{I: 0, P: "backup/data/000000.blob", Sb: size, Pb: 6}}},
+		IndexBlob:  []byte("index-blob"),
+		KeyFiles:   map[string][]byte{"keys.pass.age": []byte("wrapped")},
+		Layers:     []Layer{{Index: 0, Size: size, Digest: digest.String(), DiffID: diffID.String(), MediaType: string(mediaType)}},
+		Codec:      codec,
+	}
+	published, err := sink.CommitStream(context.Background(), commit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	desc, err := remote.Get(ref, remote.WithTransport(srv.Client().Transport))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if published != desc.Digest.String() || desc.MediaType != types.OCIImageIndex {
+		t.Fatalf("published = %s, remote = %s %s", published, desc.Digest, desc.MediaType)
+	}
+
+	// The data blob was already in the registry: publishing must not need it.
+	if _, err := sink.CommitStream(context.Background(), StreamCommit{Reference: reference, Start: commit.Start}); err == nil {
+		t.Fatal("a commit without manifest was accepted")
+	}
+	bare, err := NewRegistrySink(RegistrySinkOptions{Broker: broker})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := bare.CommitStream(context.Background(), commit); err == nil {
+		t.Fatal("a server without a self-extract binary published a runnable image")
+	}
+}
+
 func TestRegistrySinkValidation(t *testing.T) {
 	if _, err := NewRegistrySink(RegistrySinkOptions{}); err == nil {
 		t.Fatal("nil broker accepted")

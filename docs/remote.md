@@ -1,19 +1,79 @@
 # Remote backups
 
-Remote mode keeps registry credentials on the backup client while moving the
-registry upload to a separate `backimage listen-remote` process. The transport
-is always TLS 1.3, over TCP by default or QUIC with `--udp`. Layer data is
-compressed and encrypted by the client before it crosses the remote connection.
+Remote mode moves the backup pipeline to a separate `backimage listen-remote`
+process. The transport is always TLS 1.3, over TCP by default or QUIC with
+`--udp`.
 
-Protocol v1 delegates only the registry publication: the client performs the
-archive, chunking, compression, encryption, temporary layer spool and OCI layer
-construction; the server receives finished layers and performs registry HEAD,
-blob upload and manifest/index publication. `--server-side-compress` is a
-compatibility flag that prints a warning but does not change this behavior.
-The server does not see plaintext. Registry credentials remain on the client:
-the client obtains short-lived bearer tokens and sends them to the server over
-the already authenticated TLS session when the server requests them. The
-server must be able to reach the registry but does not need `backimage login`.
+Two protocols exist. `--remote-mode` selects one; the default is `stream`.
+
+| | `stream` (protocol v2, default) | `layers` (protocol v1, legacy) |
+|---|---|---|
+| Client does | filesystem walk + tar on the wire | archive, chunking, compression, encryption, OCI layers |
+| Server does | chunking, compression, encryption, OCI layers, dedup HEAD, push | registry HEAD, blob upload, manifest/index |
+| Client disk | independent of backup size (transport buffers only) | one spool per concurrent layer |
+| Server disk | one layer at a time in `--work-dir` | none |
+| Server sees plaintext | **yes** | no |
+| Resume after a connection loss | restarts the stream, keeps published layers | restarts the interrupted layer |
+| Local/remote digest parity | no (the server builds the metadata) | yes |
+
+In both modes registry credentials stay on the client: the client obtains
+short-lived bearer tokens and sends them to the server over the already
+authenticated TLS session when the server asks for them. The server must reach
+the registry but never needs `backimage login`.
+
+## Streaming mode (default)
+
+```sh
+backimage backup /var/lib/data --repo ghcr.io/my-team/backups --tag daily \
+  --remote 10.10.2.20:7575 --tls-pin <hex> \
+  --auth-token-file token --passphrase-file backup-passphrase
+```
+
+The client writes one tar stream in 1 MiB frames and never materialises the
+archive, a chunk table or an OCI layer. A 50 GiB backup therefore runs with
+about 1 GiB free on the client: what remains is the transport buffer plus the
+archiver window, both bounded and independent of the backup size.
+
+The server assembles one layer at a time in `--work-dir`: the stored blob is
+spooled, digested, wrapped in its deterministic OCI layer, checked with a
+registry `HEAD` and streamed to the registry. Both temporary files are removed
+before the next layer starts, so the server needs roughly twice the layer size
+(`--max-layer-size`, 1 GiB by default), not the size of the backup.
+
+`--server-side-compress` is an accepted alias for this mode; it is a no-op
+because streaming already compresses and encrypts on the server. Combined with
+`--remote-mode layers` it is a usage error instead of a silent lie.
+
+### Measured cost (4 GiB, incompressible, `--max-layer-size 512MiB`)
+
+| | value |
+|---|---|
+| client spool (`--temp-dir`) peak | 4 KiB, i.e. the empty directory |
+| client peak RSS, `--no-encrypt` | ~19 MiB |
+| client peak RSS with a passphrase | ~280 MiB, dominated by the one-shot age/scrypt key wrap, not by the stream |
+| server spool (`--work-dir`) peak | ~1 GiB = 2 × layer size |
+| server spool after the run | empty |
+
+The same invariants are asserted by `test/e2e/phase_08_stream.sh` over TCP and
+QUIC. A full 50 GiB campaign has not been run yet; the numbers above are what
+the implementation was measured at.
+
+### Where the keys live
+
+This is the security trade-off of streaming mode, and it is deliberate:
+
+- the **passphrase never leaves the client**. The client generates the data
+  encryption key, wraps it with age (`keys.pass.age`, `keys.age`) locally and
+  sends only the wrapped files plus the raw key material for the session;
+- the **server receives the DEK and the plaintext stream**, because it is the
+  component that chunks, compresses and seals the data. A remote server is
+  therefore inside the trust boundary of the backup content;
+- the DEK lives only in the memory of the session and is wiped when the session
+  ends; it is never written to `--work-dir` or to logs.
+
+If the receiver must not see plaintext, use `--remote-mode layers`: the client
+keeps the pipeline, the server only pushes sealed layers, and the local spool
+requirements documented in [backup.md](backup.md) apply again.
 
 ## Quick start with certificate pinning
 
@@ -134,27 +194,54 @@ file. TLS 1.2 and older are rejected.
 - `--max-bytes` sets the per-session byte quota.
 - `--rate-limit` throttles received bytes per second per session.
 - `--metrics-address` exposes `/healthz` and Prometheus text metrics.
-- The receiver is diskless by default. `--work-dir` is not touched. The
-  reserved `--spool` fallback is rejected by protocol v1 rather than silently
-  writing data.
+- `--work-dir` holds the per-layer spool of streaming sessions (default
+  `$TMPDIR`). Size it for `2 × --max-layer-size × --max-sessions`. Files are
+  created with mode 0600 and removed as soon as the layer is published, on the
+  error and cancellation paths too. `layers` sessions stay diskless.
+- `--spool` is deprecated: streaming always spools one layer at a time and the
+  flag only prints a warning.
 
 The largest registry upload buffer is 32 MiB per session; control/data frames
 are capped at 4 MiB. Oversized frame lengths are rejected before allocation.
 
+## Progress
+
+A streaming session reports its stages back to the client, which prints them
+prefixed with `server[...]`:
+
+```
+server[receiving]: ricevuti 193.0 MiB, archiviati 193.0 MiB, caricati 193.0 MiB, layer 6 (0 saltati), chunk 193
+server[pushing]:   ...
+server[publishing]: ...
+```
+
+`receiving` covers reception, chunking, compression and sealing (they run in
+the same pass), `pushing` is a blob upload in flight and `publishing` is the
+manifest/index publication. The same counters are exported by
+`--metrics-address`.
+
 ## Resume and failure behavior
 
-The client uses a deterministic session ID and retries transport connection
-failures five times with 1/2/4/8/16 second backoff. Every `LayerStart` causes a
-registry `HEAD`: already committed content-addressed layers receive
-`LayerAck{skipped:true}` and are not retransmitted. This remains true after a
-receiver restart because the registry, not receiver memory, is the checkpoint.
-A connection loss inside a layer restarts that layer.
+The client retries transport failures five times with 1/2/4/8/16 second
+backoff. Errors that cannot improve on retry — authentication, ACL, quota, a
+server that does not support streaming — fail immediately.
 
-The phase-08 implementation still constructs deterministic OCI layers through
-the shared local pipeline before transmission. This preserves exact local vs
-remote digest parity and restartable readers; it also means the client spool
-requirements documented in [backup.md](backup.md) still apply. Protocol v1
-does not claim the planned no-full-layer-spool optimization.
+- **`layers`**: every `LayerStart` triggers a registry `HEAD`, so already
+  committed content-addressed layers are answered with `LayerAck{skipped:true}`
+  and never retransmitted, including after a receiver restart. A connection
+  loss inside a layer restarts that layer.
+- **`stream`**: a retry re-reads the source and re-sends the archive from the
+  beginning; the interrupted layer upload is aborted on the registry. Layers
+  already published are still skipped by their `HEAD` check when the new run
+  produces the same content (deterministic boundaries, or `--dedup`), so a
+  retry is not necessarily a full re-upload — but it is a full re-read of the
+  source. There is no mid-stream checkpoint: the raw stream has no restartable
+  offset on the client.
+
+Streaming does not reproduce the local index digest: the server builds the
+manifest, chunk table and file index from the bytes it receives, so
+`--remote-mode stream` has no local/remote digest parity check. Use
+`--remote-mode layers` when that parity is a requirement.
 
 ## Metrics
 

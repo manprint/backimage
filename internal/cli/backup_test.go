@@ -59,6 +59,10 @@ func TestBackupCLIValidation(t *testing.T) {
 		{"password while clear", []string{"backup", tree, "--repo", "example.test/repo/x", "--no-encrypt", "--password", "secret"}},
 		{"age identity needs dedup", []string{"backup", tree, "--repo", "example.test/repo/x", "--age-identity", "id.txt"}},
 		{"bad CDC bounds", []string{"backup", tree, "--repo", "example.test/repo/x", "--dedup", "--dedup-chunk-min", "512KiB"}},
+		{"remote mode without remote", []string{"backup", tree, "--repo", "example.test/repo/x", "--remote-mode", "layers"}},
+		{"unknown remote mode", []string{"backup", tree, "--repo", "example.test/repo/x", "--remote", "127.0.0.1:1", "--remote-mode", "bogus"}},
+		{"server-side compress without remote", []string{"backup", tree, "--repo", "example.test/repo/x", "--server-side-compress"}},
+		{"server-side compress with layers", []string{"backup", tree, "--repo", "example.test/repo/x", "--remote", "127.0.0.1:1", "--remote-mode", "layers", "--server-side-compress"}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

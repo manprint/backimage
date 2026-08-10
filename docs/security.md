@@ -91,6 +91,30 @@ con plaintext differente ha un nonce HMAC differente e non supera GCM.
 - La passphrase NON viene mai loggata; il bootstrap del CLI non lo registra
   nemmeno con -v.
 
+## Backup remoto: dove risiedono le chiavi
+
+`--remote` ha due modalità con confini di fiducia diversi (dettagli in
+[remote.md](remote.md)).
+
+| | `--remote-mode stream` (default) | `--remote-mode layers` |
+| --- | --- | --- |
+| Passphrase | resta sul client | resta sul client |
+| `keys.age` / `keys.pass.age` | prodotti dal client, inviati già wrappati | prodotti dal client |
+| DEK e NonceKey | **inviati al server** nel messaggio `StreamStart` | mai inviati |
+| Dati in chiaro | **visibili al server** (è lui che cifra) | mai visibili |
+| Credenziali registry | token bearer effimeri e scoped, in memoria del server | idem |
+
+Conseguenze operative della modalità `stream`:
+
+- il server remoto è dentro il perimetro di fiducia del contenuto del backup:
+  va trattato come un host che vede i dati, non come un semplice relay;
+- DEK e NonceKey vivono solo nella memoria della sessione (`KeyMaterial.Wipe()`
+  alla chiusura) e non finiscono mai in `--work-dir` né nei log;
+- lo spool di layer del server contiene chunk già compressi e cifrati, con
+  permessi 0600, ed è rimosso anche sui percorsi di errore e cancellazione;
+- chi non può concedere questa fiducia deve usare `--remote-mode layers`, che
+  mantiene l'intera pipeline crittografica sul client.
+
 ## Verifica d'integrità
 
 - GCM: autenticazione AES-GCM (tag 16B) per ogni blocco — la cifratura

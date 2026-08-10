@@ -8,8 +8,17 @@ import (
 	"io"
 )
 
-// Version is the only protocol version understood by this build.
-const Version uint32 = 1
+// Version is the protocol version this build speaks. Version 2 adds the
+// streaming pipeline (StreamStart/StreamEnd) in which the server performs
+// chunking, compression, encryption and the registry push.
+const Version uint32 = 2
+
+// MinVersion is the oldest protocol version still accepted by a server. A v1
+// peer keeps the client-side pipeline of the layer-by-layer protocol.
+const MinVersion uint32 = 1
+
+// Supported reports whether v can be negotiated by this build.
+func Supported(v uint32) bool { return v >= MinVersion && v <= Version }
 
 // FrameType identifies the payload of a frame.
 type FrameType uint8
@@ -43,7 +52,15 @@ func WriteFrame(w io.Writer, t FrameType, payload []byte) error {
 	var header [5]byte
 	header[0] = byte(t)
 	binary.BigEndian.PutUint32(header[1:], uint32(len(payload)))
-	if _, err := io.Copy(w, io.MultiReader(bytesReader(header[:]), bytesReader(payload))); err != nil {
+	// Two direct writes: io.Writer already forbids short writes without an
+	// error, and a copy buffer per frame would dominate a streaming backup.
+	if _, err := w.Write(header[:]); err != nil {
+		return fmt.Errorf("write frame: %w", err)
+	}
+	if len(payload) == 0 {
+		return nil
+	}
+	if _, err := w.Write(payload); err != nil {
 		return fmt.Errorf("write frame: %w", err)
 	}
 	return nil
@@ -73,18 +90,4 @@ func ReadFrame(r io.Reader, buf []byte) (FrameType, []byte, error) {
 		return 0, buf[:0], err
 	}
 	return t, buf, nil
-}
-
-// byteSliceReader is allocation-free and sufficient for WriteFrame's two slices.
-type byteSliceReader struct{ b []byte }
-
-func bytesReader(b []byte) *byteSliceReader { return &byteSliceReader{b: b} }
-
-func (r *byteSliceReader) Read(p []byte) (int, error) {
-	if len(r.b) == 0 {
-		return 0, io.EOF
-	}
-	n := copy(p, r.b)
-	r.b = r.b[n:]
-	return n, nil
 }

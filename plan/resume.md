@@ -98,7 +98,7 @@ Ultima fase completata: 04
 - [x] 08.4 Macchina a stati della sessione lato server
 - [x] 08.5 Flusso `TokenRefresh`
 - [x] 08.6 Quote, ACL sui repo, limiti di concorrenza
-- [ ] 08.7 Client `--remote`, pipeline lato client
+- [x] 08.7 Client `--remote`: protocollo v2 streaming (default `--remote-mode stream`, pipeline interamente sul server; `layers` mantiene la v1)
 - [x] 08.8 Ripresa da checkpoint dopo caduta di connessione
 - [x] 08.9 e2e a due processi + fault injection
 - [ ] **Gate fase 08**
@@ -152,15 +152,17 @@ Ultima fase completata: 04
 | 2026-08-09 | 07.1–07.8 | (worktree, da committare) | G1–G10, GS-07.1–GS-07.7 | fase 07 verde; source lazy registry/layout/daemon, cache LRU, coverage 85,7%, e2e registry+layout; tag v0.1.0 differito alla release |
 | 2026-08-09 | 08.1–08.9 (parziale) | (worktree, da committare) | G1–G10, GS-08.1, GS-08.3–GS-08.6, GS-08.8–GS-08.9 | protocollo protobuf e framing 4 MiB, TLS/mTLS/pin, ACL/quote/token refresh, registry diskless, ripresa e2e reale; manca GS-08.2 no-full-layer-spool e compressione server-side reale |
 | 2026-08-09 | 09.1–09.5 (parziale) | (worktree, da committare) | G1–G6, G7 (85,3% transport), G8, GS-09.1–GS-09.3 | QUIC TLS1.3/ALPN, UDP+also-TCP, e2e registry/restart/crossed transports; harness creato e smoke reale, campagna netem 4 GiB non eseguita senza root |
+| 2026-08-10 | 08.7 (streaming v2) | (worktree, da committare) | G1–G7 (85,4% su transport+protocol+server), G8 (`phase_08.sh` + `phase_08_stream.sh`), G10 | protocollo v2: `StreamStart/StreamAck/StreamEnd/StreamProgress`, pipeline (chunk/compress/seal/layer/dedup/push) sul server, indice file ricostruito dal tar con parità di offset/digest verso `archive.Writer`; client senza spool (picco 4 KiB su backup da 4 GiB, RSS ~19 MiB senza cifratura, ~280 MiB con scrypt), spool server 2× layer e ripulito; `--server-side-compress` ora coerente; e2e TCP+QUIC con restore verificato |
 | 2026-08-09 | 10.1–10.5 | (worktree, da committare) | G7 (92,6% chunk), G8, GS-10.1, GS-10.4–GS-10.5, GS-10.7 | CDC Rabin con polinomio fisso, layer content-addressed/content-defined, DEK convergente riusata solo con manifest compatibile, metriche HEAD e `repo stats`; e2e 4 GiB: 4.304.158.550 → 1.043.787.983 B (24,25%), verify+restore di t1/t2 OK; manca soltanto revisione Opus GS-10.3/G11 |
 
 ---
 
 ## Blocchi aperti
 
-- Fase 08: il client costruisce ancora layer OCI nel suo spool prima della
-  trasmissione; il protocollo v1 richiede il digest del layer prima dello stream
-  e non implementa compressione server-side. Non dichiarare GS-08.2/08.7 verdi.
+- Fase 08: streaming v2 implementato e verificato (vedi log 2026-08-10). Restano
+  aperti per il gate 08: campagna reale da 50 GiB con 1 GiB libero sul client
+  (misurata solo a 256 MiB e 4 GiB) e ripresa a metà stream, che il protocollo v2
+  non offre per scelta documentata (il retry rilegge la sorgente).
 - Fase 09: l'harness richiede root+`tc` per la matrice netem da 4 GiB. I layer
   non possono essere distribuiti su più stream senza cambiare l'interfaccia
   mono-stream esplicitamente fissata dal piano; `--x-quic-streams` rifiuta quindi

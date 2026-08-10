@@ -1,0 +1,203 @@
+package backup
+
+import (
+	"archive/tar"
+	"bytes"
+	"context"
+	"io"
+	"math/rand"
+	"net"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/google/go-containerregistry/pkg/name"
+
+	"github.com/fpierri/backimage/pkg/crypt"
+	"github.com/fpierri/backimage/pkg/recovery"
+	"github.com/fpierri/backimage/pkg/registry"
+	backremote "github.com/fpierri/backimage/pkg/remote"
+	"github.com/fpierri/backimage/pkg/restore"
+	"github.com/fpierri/backimage/pkg/server"
+	"github.com/fpierri/backimage/pkg/transport"
+)
+
+func netPipe() (net.Conn, net.Conn) { return net.Pipe() }
+
+// streamDialer runs a real server session at the other end of an in-process
+// pipe, so the test exercises the whole protocol v2 path.
+type streamDialer struct {
+	cfg  server.SessionConfig
+	sink server.Sink
+}
+
+func (d *streamDialer) Name() string { return "pipe" }
+
+func (d *streamDialer) Dial(ctx context.Context, _ string) (transport.Stream, error) {
+	session, err := server.NewSession(d.cfg, d.sink)
+	if err != nil {
+		return nil, err
+	}
+	client, peer := netPipe()
+	go func() { _ = session.Run(ctx, peer) }()
+	return client, nil
+}
+
+// TestRemoteStreamBackupRoundTrip proves the acceptance criterion of the
+// streaming protocol: the client only walks the filesystem and writes a tar,
+// the server builds and pushes everything, and the published image restores
+// byte for byte.
+func TestRemoteStreamBackupRoundTrip(t *testing.T) {
+	reg := newMemReg()
+	srv := reg.server()
+	defer srv.Close()
+
+	tree := t.TempDir()
+	payload := make([]byte, 40<<20)
+	if _, err := rand.New(rand.NewSource(3)).Read(payload); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tree, "data.bin"), payload, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(tree, "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(tree, "sub", "note.txt"), []byte("streamed backup"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	ref := refTo(srv.URL)
+	client := streamClient(t, ref, srv.URL)
+	tempDir := t.TempDir()
+	cfg := Config{
+		RootPaths:     []string{tree},
+		Ref:           ref,
+		Compression:   "zstd",
+		MaxLayerSize:  16 << 20,
+		AllowDegraded: true,
+		Encrypt:       true,
+		Passphrase:    func() ([]byte, error) { return []byte("stream passphrase"), nil },
+		Runnable:      false,
+		Platforms:     []string{"linux/amd64"},
+		TempDir:       tempDir,
+		SelfExtract:   stubSelf,
+		RemoteStream:  client,
+	}
+	res, err := Run(context.Background(), cfg)
+	if err != nil {
+		t.Fatalf("streaming backup: %v", err)
+	}
+	if res.Digest == "" || res.Layers < 2 || res.Chunks == 0 || res.BytesStored == 0 {
+		t.Fatalf("result = %+v", res)
+	}
+	if res.BytesRaw < int64(len(payload)) {
+		t.Fatalf("raw bytes = %d, want >= %d", res.BytesRaw, len(payload))
+	}
+	// The whole point of the streaming protocol: no layer ever touches this host.
+	entries, err := os.ReadDir(tempDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 0 {
+		t.Fatalf("client temp dir is not empty: %v", entries)
+	}
+
+	parsed, err := name.ParseReference(ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source, err := restore.FromRegistry(context.Background(), parsed, nil, restore.SourceOptions{
+		CacheDir: t.TempDir(), CacheSize: 8 << 20,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+	manifest, err := source.Manifest(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !manifest.Encryption.Enabled || manifest.Encryption.NonceMode != "random" {
+		t.Fatalf("manifest encryption = %+v", manifest.Encryption)
+	}
+	if manifest.Totals.Files != 2 || manifest.Archive.Compression != "zstd" {
+		t.Fatalf("manifest = %+v / %+v", manifest.Totals, manifest.Archive)
+	}
+	if len(manifest.Sources) != 1 || manifest.Sources[0] != tree {
+		t.Fatalf("manifest sources = %v", manifest.Sources)
+	}
+
+	backupImage, err := recovery.OpenBlobSource(context.Background(), source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer backupImage.Close()
+	if err := backupImage.Unlock(context.Background(), crypt.Identity{Passphrase: []byte("stream passphrase")}); err != nil {
+		t.Fatalf("unlock: %v", err)
+	}
+	var restored bytes.Buffer
+	if err := backupImage.StreamTar(context.Background(), &restored, true); err != nil {
+		t.Fatalf("stream tar: %v", err)
+	}
+	found := false
+	reader := tar.NewReader(bytes.NewReader(restored.Bytes()))
+	for {
+		header, nextErr := reader.Next()
+		if nextErr == io.EOF {
+			break
+		}
+		if nextErr != nil {
+			t.Fatal(nextErr)
+		}
+		if !strings.HasSuffix(header.Name, "data.bin") {
+			continue
+		}
+		content, readErr := io.ReadAll(reader)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		if !bytes.Equal(content, payload) {
+			t.Fatalf("restored payload differs: %d vs %d bytes", len(content), len(payload))
+		}
+		found = true
+	}
+	if !found {
+		t.Fatal("data.bin missing from the restored archive")
+	}
+}
+
+func streamClient(t *testing.T, ref, registryURL string) *backremote.Client {
+	t.Helper()
+	parsed, err := name.ParseReference(ref)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keychain := registry.NewKeychain(nil, nil)
+	auth, err := keychain.Resolve(parsed.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	sink, err := server.NewRegistrySink(server.RegistrySinkOptions{
+		Broker: server.NewTokenBroker(5 * time.Second), Jobs: 2,
+		SelfExtract: stubSelf,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	dialer := &streamDialer{
+		cfg:  server.SessionConfig{AllowNoAuth: true, TempDir: t.TempDir(), ProgressInterval: 10 * time.Millisecond},
+		sink: sink,
+	}
+	client, err := backremote.New(backremote.Config{
+		Dialer: dialer, Address: strings.TrimPrefix(registryURL, "http://"),
+		Provider: registry.NewProvider(parsed.Context().RegistryStr(), auth),
+		Backoffs: []time.Duration{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return client
+}

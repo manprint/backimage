@@ -143,7 +143,8 @@ func newBackupCommand() *cobra.Command {
 	f.Bool("runnable", true, "build runnable images (false allows non-standard codecs)")
 	f.String("temp-dir", "", "spool directory (default $TMPDIR)")
 	f.String("created", "", "fixed RFC3339 image creation time (reproducible builds)")
-	f.String("remote", "", "send layers to a remote backimage server")
+	f.String("remote", "", "delegate the backup to a remote backimage server")
+	f.String("remote-mode", "stream", "stream: the server runs the whole pipeline (default); layers: legacy client-side pipeline")
 	f.Bool("udp", false, "use QUIC instead of TCP for --remote")
 	f.String("tls-pin", "", "remote server certificate SHA-256 fingerprint")
 	f.String("tls-ca", "", "PEM CA bundle for the remote server")
@@ -151,7 +152,7 @@ func newBackupCommand() *cobra.Command {
 	f.String("tls-key", "", "PEM client private key for mTLS")
 	f.String("auth-token", "", "pre-shared remote authentication token")
 	f.String("auth-token-file", "", "read the remote authentication token from a file")
-	f.Bool("server-side-compress", false, "deprecated: protocol v1 always compresses on the client")
+	f.Bool("server-side-compress", false, "deprecated alias of --remote-mode stream (already the default)")
 	addQUICExperimentalFlags(cmd)
 	return cmd
 }
@@ -266,19 +267,38 @@ func runBackup(cmd *cobra.Command, args []string) error {
 	}
 	kc := registry.NewKeychain(nil, store)
 	var remoteUploader backup.RemoteUploader
+	var remoteStream backup.RemoteStreamUploader
+	remoteMode := getFlagString(cmd, "remote-mode")
+	serverSideCompress := getFlagBool(cmd, "server-side-compress")
 	if remoteAddr := getFlagString(cmd, "remote"); remoteAddr != "" {
 		if output != "registry" {
 			return New(KindUsage, "", "--remote cannot be combined with --output %s", output)
 		}
-		remoteUploader, err = newBackupRemote(cmd, ref, remoteAddr, kc)
-		if err != nil {
-			return err
+		switch remoteMode {
+		case "stream", "layers":
+		default:
+			return New(KindUsage, "", "--remote-mode must be stream or layers, got %q", remoteMode)
 		}
-		if getFlagBool(cmd, "server-side-compress") {
-			progress.WriteLine(cmd.ErrOrStderr(), "warning: --server-side-compress is not implemented in protocol v1; compression and encryption remain client-side, the server only pushes the layers")
+		if serverSideCompress && remoteMode == "layers" {
+			return New(KindUsage, "", "--server-side-compress requires --remote-mode stream")
 		}
-	} else if getFlagBool(cmd, "server-side-compress") {
-		return New(KindUsage, "", "--server-side-compress requires --remote")
+		client, clientErr := newBackupRemote(cmd, ref, remoteAddr, kc)
+		if clientErr != nil {
+			return clientErr
+		}
+		if remoteMode == "stream" {
+			remoteStream = client
+			progress.WriteLine(cmd.ErrOrStderr(), "remote: streaming mode; archiving, compression, encryption and push run on the server, which therefore sees the plaintext data")
+		} else {
+			remoteUploader = client
+		}
+	} else {
+		if cmd.Flags().Changed("remote-mode") {
+			return New(KindUsage, "", "--remote-mode requires --remote")
+		}
+		if serverSideCompress {
+			return New(KindUsage, "", "--server-side-compress requires --remote")
+		}
 	}
 
 	resume := getFlagBool(cmd, "resume")
@@ -320,6 +340,7 @@ func runBackup(cmd *cobra.Command, args []string) error {
 		Output:        output,
 		OutputPath:    outputPath,
 		Remote:        remoteUploader,
+		RemoteStream:  remoteStream,
 		Created:       getFlagString(cmd, "created"),
 		SelfExtract:   embedded.SelfExtract,
 	}

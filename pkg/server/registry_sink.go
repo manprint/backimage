@@ -158,6 +158,91 @@ func (s *RegistrySink) CommitBackup(ctx context.Context, backup Backup) (string,
 	return "sha256:" + hex.EncodeToString(sum[:]), nil
 }
 
+// CommitStream publishes a backup whose metadata was assembled here, from a
+// raw stream the client never turned into layers.
+func (s *RegistrySink) CommitStream(ctx context.Context, commit StreamCommit) (string, error) {
+	if commit.Manifest == nil {
+		return "", errors.New("server manifest is required")
+	}
+	dataLayers := make([]v1.Layer, 0, len(commit.Layers))
+	for i, layer := range commit.Layers {
+		descriptor, err := ociimg.NewDescriptorLayer(layer.Digest, layer.DiffID, layer.Size, types.MediaType(layer.MediaType))
+		if err != nil {
+			return "", fmt.Errorf("layer %d descriptor: %w", i, err)
+		}
+		dataLayers = append(dataLayers, descriptor)
+	}
+	platforms := commit.Start.GetPlatforms()
+	if len(platforms) == 0 {
+		platforms = []*protocol.Platform{{Os: "linux", Architecture: "amd64"}, {Os: "linux", Architecture: "arm64"}}
+	}
+	images := make(map[string]v1.Image, len(platforms))
+	built := make([]ociimg.BuiltImage, 0, len(platforms))
+	created := commit.Manifest.CreatedAt.UTC().Format("2006-01-02T15:04:05Z07:00")
+	for _, p := range platforms {
+		if p == nil || p.Os == "" || p.Architecture == "" {
+			return "", errors.New("invalid target platform")
+		}
+		exe, err := s.streamSelfExtract(p.Architecture)
+		if err != nil {
+			return "", err
+		}
+		platform := v1.Platform{OS: p.Os, Architecture: p.Architecture}
+		img, err := ociimg.BuildImage(ociimg.BuildOptions{
+			Platform:    platform,
+			SelfExtract: exe,
+			Runnable:    commit.Start.GetRunnable(),
+			Manifest:    commit.Manifest,
+			ChunkTable:  commit.ChunkTable,
+			IndexBlob:   commit.IndexBlob,
+			KeyFiles:    commit.KeyFiles,
+			DataLayers:  dataLayers,
+			Codec:       commit.Codec,
+			Created:     created,
+		})
+		if err != nil {
+			return "", err
+		}
+		images[p.Os+"/"+p.Architecture] = img
+		built = append(built, ociimg.BuiltImage{Platform: platform, Image: img})
+	}
+	idx, err := ociimg.BuildIndex(built)
+	if err != nil {
+		return "", err
+	}
+	ref, err := name.ParseReference(commit.Reference, name.WeakValidation)
+	if err != nil {
+		return "", err
+	}
+	if err := backregistry.PushWithProvider(ctx, ref, images, idx, s.opts.Broker, backregistry.PushOptions{
+		Jobs: s.opts.Jobs, ChunkSize: int64(s.opts.ChunkSize), MaxRetries: 5,
+	}); err != nil {
+		return "", err
+	}
+	raw, err := idx.RawManifest()
+	if err != nil {
+		return "", err
+	}
+	sum := sha256.Sum256(raw)
+	return "sha256:" + hex.EncodeToString(sum[:]), nil
+}
+
+// streamSelfExtract returns the bootstrap binary embedded in this server: a
+// streaming client never uploads one.
+func (s *RegistrySink) streamSelfExtract(arch string) ([]byte, error) {
+	if s.opts.SelfExtract == nil {
+		return nil, fmt.Errorf("this server has no self-extract binary for %s", arch)
+	}
+	data, err := s.opts.SelfExtract(arch)
+	if err != nil {
+		return nil, err
+	}
+	if len(data) == 0 {
+		return nil, fmt.Errorf("self-extract binary for %s is required", arch)
+	}
+	return data, nil
+}
+
 func (s *RegistrySink) selfExtract(start *protocol.BackupStart, arch string) ([]byte, error) {
 	var data []byte
 	switch arch {

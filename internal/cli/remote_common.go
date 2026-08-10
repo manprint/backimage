@@ -8,7 +8,6 @@ import (
 	"os"
 	"strings"
 
-	"github.com/fpierri/backimage/pkg/backup"
 	"github.com/fpierri/backimage/pkg/registry"
 	backremote "github.com/fpierri/backimage/pkg/remote"
 	"github.com/fpierri/backimage/pkg/transport"
@@ -16,7 +15,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-func newBackupRemote(cmd *cobra.Command, reference, address string, kc registry.Keychain) (backup.RemoteUploader, error) {
+func newBackupRemote(cmd *cobra.Command, reference, address string, kc registry.Keychain) (*backremote.Client, error) {
 	tlsConfig, err := clientTLSConfig(cmd)
 	if err != nil {
 		return nil, New(KindUsage, "", "%v", err)

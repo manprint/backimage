@@ -39,6 +39,14 @@ type Result struct {
 	BytesUploaded uint64
 	BlobsSkipped  uint32
 	Attempts      int
+
+	// Fields below are only reported by the streaming protocol (v2), where
+	// the server owns the pipeline and therefore the counters.
+	RawBytes    uint64
+	StoredBytes uint64
+	Layers      uint32
+	Chunks      uint32
+	Files       int64
 }
 
 type Error struct {
@@ -90,34 +98,9 @@ func (c *Client) Upload(ctx context.Context, backup Backup) (Result, error) {
 	if err := validateBackup(backup); err != nil {
 		return result, err
 	}
-	attempts := len(c.cfg.Backoffs) + 1
-	var last error
-	for attempt := 0; attempt < attempts; attempt++ {
-		result, last = c.uploadOnce(ctx, backup)
-		result.Attempts = attempt + 1
-		if last == nil {
-			return result, nil
-		}
-		var remoteErr *Error
-		if errors.As(last, &remoteErr) && remoteErr.Kind != 6 {
-			return result, last
-		}
-		if attempt == len(c.cfg.Backoffs) {
-			break
-		}
-		if err := sleepContext(ctx, c.cfg.Backoffs[attempt]); err != nil {
-			return result, err
-		}
-	}
-	failure := fmt.Errorf("remote backup failed after %d attempts: %w", attempts, last)
-	switch c.cfg.Dialer.Name() {
-	case "quic":
-		return result, fmt.Errorf("%w; hint: the server may be using TCP, retry without --udp", failure)
-	case "tcp":
-		return result, fmt.Errorf("%w; hint: the server may be listening with --udp, retry adding --udp", failure)
-	default:
-		return result, failure
-	}
+	return c.withRetries(ctx, func(attemptCtx context.Context) (Result, error) {
+		return c.uploadOnce(attemptCtx, backup)
+	})
 }
 
 type connection struct {

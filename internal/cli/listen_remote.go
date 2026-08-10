@@ -16,6 +16,7 @@ import (
 
 	"github.com/fpierri/backimage/internal/buildinfo"
 	"github.com/fpierri/backimage/internal/embedded"
+	"github.com/fpierri/backimage/pkg/protocol"
 	"github.com/fpierri/backimage/pkg/server"
 	"github.com/fpierri/backimage/pkg/transport"
 	"github.com/spf13/cobra"
@@ -45,8 +46,8 @@ func newListenRemoteCommand() *cobra.Command {
 	f.String("rate-limit", "0", "bytes per second per session (0 = unlimited)")
 	f.String("metrics-address", "", "listen address for /healthz and /metrics")
 	f.String("log-format", "text", "text|json")
-	f.String("work-dir", "", "fallback spool directory (unused unless --spool)")
-	f.Bool("spool", false, "enable disk spool fallback")
+	f.String("work-dir", "", "directory for the per-layer spool of streaming sessions (default $TMPDIR)")
+	f.Bool("spool", false, "deprecated: the streaming protocol always spools one layer at a time")
 	addQUICExperimentalFlags(cmd)
 	return cmd
 }
@@ -57,8 +58,14 @@ func runListenRemote(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 	printer := NewPrinter(cmd.OutOrStdout(), cmd.ErrOrStderr(), opts)
+	workDir := getFlagString(cmd, "work-dir")
 	if getFlagBool(cmd, "spool") {
-		return New(KindUsage, "", "--spool is not available in protocol v1; default operation is diskless")
+		printer.Warnf("--spool is deprecated: streaming sessions always spool one layer at a time in --work-dir")
+	}
+	if workDir != "" {
+		if err := os.MkdirAll(workDir, 0o700); err != nil {
+			return New(KindUsage, "", "--work-dir: %v", err)
+		}
 	}
 	if getFlagBool(cmd, "also-tcp") && !getFlagBool(cmd, "udp") {
 		return New(KindUsage, "", "--also-tcp requires --udp")
@@ -130,6 +137,7 @@ func runListenRemote(cmd *cobra.Command, _ []string) error {
 			Version: buildinfo.Version, AuthToken: []byte(sharedToken),
 			AllowNoAuth: insecure || mtls, AllowedRepos: getFlagStrings(cmd, "allow-repo"),
 			MaxBytes: maxBytes, RateLimit: rateLimit, Metrics: metrics,
+			TempDir: workDir,
 		},
 		MaxSessions: maxSessions, Metrics: metrics,
 		OnError: func(err error) { printer.Warnf("remote session: %v", err) },
@@ -155,7 +163,12 @@ func runListenRemote(cmd *cobra.Command, _ []string) error {
 			}
 		}()
 	}
-	printer.Infof("listening on %s via %s (TLS 1.3, diskless)", listener.Addr(), transportName)
+	spoolDir := workDir
+	if spoolDir == "" {
+		spoolDir = os.TempDir()
+	}
+	printer.Infof("listening on %s via %s (TLS 1.3, protocol v%d, streaming pipeline, layer spool in %s)",
+		listener.Addr(), transportName, protocol.Version, spoolDir)
 	if alsoTCP == nil {
 		err = remoteServer.Serve(ctx, listener)
 		if errors.Is(err, context.Canceled) {

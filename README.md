@@ -64,32 +64,34 @@ Le modalità di output di `backup` sono:
 | Docker daemon | `--local-repo` oppure `--output daemon` | Carica nell’engine locale |
 | OCI layout | `--output oci-layout --output-path DIR` | Salva in una directory OCI |
 | Tar | `--output tar --output-path FILE` | Scrive un artefatto locale |
-| Server remoto | `--remote HOST:PORT` | Invia i layer a `listen-remote` |
+| Server remoto | `--remote HOST:PORT` | Delega il backup a `listen-remote` |
 
 ### Modalità remota: cosa viene delegato
 
-Con `--remote HOST:PORT` il server remoto riceve i layer già costruiti e li
-pubblica nel registry. Il flusso effettivo di protocollo v1 è:
+`--remote-mode` sceglie il protocollo; il default è `stream` (v2).
 
-| Fase | Client `backimage backup` | Server `backimage listen-remote` |
+| Fase | `stream` (default) | `layers` (legacy v1) |
 | --- | --- | --- |
-| scansione, tar e chunk | esegue | — |
-| compressione (`zstd`, `gzip`, ecc.) | esegue | — |
-| cifratura | esegue | — |
-| spool temporaneo e costruzione layer OCI | esegue | — |
-| trasporto TLS e invio layer | esegue | riceve |
-| `HEAD`/upload blob e pubblicazione manifest/index | — | esegue |
+| scansione e tar | client | client |
+| chunking, compressione, cifratura | **server** | client |
+| spool temporaneo e layer OCI | **server** (un layer alla volta in `--work-dir`) | client |
+| `HEAD`/upload blob, manifest/index | server | server |
+| spazio su disco del client | indipendente dalla dimensione del backup | uno spool per layer concorrente |
+| il server vede il plaintext | **sì** | no |
 
-Quindi la modalità remota delega davvero al server il push dell'immagine e
-mantiene la compressione sul client. Il server non vede il plaintext: riceve
-layer già compressi e cifrati. Il client deve comunque avere spazio temporaneo
-per i layer, come nella modalità locale. Il server è diskless e invia i blob al
-registry mentre li riceve.
+Con `stream` il client invia solo il flusso tar: un backup da 50 GiB gira con
+~1 GiB libero perché non esiste né l'archivio completo né un layer locale. Il
+server assembla un layer per volta (serve circa `2 × --max-layer-size` di spazio
+temporaneo) e lo carica in streaming nel registry.
 
-`--server-side-compress` è una flag di compatibilità ma non abilita questa
-funzione nel protocollo v1: se usata, stampa un warning e la compressione resta
-sul client. Il server-side compression richiederebbe un protocollo diverso e
-farebbe vedere al server il plaintext.
+`--server-side-compress` è ora un alias accettato di `--remote-mode stream`
+(già il default) e viene rifiutato con `--remote-mode layers`, dove sarebbe una
+promessa falsa.
+
+Nota di sicurezza: in modalità `stream` la passphrase non lascia mai il client
+(i file `keys.age`/`keys.pass.age` sono prodotti in locale), ma il server riceve
+la DEK e i dati in chiaro perché è lui a cifrarli. Se il ricevente non deve
+vedere il plaintext, usare `--remote-mode layers`.
 
 Le credenziali del registry restano sul client. Il client esegue `backimage
 login` (o usa il proprio auth file), riceve dal registry token bearer con scope
@@ -814,12 +816,13 @@ Flag:
 | `--temp-dir DIR` | `$TMPDIR` | Spool temporaneo dei layer |
 | `--created RFC3339` | — | Data fissa per build riproducibili |
 | `--remote HOST:PORT` | — | Server `listen-remote` |
+| `--remote-mode stream\|layers` | `stream` | `stream`: pipeline sul server; `layers`: pipeline sul client (v1) |
 | `--udp` | `false` | QUIC invece di TCP per `--remote` |
 | `--tls-pin SHA256` | — | Pin del certificato remoto |
 | `--tls-ca FILE` | — | Bundle CA PEM |
 | `--tls-cert FILE` / `--tls-key FILE` | — | Certificato e chiave client mTLS |
 | `--auth-token TOKEN` / `--auth-token-file FILE` | — | Autenticazione remota |
-| `--server-side-compress` | `false` | Deprecata: nel protocollo v1 la compressione resta sempre lato client |
+| `--server-side-compress` | `false` | Alias deprecato di `--remote-mode stream` (già default); errore con `--remote-mode layers` |
 
 `--encrypt` è attivo per default. `--no-encrypt` non può essere combinato con
 `--encrypt`; passphrase e recipient richiedono la cifratura. `--age-identity`
@@ -926,8 +929,9 @@ Docker. I check non disponibili mostrano anche il rimedio suggerito.
 
 ### `listen-remote`
 
-Avvia un server TLS che riceve stream cifrati e pubblica i layer su un registry.
-Il protocollo v1 è diskless; `--spool` è rifiutato.
+Avvia un server TLS 1.3 che riceve il backup e lo pubblica sul registry. Con il
+default `--remote-mode stream` il server esegue l'intera pipeline: il client
+manda solo il flusso tar.
 
 ```console
 backimage listen-remote \
@@ -936,12 +940,209 @@ backimage listen-remote \
   --tls-key /etc/backimage/server.key \
   --auth-token-file /run/secrets/remote-token \
   --allow-repo ghcr.io/team/dumps \
+  --work-dir /var/lib/backimage/spool \
   --metrics-address 127.0.0.1:9090
 
 backimage backup /srv/data --repo ghcr.io/team/dumps:remote \
   --remote backup.example:7575 \
   --tls-pin SHA256:... --auth-token-file /run/secrets/remote-token
 ```
+
+## Backup remoto in streaming (protocollo v2)
+
+Modalità operativa completa per la macchina con poco spazio libero: il client
+non crea archivio, chunk, layer né spool. Un backup da 50 GiB gira con ~1 GiB
+libero sul client.
+
+### Chi fa cosa
+
+| Fase | Client | Server `listen-remote` |
+| --- | --- | --- |
+| scansione filesystem e `tar` | ✔ | — |
+| chunking, compressione, cifratura | — | ✔ |
+| layer OCI e spool temporaneo | — | ✔ (un layer per volta) |
+| `HEAD` deduplica, upload blob, manifest/index | — | ✔ |
+| credenziali registry (token effimeri) | ✔ genera | ✔ usa, in memoria |
+| passphrase e file chiave age | ✔ resta qui | mai inviata |
+| DEK e dati in chiaro | — | **visibili** |
+
+Il server è dentro il perimetro di fiducia dei dati. Se questo non è
+accettabile, `--remote-mode layers` mantiene tutta la crittografia sul client
+(ma richiede spazio locale per i layer).
+
+### Dimensionamento
+
+| Risorsa | Regola |
+| --- | --- |
+| disco client | indipendente dal backup: solo buffer di rete |
+| RAM client | ~20 MiB in streaming; picco transitorio ~280 MiB quando age/scrypt avvolge la passphrase |
+| disco server `--work-dir` | `2 × --max-layer-size × --max-sessions` (default layer 1 GiB) |
+| RAM server | buffer chunk + 32 MiB di upload per sessione |
+
+Misure reali su backup da 4 GiB incompressibili con `--max-layer-size 512MiB`:
+spool client 0 byte, RSS client 19 MiB senza cifratura, picco spool server
+1 GiB, directory di lavoro vuota a fine run.
+
+### Esempio A — senza autenticazione applicativa (LAN isolata)
+
+TLS resta obbligatorio: `--insecure-no-auth` disattiva solo l'autenticazione
+del client, non il trasporto cifrato.
+
+Server:
+
+```console
+backimage listen-remote \
+  --bind-address 0.0.0.0:7575 \
+  --tls-self-signed \
+  --insecure-no-auth \
+  --allow-repo ghcr.io/team/dumps \
+  --work-dir /var/lib/backimage/spool \
+  --max-sessions 2
+```
+
+Il server stampa due righe da annotare:
+
+```text
+TLS fingerprint SHA256:9f2c...e41
+listening on 0.0.0.0:7575 via tcp (TLS 1.3, protocol v2, streaming pipeline, layer spool in /var/lib/backimage/spool)
+```
+
+Client (nessun token; il PIN è obbligatorio, un self-signed senza pin viene
+rifiutato):
+
+```console
+backimage login ghcr.io --username TEAM --password-stdin
+
+backimage backup /srv/data \
+  --repo ghcr.io/team/dumps --tag daily --timestamp \
+  --remote 192.168.1.20:7575 \
+  --tls-pin 9f2c...e41 \
+  --no-encrypt \
+  --max-layer-size 512MiB \
+  --temp-dir /var/tmp/backimage
+```
+
+Chiunque raggiunga la porta può tentare un backup verso i repository
+consentiti: usare solo su rete isolata e con firewall.
+
+### Esempio B — token condiviso e backup cifrato (raccomandato)
+
+Server:
+
+```console
+head -c 32 /dev/urandom | base64 > /etc/backimage/remote-token
+chmod 600 /etc/backimage/remote-token
+
+backimage listen-remote \
+  --bind-address 0.0.0.0:7575 \
+  --tls-cert /etc/backimage/server.crt \
+  --tls-key /etc/backimage/server.key \
+  --auth-token-file /etc/backimage/remote-token \
+  --allow-repo ghcr.io/team/dumps \
+  --work-dir /var/lib/backimage/spool \
+  --max-sessions 4 --max-bytes 200GiB --rate-limit 80MiB \
+  --metrics-address 127.0.0.1:9090 --log-format json
+```
+
+Client (stesso token, passphrase da file, mai in `argv`):
+
+```console
+backimage login ghcr.io --username TEAM --password-stdin
+printf '%s' "$PASSPHRASE" > /run/secrets/backup-passphrase
+chmod 600 /run/secrets/backup-passphrase
+
+backimage backup /srv/data /var/lib/postgresql \
+  --repo ghcr.io/team/dumps --tag nightly --timestamp \
+  --remote backup.example:7575 \
+  --tls-ca /etc/ssl/internal-ca.crt \
+  --auth-token-file /etc/backimage/remote-token \
+  --passphrase-file /run/secrets/backup-passphrase \
+  --exclude '**/*.tmp' --one-file-system \
+  --max-layer-size 512MiB \
+  --temp-dir /var/tmp/backimage \
+  --json
+```
+
+Output durante il backup (stderr): le fasi del server arrivano al client.
+
+```text
+remote: streaming mode; archiving, compression, encryption and push run on the server, ...
+backup: streaming remoto in corso (pipeline sul server)
+server[receiving]: ricevuti 193.0 MiB, archiviati 193.0 MiB, caricati 193.0 MiB, layer 6 (0 saltati), chunk 193
+server[pushing]:   ...
+backup: streaming remoto completato
+```
+
+Risultato JSON (`--json`): `digest`, `layers`, `chunks`, `bytesRaw`,
+`bytesStored`, `uploadedBytes`, `skippedBlobs` sono contatori del server.
+
+### Esempio C — mTLS, senza token condiviso
+
+Server (la CA autentica i client; il token diventa opzionale):
+
+```console
+backimage listen-remote \
+  --bind-address 0.0.0.0:7575 \
+  --tls-cert /etc/backimage/server.crt \
+  --tls-key /etc/backimage/server.key \
+  --tls-ca /etc/backimage/clients-ca.crt \
+  --allow-repo ghcr.io/team/ \
+  --work-dir /var/lib/backimage/spool
+```
+
+Client:
+
+```console
+backimage backup /srv/data --repo ghcr.io/team/dumps --tag daily \
+  --remote backup.example:7575 \
+  --tls-ca /etc/ssl/internal-ca.crt \
+  --tls-cert /etc/backimage/client.crt --tls-key /etc/backimage/client.key \
+  --passphrase-file /run/secrets/backup-passphrase
+```
+
+### Esempio D — QUIC/UDP
+
+```console
+backimage listen-remote --udp --also-tcp \
+  --bind-address 0.0.0.0:7575 --tls-self-signed \
+  --auth-token-file /etc/backimage/remote-token \
+  --allow-repo ghcr.io/team/dumps --work-dir /var/lib/backimage/spool
+
+backimage backup /srv/data --repo ghcr.io/team/dumps --tag daily \
+  --remote 192.168.1.20:7575 --udp --tls-pin <PIN> \
+  --auth-token-file /etc/backimage/remote-token \
+  --passphrase-file /run/secrets/backup-passphrase
+```
+
+`--also-tcp` fa convivere client TCP e QUIC sulla stessa porta. Se UDP è
+bloccato dalla rete, il client fallisce con un suggerimento esplicito a
+ritentare senza `--udp`.
+
+### Ripristino
+
+Il restore non passa dal server remoto: l'immagine è un normale artefatto OCI.
+
+```console
+backimage restore ghcr.io/team/dumps:nightly-20260810T031500Z \
+  --extract --destination /restore \
+  --passphrase-file /run/secrets/backup-passphrase
+
+docker run --rm -e BACKIMAGE_PASSPHRASE="$PASSPHRASE" \
+  -v "$PWD/restore:/restore" ghcr.io/team/dumps:nightly-20260810T031500Z \
+  extract --out /restore
+```
+
+### Limiti dichiarati
+
+- nessun checkpoint a metà stream: un'interruzione di rete fa ripartire il
+  flusso dall'inizio rileggendo la sorgente; i layer già pubblicati restano
+  saltati dal controllo `HEAD`;
+- nessuna parità di digest tra backup locale e remoto in streaming, perché i
+  metadati li costruisce il server (usare `--remote-mode layers` se serve);
+- `--server-side-compress` è un alias di questa modalità; con
+  `--remote-mode layers` è un errore d'uso;
+- campagna di validazione eseguita fino a 4 GiB: i 50 GiB dichiarati come
+  obiettivo di progetto non sono ancora stati misurati end-to-end.
 
 #### LAN fidata: nessun file di chiavi TLS
 
