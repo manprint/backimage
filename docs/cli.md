@@ -82,7 +82,7 @@ backimage backup <PATH...> --repo IMAGE [flags]
       --repo string               target repository, e.g. ghcr.io/me/dumps
       --resume                    resume from the checkpoint if present (default true)
       --runnable                  build runnable images (false allows non-standard codecs) (default true)
-      --server-side-compress      ask the remote server to compress (server sees plaintext)
+      --server-side-compress      deprecated: protocol v1 always compresses on the client
       --tag string                backup tag (default "latest")
       --temp-dir string           spool directory (default $TMPDIR)
       --timestamp                 append a timestamp to the tag

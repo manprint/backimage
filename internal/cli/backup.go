@@ -151,7 +151,7 @@ func newBackupCommand() *cobra.Command {
 	f.String("tls-key", "", "PEM client private key for mTLS")
 	f.String("auth-token", "", "pre-shared remote authentication token")
 	f.String("auth-token-file", "", "read the remote authentication token from a file")
-	f.Bool("server-side-compress", false, "ask the remote server to compress (server sees plaintext)")
+	f.Bool("server-side-compress", false, "deprecated: protocol v1 always compresses on the client")
 	addQUICExperimentalFlags(cmd)
 	return cmd
 }
@@ -275,7 +275,7 @@ func runBackup(cmd *cobra.Command, args []string) error {
 			return err
 		}
 		if getFlagBool(cmd, "server-side-compress") {
-			progress.WriteLine(cmd.ErrOrStderr(), "warning: --server-side-compress requested: the server may see plaintext; protocol v1 still sends client-built layers")
+			progress.WriteLine(cmd.ErrOrStderr(), "warning: --server-side-compress is not implemented in protocol v1; compression and encryption remain client-side, the server only pushes the layers")
 		}
 	} else if getFlagBool(cmd, "server-side-compress") {
 		return New(KindUsage, "", "--server-side-compress requires --remote")

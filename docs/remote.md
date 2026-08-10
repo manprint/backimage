@@ -5,6 +5,16 @@ registry upload to a separate `backimage listen-remote` process. The transport
 is always TLS 1.3, over TCP by default or QUIC with `--udp`. Layer data is
 compressed and encrypted by the client before it crosses the remote connection.
 
+Protocol v1 delegates only the registry publication: the client performs the
+archive, chunking, compression, encryption, temporary layer spool and OCI layer
+construction; the server receives finished layers and performs registry HEAD,
+blob upload and manifest/index publication. `--server-side-compress` is a
+compatibility flag that prints a warning but does not change this behavior.
+The server does not see plaintext. Registry credentials remain on the client:
+the client obtains short-lived bearer tokens and sends them to the server over
+the already authenticated TLS session when the server requests them. The
+server must be able to reach the registry but does not need `backimage login`.
+
 ## Quick start with certificate pinning
 
 On the receiver:
@@ -53,6 +63,46 @@ backimage backup ./data --repo ghcr.io/my-team/backups --tag daily \
 port, so old TCP clients and new QUIC clients can coexist. A crossed client and
 server transport fails with a retry hint. UDP can be blocked by enterprise
 networks; retry without `--udp` when that happens.
+
+## Trusted LAN without certificate files
+
+TLS 1.3 is mandatory even on a trusted LAN; there is no plaintext transport.
+However, a LAN deployment does not need a persistent CA or certificate/key
+files. Start the receiver with an ephemeral self-signed certificate:
+
+```sh
+printf '%s\n' 'a-long-random-shared-secret' > token
+chmod 600 token
+backimage listen-remote --bind-address 0.0.0.0:7575 \
+  --tls-self-signed --auth-token-file token \
+  --allow-repo ghcr.io/my-team/
+```
+
+Copy the printed `TLS fingerprint SHA256:<PIN>` to the client and use:
+
+```sh
+backimage login ghcr.io --username USER --password-stdin
+backimage backup ./data --repo ghcr.io/my-team/backups --tag daily \
+  --remote 10.10.2.20:7575 --tls-pin <PIN> \
+  --auth-token-file token --passphrase-file backup-passphrase
+```
+
+`--tls-cert` and `--tls-key` are not needed in this mode. The self-signed
+private key exists only in the receiver process, the certificate expires after
+24 hours and a restart produces a new PIN. The client must use `--tls-pin` (or
+`--tls-ca` with a CA-signed certificate); a self-signed certificate without a
+pin or trusted CA is rejected.
+
+For a completely isolated LAN, `--insecure-no-auth` can replace the shared
+token, but it disables client authentication, not TLS. Every host able to
+reach the port can then attempt a backup to the allowed repositories, so this
+mode requires network isolation and firewalling.
+
+With persistent certificates, use `--tls-cert SERVER.crt --tls-key SERVER.key`
+on the receiver and `--tls-ca CA.crt` on the client when the CA is not in the
+system trust store. mTLS additionally uses `--tls-ca CA.crt` on the receiver
+and `--tls-cert CLIENT.crt --tls-key CLIENT.key` on the client; in that mode a
+shared auth token is optional.
 
 The hidden `--x-quic-*` flags are benchmark-only controls. Protocol v1 is
 sequential, so `--x-quic-streams` must remain `1`; current quic-go releases do

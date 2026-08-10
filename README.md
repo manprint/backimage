@@ -66,6 +66,37 @@ Le modalità di output di `backup` sono:
 | Tar | `--output tar --output-path FILE` | Scrive un artefatto locale |
 | Server remoto | `--remote HOST:PORT` | Invia i layer a `listen-remote` |
 
+### Modalità remota: cosa viene delegato
+
+Con `--remote HOST:PORT` il server remoto riceve i layer già costruiti e li
+pubblica nel registry. Il flusso effettivo di protocollo v1 è:
+
+| Fase | Client `backimage backup` | Server `backimage listen-remote` |
+| --- | --- | --- |
+| scansione, tar e chunk | esegue | — |
+| compressione (`zstd`, `gzip`, ecc.) | esegue | — |
+| cifratura | esegue | — |
+| spool temporaneo e costruzione layer OCI | esegue | — |
+| trasporto TLS e invio layer | esegue | riceve |
+| `HEAD`/upload blob e pubblicazione manifest/index | — | esegue |
+
+Quindi la modalità remota delega davvero al server il push dell'immagine e
+mantiene la compressione sul client. Il server non vede il plaintext: riceve
+layer già compressi e cifrati. Il client deve comunque avere spazio temporaneo
+per i layer, come nella modalità locale. Il server è diskless e invia i blob al
+registry mentre li riceve.
+
+`--server-side-compress` è una flag di compatibilità ma non abilita questa
+funzione nel protocollo v1: se usata, stampa un warning e la compressione resta
+sul client. Il server-side compression richiederebbe un protocollo diverso e
+farebbe vedere al server il plaintext.
+
+Le credenziali del registry restano sul client. Il client esegue `backimage
+login` (o usa il proprio auth file), riceve dal registry token bearer con scope
+limitato e li consegna temporaneamente al server attraverso il canale TLS. Il
+server non richiede `backimage login` e non conserva password o credenziali
+permanenti; deve però poter raggiungere il registry in rete.
+
 ## Compressione e protezione con password
 
 La pipeline è, in ordine, **archivio → chunk → compressione → cifratura →
@@ -788,7 +819,7 @@ Flag:
 | `--tls-ca FILE` | — | Bundle CA PEM |
 | `--tls-cert FILE` / `--tls-key FILE` | — | Certificato e chiave client mTLS |
 | `--auth-token TOKEN` / `--auth-token-file FILE` | — | Autenticazione remota |
-| `--server-side-compress` | `false` | Compressione richiesta al server (può vedere plaintext) |
+| `--server-side-compress` | `false` | Deprecata: nel protocollo v1 la compressione resta sempre lato client |
 
 `--encrypt` è attivo per default. `--no-encrypt` non può essere combinato con
 `--encrypt`; passphrase e recipient richiedono la cifratura. `--age-identity`
@@ -911,6 +942,82 @@ backimage backup /srv/data --repo ghcr.io/team/dumps:remote \
   --remote backup.example:7575 \
   --tls-pin SHA256:... --auth-token-file /run/secrets/remote-token
 ```
+
+#### LAN fidata: nessun file di chiavi TLS
+
+TLS è sempre attivo (solo TLS 1.3): non esiste una modalità remota senza
+cifratura del trasporto. In una LAN fidata non è però necessario predisporre
+una CA, un certificato persistente o file `--tls-cert/--tls-key`. La modalità
+semplice è un certificato self-signed effimero sul server e il pinning sul
+client:
+
+Sul server remoto:
+
+```console
+printf '%s\n' 'un-token-lungo-e-casuale' > /etc/backimage/remote-token
+chmod 600 /etc/backimage/remote-token
+backimage listen-remote \
+  --bind-address 0.0.0.0:7575 \
+  --tls-self-signed \
+  --auth-token-file /etc/backimage/remote-token \
+  --allow-repo ghcr.io/team/dumps
+```
+
+Il server stampa una riga come `TLS fingerprint SHA256:<PIN>`. Sul client:
+
+```console
+backimage login ghcr.io --username TEAM --password-stdin
+backimage backup /srv/data --repo ghcr.io/team/dumps --tag daily \
+  --remote 192.168.1.20:7575 \
+  --tls-pin <PIN> \
+  --auth-token-file ./remote-token \
+  --passphrase-file ./backup-passphrase
+```
+
+In questo scenario non servono `--tls-cert` né `--tls-key` sul client e non
+servono file di certificato sul server: `--tls-self-signed` genera la coppia
+in memoria. Il certificato dura 24 ore e cambia a ogni riavvio; quando cambia,
+occorre copiare il nuovo PIN sul client. `--tls-pin` è obbligatorio per fidarsi
+di un certificato self-signed: senza pin o CA il client rifiuta il collegamento.
+
+Se la LAN è completamente isolata e si accetta di non autenticare i client,
+si può sostituire `--auth-token-file` con `--insecure-no-auth` sul server e
+omettere `--auth-token-file` sul client:
+
+```console
+backimage listen-remote --bind-address 0.0.0.0:7575 \
+  --tls-self-signed --insecure-no-auth \
+  --allow-repo ghcr.io/team/dumps
+backimage backup /srv/data --repo ghcr.io/team/dumps --remote 192.168.1.20:7575 \
+  --tls-pin <PIN>
+```
+
+`--insecure-no-auth` disabilita solo l'autenticazione applicativa dei client,
+non TLS e non la verifica del PIN. Chiunque raggiunga la porta può però
+tentare un backup verso i repository consentiti: usarlo solo su una rete
+isolata e con firewall.
+
+#### Certificati persistenti e mTLS
+
+Per un certificato emesso da una CA interna o pubblica, il server usa
+`--tls-cert SERVER.crt --tls-key SERVER.key`; il client usa `--tls-ca CA.crt`
+se la CA non è già nel trust store del sistema. `--tls-key` è la chiave privata
+del server e deve restare solo sul server.
+
+Per autenticare anche il client con mTLS, il server aggiunge `--tls-ca CA.crt`
+e il client usa `--tls-cert CLIENT.crt --tls-key CLIENT.key`. In modalità mTLS
+il server considera il certificato client come autenticazione; il token
+condiviso è opzionale. La chiave privata client deve restare sul client.
+
+Ruoli distinti:
+
+| Elemento | Serve a | Dove risiede |
+| --- | --- | --- |
+| certificato/chiave server | cifrare TLS e autenticare il server | server, oppure memoria con `--tls-self-signed` |
+| `--tls-pin` o `--tls-ca` | verificare il certificato server | client |
+| certificato/chiave client | autenticazione mTLS opzionale | client |
+| `--auth-token-file` | autenticazione applicativa alternativa a mTLS | entrambi, stesso token |
+| `backimage login` | token per il registry di destinazione | client |
 
 Flag server:
 
