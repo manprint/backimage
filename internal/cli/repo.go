@@ -124,7 +124,7 @@ func repoAdapter(cmd *cobra.Command, repo name.Repository) (registry.Adapter, Op
 	if err != nil {
 		return nil, Options{}, err
 	}
-	a, err := registry.AdapterFor(repo.RegistryStr(), registry.NewKeychain(nil, store))
+	a, err := registry.AdapterFor(repo.RegistryStr(), registry.NewKeychainForUser(nil, store, registryUser(cmd)))
 	return a, opts, err
 }
 
@@ -311,7 +311,7 @@ func runRepoStats(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return New(KindGeneric, "", "credential store: %v", err)
 	}
-	stats, err := registry.Stats(cmd.Context(), repo, registry.NewKeychain(nil, store))
+	stats, err := registry.Stats(cmd.Context(), repo, registry.NewKeychainForUser(nil, store, registryUser(cmd)))
 	if err != nil {
 		return New(KindNetwork, "", "%v", err)
 	}

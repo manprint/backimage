@@ -150,11 +150,22 @@ func fakeRes(reg string) authn.Resource {
 	return &fakeReg{reg: reg}
 }
 
-type fakeReg struct{ reg string }
+// fakeRepo names a repository on a registry, so the keychain can read the
+// namespace that selects the account.
+func fakeRepo(reg, repo string) authn.Resource {
+	return &fakeReg{reg: reg, repo: repo}
+}
 
-func (f *fakeReg) RegistryStr() string   { return f.reg }
-func (f *fakeReg) RepositoryStr() string { return "repo" }
-func (f *fakeReg) String() string        { return f.reg + "/repo" }
+type fakeReg struct{ reg, repo string }
+
+func (f *fakeReg) RegistryStr() string { return f.reg }
+func (f *fakeReg) RepositoryStr() string {
+	if f.repo == "" {
+		return "repo"
+	}
+	return f.repo
+}
+func (f *fakeReg) String() string { return f.reg + "/" + f.RepositoryStr() }
 
 func TestKeychainLayers(t *testing.T) {
 	dir := t.TempDir()
@@ -178,15 +189,29 @@ func TestKeychainLayers(t *testing.T) {
 	if cfg.Username != "ex" || cfg.Password != "pl" {
 		t.Fatalf("explicit not used: %+v", cfg)
 	}
-	// store is used for unknown explicit
+	// store is used for unknown explicit: the repository namespace names the
+	// account, so ghcr.io/me/... resolves to the "me" login.
 	kc = NewKeychain(nil, s)
-	a, err = kc.Resolve(fakeRes("ghcr.io"))
+	a, err = kc.Resolve(fakeRepo("ghcr.io", "me/pkg"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	cfg, _ = a.Authorization()
 	if cfg.Username != "me" || cfg.Password != "tok" {
 		t.Fatalf("store not used: %+v", cfg)
+	}
+	// a namespace that names no account stops instead of pushing as the wrong
+	// identity; the selector is the escape hatch.
+	if _, err := kc.Resolve(fakeRepo("ghcr.io", "someone-else/pkg")); err == nil {
+		t.Fatal("unmatched namespace silently used a login")
+	}
+	kc = NewKeychainForUser(nil, s, "me")
+	a, err = kc.Resolve(fakeRepo("ghcr.io", "someone-else/pkg"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg, _ = a.Authorization(); cfg.Username != "me" {
+		t.Fatalf("--registry-user ignored: %+v", cfg)
 	}
 	// unknown registry degrades to anonymous but never fails
 	_, err = kc.Resolve(fakeRes("example.invalid"))

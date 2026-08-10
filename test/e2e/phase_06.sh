@@ -46,7 +46,7 @@ done
 
 echo "==> build real embedded binaries and backup"
 make embed >/dev/null
-printf 'registry-password\n' | bin/backimage login "$HOST" -u test --password-stdin >/dev/null
+printf 'registry-password\n' | bin/backimage login "$HOST" -u e2e --password-stdin >/dev/null
 bin/backimage backup "$tree" --repo "$REPO" --tag t1 \
 	--passphrase-file "$work/passphrase.txt" --allow-degraded \
 	--max-layer-size 16MiB --jobs 2 --temp-dir "$work/tmp" --json >"$work/backup.json"

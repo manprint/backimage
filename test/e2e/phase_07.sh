@@ -39,7 +39,7 @@ for _ in $(seq 1 100); do curl -fsS "http://${HOST}/v2/" >/dev/null && break; sl
 
 echo "==> build and publish fixture"
 make embed >/dev/null
-printf 'registry-password\n' | bin/backimage login "$HOST" -u test --password-stdin >/dev/null
+printf 'registry-password\n' | bin/backimage login "$HOST" -u e2e --password-stdin >/dev/null
 bin/backimage backup "$tree" --repo "$REPO" --tag t1 --passphrase-file "$work/pass.txt" \
 	--allow-degraded --max-layer-size 8MiB --temp-dir "$work/tmp" --json >/dev/null
 

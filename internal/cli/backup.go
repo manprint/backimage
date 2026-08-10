@@ -278,7 +278,7 @@ func runBackup(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return New(KindGeneric, "", "credential store: %v", err)
 	}
-	kc := registry.NewKeychain(nil, store)
+	kc := registry.NewKeychainForUser(nil, store, registryUser(cmd))
 	var remoteUploader backup.RemoteUploader
 	var remoteStream backup.RemoteStreamUploader
 	remoteMode := getFlagString(cmd, "remote-mode")

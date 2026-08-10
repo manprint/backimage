@@ -416,9 +416,12 @@ func TestStoreRejectsCorruptEncodings(t *testing.T) {
 
 type failingStore struct{}
 
-func (failingStore) Get(string) (*Credentials, error) { return nil, errors.New("boom") }
-func (failingStore) Put(Credentials) error            { return errors.New("boom") }
-func (failingStore) Delete(string) error              { return errors.New("boom") }
-func (failingStore) List() ([]string, error)          { return nil, errors.New("boom") }
+func (failingStore) Get(string) (*Credentials, error)            { return nil, errors.New("boom") }
+func (failingStore) GetFor(string, string) (*Credentials, error) { return nil, errors.New("boom") }
+func (failingStore) Accounts() ([]Account, error)                { return nil, errors.New("boom") }
+func (failingStore) Put(Credentials) error                       { return errors.New("boom") }
+func (failingStore) Delete(string) error                         { return errors.New("boom") }
+func (failingStore) DeleteFor(string, string) (bool, error)      { return false, errors.New("boom") }
+func (failingStore) List() ([]string, error)                     { return nil, errors.New("boom") }
 
 var _ authn.Keychain = NewKeychain(nil, nil)

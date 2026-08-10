@@ -205,13 +205,16 @@ printf '%s\n' "$DOCKERHUB_PAT" | \
 printf '%s\n' "$GHCR_PAT" | \
   backimage login ghcr.io --username demoarchiveuser --password-stdin
 
-# Mostra i registry configurati, senza password o token.
+# Mostra i login configurati (provider, account, utente locale), mai i segreti.
 backimage login --list
 backimage login --list --json
 
 # Rimuove il login per un registry.
 backimage logout ghcr.io
 ```
+
+Più account sullo stesso provider convivono: vedi
+[Login multipli](#login-multipli-più-account-sullo-stesso-registry).
 
 `--token TOKEN` è un'alternativa quando si dispone già di un bearer token.
 `--password TOKEN` funziona, ma il segreto è visibile nella lista dei processi
@@ -233,7 +236,9 @@ backimage login --list
 ```
 
 Il file usa il formato Docker `auths`, viene scritto atomicamente e ha permessi
-`0600`; viene rifiutato se è leggibile da gruppo o da altri utenti. È un file
+`0600`; viene rifiutato se è leggibile da gruppo o da altri utenti. Il primo
+account di un provider è salvato sotto la chiave host (compatibile con Docker),
+gli account aggiuntivi sotto `host#username`. È un file
 locale compatibile con l'autenticazione Docker, non un password manager
 cifrato: proteggerlo e non inserirlo in repository, immagini o backup pubblici.
 
@@ -243,55 +248,96 @@ Per questo `docker login` e `backimage login` possono riferirsi a file diversi;
 un login Docker riuscito non sostituisce automaticamente una vecchia
 credenziale presente nello store di `backimage`.
 
-### Login multipli: registry diversi e stesso registry
+### Login multipli: più account sullo stesso registry
 
-È possibile avere più login nello stesso file, ma viene conservata una sola
-credenziale per ogni registry canonico:
+Ogni `--username` è un account separato: tre utenti Docker Hub convivono nello
+stesso file e nessun login sovrascrive gli altri.
 
 ```console
+printf '%s\n' "$PAT_1" | backimage login docker.io --username user1 --password-stdin
+printf '%s\n' "$PAT_2" | backimage login docker.io --username user2 --password-stdin
+printf '%s\n' "$PAT_3" | backimage login docker.io --username user3 --password-stdin
+printf '%s\n' "$GHCR_PAT" | backimage login ghcr.io --username manprint --password-stdin
+
 backimage login --list
-# Esempio di output: docker.io e ghcr.io
 ```
 
-Un nuovo login allo stesso registry sostituisce quello precedente. I nomi
-`docker.io`, `index.docker.io` e `registry-1.docker.io` sono equivalenti: per
-Docker Hub rappresentano quindi lo stesso login.
-
-Il login è associato al registry, non al repository. Il comando seguente
-rimuove il login usato da tutti i repository Docker Hub dell'utente:
-
-```console
-backimage logout docker.io
+```text
+PROVIDER          ACCOUNT    LOGIN COME   FILE
+ghcr.io           manprint   fabio        /home/fabio/.config/backimage/auth.json
+index.docker.io   user1      fabio        /home/fabio/.config/backimage/auth.json
+index.docker.io   user2      fabio        /home/fabio/.config/backimage/auth.json
+index.docker.io   user3      fabio        /home/fabio/.config/backimage/auth.json
 ```
 
-Non esiste un logout per singolo repository, ad esempio
-`backimage logout docker.io/demoarchiveuser/mindhunters`. `backimage repo rm`
-elimina invece un manifest dal registry e non modifica le credenziali.
+Le colonne sono: **provider** (registry canonico), **account** sul provider, e
+**login come**, cioè l'utente locale proprietario del file di credenziali. La
+terza colonna spiega perché `sudo backimage login --list` può mostrare un
+elenco diverso dallo stesso comando senza `sudo`: sono due file distinti
+(`/root/.config/...` contro `/home/UTENTE/.config/...`). `--json` restituisce
+gli stessi campi più `authFile`.
 
-Se servono account diversi sullo stesso registry, usare file di autenticazione
-separati e indicare lo stesso file anche al comando operativo:
+#### Quale account viene usato
+
+Lo decide il **namespace del repository**: `docker.io/user2/myimage` usa il
+login `user2`, `ghcr.io/manprint/dumps` usa `manprint`. Nessuna euristica: se
+il namespace non corrisponde ad alcun account salvato, il comando si ferma
+invece di pubblicare con l'identità sbagliata.
 
 ```console
-# Account A.
-printf '%s\n' "$ACCOUNT_A_PAT" | \
-  BACKIMAGE_AUTH_FILE="$HOME/.config/backimage/dockerhub-a.json" \
-  backimage login docker.io --username account_a --password-stdin
+backimage backup /srv/data --repo docker.io/user2/myimage --tag daily   # usa user2
+```
 
-# Account B.
-printf '%s\n' "$ACCOUNT_B_PAT" | \
-  BACKIMAGE_AUTH_FILE="$HOME/.config/backimage/dockerhub-b.json" \
-  backimage login docker.io --username account_b --password-stdin
+```text
+$ backimage backup /srv/data --repo ghcr.io/team/dumps
+error: no login for ghcr.io matching "team": stored accounts are manprint;
+select one with --registry-user NAME, or --registry-user none for an anonymous request
+```
 
-# Backup usando Account A.
-printf '%s\n' "$BACKUP_PASSPHRASE" | \
-  BACKIMAGE_AUTH_FILE="$HOME/.config/backimage/dockerhub-a.json" \
-  backimage backup ./mindhunters \
-    --repo docker.io/account_a/mindhunters \
-    --tag daily --passphrase-stdin --allow-degraded
+`--registry-user` è un flag globale e vale per tutti i comandi che parlano con
+un registry (`backup`, `restore`, `inspect`, `ls`, `find`, `verify`, `repo *`):
 
-# Elenco dei login presenti nel file di Account B.
-BACKIMAGE_AUTH_FILE="$HOME/.config/backimage/dockerhub-b.json" \
-  backimage login --list
+```console
+# Namespace di un'organizzazione, push con l'account personale.
+backimage backup /srv/data --repo ghcr.io/team/dumps --registry-user manprint
+
+# Pull pubblico ignorando i login salvati.
+backimage restore docker.io/library/alpine:latest --registry-user none -x -C /tmp/x
+```
+
+I nomi `docker.io`, `index.docker.io` e `registry-1.docker.io` sono
+equivalenti: per Docker Hub rappresentano lo stesso provider.
+
+#### Rimuovere un login
+
+```console
+backimage logout docker.io --user user2   # un account
+backimage logout docker.io --all          # tutti gli account del provider
+backimage logout ghcr.io                  # account unico: nessun selettore
+```
+
+Con più account e senza selettore il comando si ferma elencandoli, per non
+cancellare credenziali che servivano:
+
+```text
+$ backimage logout docker.io
+error: 3 logins for index.docker.io: user1, user2, user3; use --user NAME or --all
+```
+
+Il logout riguarda il registry, non il singolo repository:
+`backimage logout docker.io/user1/mindhunters` non esiste. `backimage repo rm`
+elimina invece un manifest dal registry e non tocca le credenziali.
+
+#### File separati (ancora supportati)
+
+Restano utili per isolare completamente i contesti, ad esempio in CI:
+
+```console
+BACKIMAGE_AUTH_FILE="$HOME/.config/backimage/dockerhub-a.json" \
+  backimage login docker.io --username account_a --password-stdin < pat_a
+
+BACKIMAGE_AUTH_FILE="$HOME/.config/backimage/dockerhub-a.json" \
+  backimage backup ./mindhunters --repo docker.io/account_a/mindhunters --tag daily
 ```
 
 ### Docker Hub: il login non garantisce il permesso di push
@@ -734,6 +780,7 @@ stderr; `--json` lascia su stdout solo JSON strutturato.
 | `-v, --verbose` | Aumenta il log; ripetere (`-v` debug, `-vv` trace) |
 | `--no-color` | Disabilita i colori ANSI |
 | `--config FILE` | Percorso di configurazione (default `$XDG_CONFIG_HOME/backimage/config.yaml`) |
+| `--registry-user NOME` | Account da usare quando un registry ha più login; `none` forza una richiesta anonima. Default: il namespace del repository |
 
 Durante un backup interattivo vengono mostrati su stderr la stima delle
 sorgenti, l'avanzamento di archiviazione/compressione/cifratura, la

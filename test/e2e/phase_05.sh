@@ -46,7 +46,7 @@ done
 
 echo "==> build and login"
 make build >/dev/null
-printf 'test-password\n' | bin/backimage login "$HOST" -u test --password-stdin >/dev/null
+printf 'test-password\n' | bin/backimage login "$HOST" -u e2e --password-stdin >/dev/null
 [ "$(stat -c '%a' "$BACKIMAGE_AUTH_FILE")" = 600 ] || { echo "auth.json is not 0600"; exit 1; }
 
 common=("$tree" --repo "$REPO" --passphrase-file "$work/passphrase.txt" \

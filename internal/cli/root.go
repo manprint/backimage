@@ -13,6 +13,8 @@ import (
 	"strings"
 
 	"github.com/spf13/cobra"
+
+	"github.com/manprint/backimage/pkg/registry"
 )
 
 // countVerbose counts -v/--verbose occurrences before cobra parses flags,
@@ -78,6 +80,8 @@ func NewRootCommand() *cobra.Command {
 	root.PersistentFlags().CountP("verbose", "v", "log verbosity (repeat: -v debug, -vv trace)")
 	root.PersistentFlags().Bool("no-color", false, "disable ANSI colors (auto-detected)")
 	root.PersistentFlags().String("config", "", "config file (default $XDG_CONFIG_HOME/backimage/config.yaml)")
+	root.PersistentFlags().String("registry-user", "",
+		"login to use when a registry holds several accounts (default: the repository namespace); "+registry.AnonymousUser+" forces an unauthenticated request")
 
 	root.AddCommand(
 		newVersionCommand(),
@@ -99,11 +103,22 @@ func NewRootCommand() *cobra.Command {
 
 // Options carries the resolved global flags used by output helpers.
 type Options struct {
-	JSON    bool
-	Quiet   bool
-	Verbose int
-	NoColor bool
-	RootCtx context.Context
+	JSON         bool
+	Quiet        bool
+	Verbose      int
+	NoColor      bool
+	RegistryUser string
+	RootCtx      context.Context
+}
+
+// registryUser returns the account selected with --registry-user, empty when
+// the choice is left to the repository namespace.
+func registryUser(cmd *cobra.Command) string {
+	flag := cmd.Root().PersistentFlags().Lookup("registry-user")
+	if flag == nil {
+		return ""
+	}
+	return strings.TrimSpace(flag.Value.String())
 }
 
 // parseOptions extracts global options from persistent flags of root.
@@ -124,5 +139,9 @@ func parseOptions(root *cobra.Command) (Options, error) {
 	if err != nil {
 		return Options{}, fmt.Errorf("no-color flag: %w", err)
 	}
-	return Options{JSON: json, Quiet: quiet, Verbose: verbose, NoColor: noColor}, nil
+	user, err := root.PersistentFlags().GetString("registry-user")
+	if err != nil {
+		return Options{}, fmt.Errorf("registry-user flag: %w", err)
+	}
+	return Options{JSON: json, Quiet: quiet, Verbose: verbose, NoColor: noColor, RegistryUser: strings.TrimSpace(user)}, nil
 }

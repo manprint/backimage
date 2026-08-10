@@ -13,12 +13,13 @@ backimage archives, compresses, encrypts and stores your files inside a multi-ar
 ### Options
 
 ```
-      --config string   config file (default $XDG_CONFIG_HOME/backimage/config.yaml)
-  -h, --help            help for backimage
-      --json            structured JSON output on stdout
-      --no-color        disable ANSI colors (auto-detected)
-  -q, --quiet           suppress progress output
-  -v, --verbose count   log verbosity (repeat: -v debug, -vv trace)
+      --config string          config file (default $XDG_CONFIG_HOME/backimage/config.yaml)
+  -h, --help                   help for backimage
+      --json                   structured JSON output on stdout
+      --no-color               disable ANSI colors (auto-detected)
+  -q, --quiet                  suppress progress output
+      --registry-user string   login to use when a registry holds several accounts (default: the repository namespace); none forces an unauthenticated request
+  -v, --verbose count          log verbosity (repeat: -v debug, -vv trace)
 ```
 
 ### SEE ALSO
@@ -119,11 +120,12 @@ backimage backup <PATH...> --repo IMAGE [flags]
 ### Options inherited from parent commands
 
 ```
-      --config string   config file (default $XDG_CONFIG_HOME/backimage/config.yaml)
-      --json            structured JSON output on stdout
-      --no-color        disable ANSI colors (auto-detected)
-  -q, --quiet           suppress progress output
-  -v, --verbose count   log verbosity (repeat: -v debug, -vv trace)
+      --config string          config file (default $XDG_CONFIG_HOME/backimage/config.yaml)
+      --json                   structured JSON output on stdout
+      --no-color               disable ANSI colors (auto-detected)
+  -q, --quiet                  suppress progress output
+      --registry-user string   login to use when a registry holds several accounts (default: the repository namespace); none forces an unauthenticated request
+  -v, --verbose count          log verbosity (repeat: -v debug, -vv trace)
 ```
 
 ### SEE ALSO
@@ -159,11 +161,12 @@ backimage doctor [PATH...] [flags]
 ### Options inherited from parent commands
 
 ```
-      --config string   config file (default $XDG_CONFIG_HOME/backimage/config.yaml)
-      --json            structured JSON output on stdout
-      --no-color        disable ANSI colors (auto-detected)
-  -q, --quiet           suppress progress output
-  -v, --verbose count   log verbosity (repeat: -v debug, -vv trace)
+      --config string          config file (default $XDG_CONFIG_HOME/backimage/config.yaml)
+      --json                   structured JSON output on stdout
+      --no-color               disable ANSI colors (auto-detected)
+  -q, --quiet                  suppress progress output
+      --registry-user string   login to use when a registry holds several accounts (default: the repository namespace); none forces an unauthenticated request
+  -v, --verbose count          log verbosity (repeat: -v debug, -vv trace)
 ```
 
 ### SEE ALSO
@@ -208,11 +211,12 @@ backimage find IMAGE PATTERN [flags]
 ### Options inherited from parent commands
 
 ```
-      --config string   config file (default $XDG_CONFIG_HOME/backimage/config.yaml)
-      --json            structured JSON output on stdout
-      --no-color        disable ANSI colors (auto-detected)
-  -q, --quiet           suppress progress output
-  -v, --verbose count   log verbosity (repeat: -v debug, -vv trace)
+      --config string          config file (default $XDG_CONFIG_HOME/backimage/config.yaml)
+      --json                   structured JSON output on stdout
+      --no-color               disable ANSI colors (auto-detected)
+  -q, --quiet                  suppress progress output
+      --registry-user string   login to use when a registry holds several accounts (default: the repository namespace); none forces an unauthenticated request
+  -v, --verbose count          log verbosity (repeat: -v debug, -vv trace)
 ```
 
 ### SEE ALSO
@@ -259,11 +263,12 @@ backimage inspect IMAGE [flags]
 ### Options inherited from parent commands
 
 ```
-      --config string   config file (default $XDG_CONFIG_HOME/backimage/config.yaml)
-      --json            structured JSON output on stdout
-      --no-color        disable ANSI colors (auto-detected)
-  -q, --quiet           suppress progress output
-  -v, --verbose count   log verbosity (repeat: -v debug, -vv trace)
+      --config string          config file (default $XDG_CONFIG_HOME/backimage/config.yaml)
+      --json                   structured JSON output on stdout
+      --no-color               disable ANSI colors (auto-detected)
+  -q, --quiet                  suppress progress output
+      --registry-user string   login to use when a registry holds several accounts (default: the repository namespace); none forces an unauthenticated request
+  -v, --verbose count          log verbosity (repeat: -v debug, -vv trace)
 ```
 
 ### SEE ALSO
@@ -315,11 +320,12 @@ backimage listen-remote [flags]
 ### Options inherited from parent commands
 
 ```
-      --config string   config file (default $XDG_CONFIG_HOME/backimage/config.yaml)
-      --json            structured JSON output on stdout
-      --no-color        disable ANSI colors (auto-detected)
-  -q, --quiet           suppress progress output
-  -v, --verbose count   log verbosity (repeat: -v debug, -vv trace)
+      --config string          config file (default $XDG_CONFIG_HOME/backimage/config.yaml)
+      --json                   structured JSON output on stdout
+      --no-color               disable ANSI colors (auto-detected)
+  -q, --quiet                  suppress progress output
+      --registry-user string   login to use when a registry holds several accounts (default: the repository namespace); none forces an unauthenticated request
+  -v, --verbose count          log verbosity (repeat: -v debug, -vv trace)
 ```
 
 ### SEE ALSO
@@ -337,10 +343,20 @@ store registry credentials for backimage.
 
 REGISTRY is a host, e.g. ghcr.io or docker.io (default: docker.io).
 Credentials are kept in backimage's own auth file, separate from
-Docker's; several registries can be logged in at the same time.
+Docker's. Several accounts can be logged in on the same host: each
+--username is stored separately and none overwrites another.
+
+Which account is used is decided by the repository namespace:
+docker.io/user2/img uses the login named user2. When the namespace
+matches no account the command stops instead of guessing; pick one
+with --registry-user NAME (or --registry-user none for an
+unauthenticated request).
+
 On Docker Hub the password must be an access token, and a repository
 must include the namespace: docker.io/USER/NAME.
 
+  backimage login docker.io --username user1 --password-stdin < t1.txt
+  backimage login docker.io --username user2 --password-stdin < t2.txt
   backimage login ghcr.io --username me --password-stdin < token.txt
   backimage login --list
 
@@ -352,7 +368,7 @@ backimage login [REGISTRY] [flags]
 
 ```
   -h, --help              help for login
-      --list              list configured registries (never the secrets)
+      --list              list the stored logins with provider, registry account and local owner (never the secrets)
   -p, --password ps       password or token (visible in ps, prefer --password-stdin)
       --password-stdin    read the password from stdin
       --token string      ready-made token (alternative to username/password)
@@ -362,11 +378,12 @@ backimage login [REGISTRY] [flags]
 ### Options inherited from parent commands
 
 ```
-      --config string   config file (default $XDG_CONFIG_HOME/backimage/config.yaml)
-      --json            structured JSON output on stdout
-      --no-color        disable ANSI colors (auto-detected)
-  -q, --quiet           suppress progress output
-  -v, --verbose count   log verbosity (repeat: -v debug, -vv trace)
+      --config string          config file (default $XDG_CONFIG_HOME/backimage/config.yaml)
+      --json                   structured JSON output on stdout
+      --no-color               disable ANSI colors (auto-detected)
+  -q, --quiet                  suppress progress output
+      --registry-user string   login to use when a registry holds several accounts (default: the repository namespace); none forces an unauthenticated request
+  -v, --verbose count          log verbosity (repeat: -v debug, -vv trace)
 ```
 
 ### SEE ALSO
@@ -385,6 +402,13 @@ remove stored registry credentials.
 REGISTRY is a host, e.g. ghcr.io (default: docker.io). Only backimage's
 auth file is touched; Docker's credentials are left alone.
 
+With one account on the host it is removed directly. With several the
+command stops and lists them: pick one with --user NAME, or remove them
+all with --all.
+
+  backimage logout docker.io --user user2
+  backimage logout docker.io --all
+
 ```
 backimage logout [REGISTRY] [flags]
 ```
@@ -392,17 +416,20 @@ backimage logout [REGISTRY] [flags]
 ### Options
 
 ```
-  -h, --help   help for logout
+      --all           remove every account stored for the registry
+  -h, --help          help for logout
+      --user string   account to remove when the registry holds several logins
 ```
 
 ### Options inherited from parent commands
 
 ```
-      --config string   config file (default $XDG_CONFIG_HOME/backimage/config.yaml)
-      --json            structured JSON output on stdout
-      --no-color        disable ANSI colors (auto-detected)
-  -q, --quiet           suppress progress output
-  -v, --verbose count   log verbosity (repeat: -v debug, -vv trace)
+      --config string          config file (default $XDG_CONFIG_HOME/backimage/config.yaml)
+      --json                   structured JSON output on stdout
+      --no-color               disable ANSI colors (auto-detected)
+  -q, --quiet                  suppress progress output
+      --registry-user string   login to use when a registry holds several accounts (default: the repository namespace); none forces an unauthenticated request
+  -v, --verbose count          log verbosity (repeat: -v debug, -vv trace)
 ```
 
 ### SEE ALSO
@@ -450,11 +477,12 @@ backimage ls IMAGE [PATH] [flags]
 ### Options inherited from parent commands
 
 ```
-      --config string   config file (default $XDG_CONFIG_HOME/backimage/config.yaml)
-      --json            structured JSON output on stdout
-      --no-color        disable ANSI colors (auto-detected)
-  -q, --quiet           suppress progress output
-  -v, --verbose count   log verbosity (repeat: -v debug, -vv trace)
+      --config string          config file (default $XDG_CONFIG_HOME/backimage/config.yaml)
+      --json                   structured JSON output on stdout
+      --no-color               disable ANSI colors (auto-detected)
+  -q, --quiet                  suppress progress output
+      --registry-user string   login to use when a registry holds several accounts (default: the repository namespace); none forces an unauthenticated request
+  -v, --verbose count          log verbosity (repeat: -v debug, -vv trace)
 ```
 
 ### SEE ALSO
@@ -482,11 +510,12 @@ docker.io/me/backups. Credentials come from `backimage login`.
 ### Options inherited from parent commands
 
 ```
-      --config string   config file (default $XDG_CONFIG_HOME/backimage/config.yaml)
-      --json            structured JSON output on stdout
-      --no-color        disable ANSI colors (auto-detected)
-  -q, --quiet           suppress progress output
-  -v, --verbose count   log verbosity (repeat: -v debug, -vv trace)
+      --config string          config file (default $XDG_CONFIG_HOME/backimage/config.yaml)
+      --json                   structured JSON output on stdout
+      --no-color               disable ANSI colors (auto-detected)
+  -q, --quiet                  suppress progress output
+      --registry-user string   login to use when a registry holds several accounts (default: the repository namespace); none forces an unauthenticated request
+  -v, --verbose count          log verbosity (repeat: -v debug, -vv trace)
 ```
 
 ### SEE ALSO
@@ -524,11 +553,12 @@ backimage repo caps REGISTRY [flags]
 ### Options inherited from parent commands
 
 ```
-      --config string   config file (default $XDG_CONFIG_HOME/backimage/config.yaml)
-      --json            structured JSON output on stdout
-      --no-color        disable ANSI colors (auto-detected)
-  -q, --quiet           suppress progress output
-  -v, --verbose count   log verbosity (repeat: -v debug, -vv trace)
+      --config string          config file (default $XDG_CONFIG_HOME/backimage/config.yaml)
+      --json                   structured JSON output on stdout
+      --no-color               disable ANSI colors (auto-detected)
+  -q, --quiet                  suppress progress output
+      --registry-user string   login to use when a registry holds several accounts (default: the repository namespace); none forces an unauthenticated request
+  -v, --verbose count          log verbosity (repeat: -v debug, -vv trace)
 ```
 
 ### SEE ALSO
@@ -584,11 +614,12 @@ backimage repo prune REPO [flags]
 ### Options inherited from parent commands
 
 ```
-      --config string   config file (default $XDG_CONFIG_HOME/backimage/config.yaml)
-      --json            structured JSON output on stdout
-      --no-color        disable ANSI colors (auto-detected)
-  -q, --quiet           suppress progress output
-  -v, --verbose count   log verbosity (repeat: -v debug, -vv trace)
+      --config string          config file (default $XDG_CONFIG_HOME/backimage/config.yaml)
+      --json                   structured JSON output on stdout
+      --no-color               disable ANSI colors (auto-detected)
+  -q, --quiet                  suppress progress output
+      --registry-user string   login to use when a registry holds several accounts (default: the repository namespace); none forces an unauthenticated request
+  -v, --verbose count          log verbosity (repeat: -v debug, -vv trace)
 ```
 
 ### SEE ALSO
@@ -624,11 +655,12 @@ backimage repo rm REPO:TAG|REPO@DIGEST [flags]
 ### Options inherited from parent commands
 
 ```
-      --config string   config file (default $XDG_CONFIG_HOME/backimage/config.yaml)
-      --json            structured JSON output on stdout
-      --no-color        disable ANSI colors (auto-detected)
-  -q, --quiet           suppress progress output
-  -v, --verbose count   log verbosity (repeat: -v debug, -vv trace)
+      --config string          config file (default $XDG_CONFIG_HOME/backimage/config.yaml)
+      --json                   structured JSON output on stdout
+      --no-color               disable ANSI colors (auto-detected)
+  -q, --quiet                  suppress progress output
+      --registry-user string   login to use when a registry holds several accounts (default: the repository namespace); none forces an unauthenticated request
+  -v, --verbose count          log verbosity (repeat: -v debug, -vv trace)
 ```
 
 ### SEE ALSO
@@ -660,11 +692,12 @@ backimage repo stats REPO [flags]
 ### Options inherited from parent commands
 
 ```
-      --config string   config file (default $XDG_CONFIG_HOME/backimage/config.yaml)
-      --json            structured JSON output on stdout
-      --no-color        disable ANSI colors (auto-detected)
-  -q, --quiet           suppress progress output
-  -v, --verbose count   log verbosity (repeat: -v debug, -vv trace)
+      --config string          config file (default $XDG_CONFIG_HOME/backimage/config.yaml)
+      --json                   structured JSON output on stdout
+      --no-color               disable ANSI colors (auto-detected)
+  -q, --quiet                  suppress progress output
+      --registry-user string   login to use when a registry holds several accounts (default: the repository namespace); none forces an unauthenticated request
+  -v, --verbose count          log verbosity (repeat: -v debug, -vv trace)
 ```
 
 ### SEE ALSO
@@ -697,11 +730,12 @@ backimage repo tags REPO [flags]
 ### Options inherited from parent commands
 
 ```
-      --config string   config file (default $XDG_CONFIG_HOME/backimage/config.yaml)
-      --json            structured JSON output on stdout
-      --no-color        disable ANSI colors (auto-detected)
-  -q, --quiet           suppress progress output
-  -v, --verbose count   log verbosity (repeat: -v debug, -vv trace)
+      --config string          config file (default $XDG_CONFIG_HOME/backimage/config.yaml)
+      --json                   structured JSON output on stdout
+      --no-color               disable ANSI colors (auto-detected)
+  -q, --quiet                  suppress progress output
+      --registry-user string   login to use when a registry holds several accounts (default: the repository namespace); none forces an unauthenticated request
+  -v, --verbose count          log verbosity (repeat: -v debug, -vv trace)
 ```
 
 ### SEE ALSO
@@ -766,11 +800,12 @@ backimage restore [IMAGE] [flags]
 ### Options inherited from parent commands
 
 ```
-      --config string   config file (default $XDG_CONFIG_HOME/backimage/config.yaml)
-      --json            structured JSON output on stdout
-      --no-color        disable ANSI colors (auto-detected)
-  -q, --quiet           suppress progress output
-  -v, --verbose count   log verbosity (repeat: -v debug, -vv trace)
+      --config string          config file (default $XDG_CONFIG_HOME/backimage/config.yaml)
+      --json                   structured JSON output on stdout
+      --no-color               disable ANSI colors (auto-detected)
+  -q, --quiet                  suppress progress output
+      --registry-user string   login to use when a registry holds several accounts (default: the repository namespace); none forces an unauthenticated request
+  -v, --verbose count          log verbosity (repeat: -v debug, -vv trace)
 ```
 
 ### SEE ALSO
@@ -817,11 +852,12 @@ backimage verify IMAGE [flags]
 ### Options inherited from parent commands
 
 ```
-      --config string   config file (default $XDG_CONFIG_HOME/backimage/config.yaml)
-      --json            structured JSON output on stdout
-      --no-color        disable ANSI colors (auto-detected)
-  -q, --quiet           suppress progress output
-  -v, --verbose count   log verbosity (repeat: -v debug, -vv trace)
+      --config string          config file (default $XDG_CONFIG_HOME/backimage/config.yaml)
+      --json                   structured JSON output on stdout
+      --no-color               disable ANSI colors (auto-detected)
+  -q, --quiet                  suppress progress output
+      --registry-user string   login to use when a registry holds several accounts (default: the repository namespace); none forces an unauthenticated request
+  -v, --verbose count          log verbosity (repeat: -v debug, -vv trace)
 ```
 
 ### SEE ALSO
@@ -846,11 +882,12 @@ backimage version [flags]
 ### Options inherited from parent commands
 
 ```
-      --config string   config file (default $XDG_CONFIG_HOME/backimage/config.yaml)
-      --json            structured JSON output on stdout
-      --no-color        disable ANSI colors (auto-detected)
-  -q, --quiet           suppress progress output
-  -v, --verbose count   log verbosity (repeat: -v debug, -vv trace)
+      --config string          config file (default $XDG_CONFIG_HOME/backimage/config.yaml)
+      --json                   structured JSON output on stdout
+      --no-color               disable ANSI colors (auto-detected)
+  -q, --quiet                  suppress progress output
+      --registry-user string   login to use when a registry holds several accounts (default: the repository namespace); none forces an unauthenticated request
+  -v, --verbose count          log verbosity (repeat: -v debug, -vv trace)
 ```
 
 ### SEE ALSO

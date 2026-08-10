@@ -69,10 +69,12 @@ type Config struct {
 	Resume        bool
 	Keychain      registry.Keychain
 	Store         registry.Store
-	DryRun        bool
-	Output        string // registry|daemon|oci-layout|tar
-	OutputPath    string
-	Remote        RemoteUploader
+	// RegistryUser selects one login when a registry holds several accounts.
+	RegistryUser string
+	DryRun       bool
+	Output       string // registry|daemon|oci-layout|tar
+	OutputPath   string
+	Remote       RemoteUploader
 	// RemoteStream selects the streaming remote protocol (v2): the server
 	// runs the entire pipeline and the client keeps no layers on disk.
 	RemoteStream RemoteStreamUploader
@@ -224,7 +226,7 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		}
 		kc := cfg.Keychain
 		if kc == nil {
-			kc = registry.NewKeychain(nil, cfg.Store)
+			kc = registry.NewKeychainForUser(nil, cfg.Store, cfg.RegistryUser)
 		}
 		if err := registry.VerifyPushAccess(ctx, ref, kc); err != nil {
 			return res, err
@@ -544,7 +546,7 @@ func findDedupBase(ctx context.Context, cfg Config) (*dedupBase, error) {
 	}
 	kc := cfg.Keychain
 	if kc == nil {
-		kc = registry.NewKeychain(nil, cfg.Store)
+		kc = registry.NewKeychainForUser(nil, cfg.Store, cfg.RegistryUser)
 	}
 	opts := []v1remote.Option{v1remote.WithContext(ctx), v1remote.WithAuthFromKeychain(kc)}
 	tags, err := v1remote.List(ref.Context(), opts...)
@@ -1381,7 +1383,7 @@ func (b *builder) pushRegistry(ctx context.Context, idx v1.ImageIndex, images ma
 	}()
 	kc := b.cfg.Keychain
 	if kc == nil {
-		kc = registry.NewKeychain(nil, b.cfg.Store)
+		kc = registry.NewKeychainForUser(nil, b.cfg.Store, b.cfg.RegistryUser)
 	}
 	ref, err := name.ParseReference(b.cfg.Ref)
 	if err != nil {

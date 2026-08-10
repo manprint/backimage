@@ -5,6 +5,34 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-08-11
+
+### Added
+
+- Più account sullo stesso registry: ogni `backimage login --username` è un
+  login distinto e non sovrascrive gli altri (tre utenti Docker Hub convivono
+  nello stesso file). L'account usato è scelto dal namespace del repository:
+  `docker.io/user2/img` usa il login `user2`.
+- Flag globale `--registry-user NOME` per scegliere l'account quando il
+  namespace non lo identifica (es. `ghcr.io/team/...`); `--registry-user none`
+  forza una richiesta anonima.
+- `backimage logout --user NOME` e `--all`.
+
+### Changed
+
+- `login --list` stampa provider, account sul provider e utente locale
+  proprietario del file di credenziali, più il percorso del file; `--json`
+  espone gli stessi campi. Prima elencava solo gli host.
+- `logout REGISTRY` con più account si ferma elencandoli invece di rimuoverli
+  tutti: serve `--user` o `--all`.
+- **Comportamento**: se un registry ha login salvati ma nessuno corrisponde al
+  namespace del repository, il comando fallisce indicando i candidati invece di
+  usare l'unica credenziale disponibile. Serve `--registry-user NOME` (oppure
+  `none` per una richiesta anonima).
+- Formato dello store: il primo account di un host resta sotto la chiave host
+  (compatibile con Docker e con i file esistenti), gli account aggiuntivi sono
+  salvati sotto `host#username`.
+
 ## [0.2.0] - 2026-08-11
 
 ### Changed

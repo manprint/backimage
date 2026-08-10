@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"text/tabwriter"
 
 	"github.com/manprint/backimage/pkg/registry"
 	"github.com/spf13/cobra"
@@ -39,9 +40,17 @@ func newLoginCommand() *cobra.Command {
 		Long: "store registry credentials for backimage.\n\n" +
 			"REGISTRY is a host, e.g. ghcr.io or docker.io (default: docker.io).\n" +
 			"Credentials are kept in backimage's own auth file, separate from\n" +
-			"Docker's; several registries can be logged in at the same time.\n" +
+			"Docker's. Several accounts can be logged in on the same host: each\n" +
+			"--username is stored separately and none overwrites another.\n\n" +
+			"Which account is used is decided by the repository namespace:\n" +
+			"docker.io/user2/img uses the login named user2. When the namespace\n" +
+			"matches no account the command stops instead of guessing; pick one\n" +
+			"with --registry-user NAME (or --registry-user " + registry.AnonymousUser + " for an\n" +
+			"unauthenticated request).\n\n" +
 			"On Docker Hub the password must be an access token, and a repository\n" +
 			"must include the namespace: docker.io/USER/NAME.\n\n" +
+			"  backimage login docker.io --username user1 --password-stdin < t1.txt\n" +
+			"  backimage login docker.io --username user2 --password-stdin < t2.txt\n" +
 			"  backimage login ghcr.io --username me --password-stdin < token.txt\n" +
 			"  backimage login --list",
 		Args: cobra.MaximumNArgs(1),
@@ -51,7 +60,7 @@ func newLoginCommand() *cobra.Command {
 	cmd.Flags().StringP("password", "p", "", "password or token (visible in `ps`, prefer --password-stdin)")
 	cmd.Flags().Bool("password-stdin", false, "read the password from stdin")
 	cmd.Flags().String("token", "", "ready-made token (alternative to username/password)")
-	cmd.Flags().Bool("list", false, "list configured registries (never the secrets)")
+	cmd.Flags().Bool("list", false, "list the stored logins with provider, registry account and local owner (never the secrets)")
 	return cmd
 }
 
@@ -157,29 +166,110 @@ func runLogout(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return New(KindGeneric, err.Error(), "opening credential store")
 	}
-	if err := store.Delete(host); err != nil {
+	accounts, err := store.Accounts()
+	if err != nil {
+		return New(KindGeneric, "", "reading credentials: %v", err)
+	}
+	names := accountNamesFor(accounts, host)
+	pr := NewPrinter(cmd.OutOrStdout(), cmd.ErrOrStderr(), opts)
+	if len(names) == 0 {
+		return pr.Result(fmt.Sprintf("no login stored for %s", host))
+	}
+
+	user := strings.TrimSpace(getFlagString(cmd, "user"))
+	all := getFlagBool(cmd, "all")
+	if all && user != "" {
+		return New(KindUsage, "", "--all and --user are mutually exclusive")
+	}
+	// Removing three Docker Hub logins because one was meant is not
+	// recoverable, so ambiguity stops the command instead of guessing.
+	if !all && user == "" && len(names) > 1 {
+		return New(KindUsage, "", "%d logins for %s: %s; use --user NAME or --all",
+			len(names), host, strings.Join(names, ", "))
+	}
+	if all || (user == "" && len(names) == 1 && names[0] == "(token)") {
+		if err := store.Delete(host); err != nil {
+			return New(KindGeneric, "", "removing credentials: %v", err)
+		}
+		return pr.Result(fmt.Sprintf("logged out of %s (%s)", host, strings.Join(names, ", ")))
+	}
+	if user == "" {
+		user = names[0]
+	}
+	removed, err := store.DeleteFor(host, user)
+	if err != nil {
 		return New(KindGeneric, "", "removing credentials: %v", err)
 	}
-	return NewPrinter(cmd.OutOrStdout(), cmd.ErrOrStderr(), opts).Result(fmt.Sprintf("logged out of %s", host))
+	if !removed {
+		return New(KindUsage, "", "no login for %s as %q: stored accounts are %s", host, user, strings.Join(names, ", "))
+	}
+	return pr.Result(fmt.Sprintf("logged out of %s (%s)", host, user))
 }
 
-// listLogins prints the configured registries, never the secrets.
+// accountNamesFor lists the account names of one host, with "(token)" for a
+// host-wide token that carries no username.
+func accountNamesFor(accounts []registry.Account, host string) []string {
+	names := make([]string, 0, len(accounts))
+	for _, a := range accounts {
+		if a.Registry != host {
+			continue
+		}
+		if a.Token {
+			names = append(names, "(token)")
+			continue
+		}
+		names = append(names, a.Username)
+	}
+	return names
+}
+
+// loginRow is one line of `login --list`: which provider, which account on
+// that provider, and which local user owns the credential file. With several
+// Docker Hub accounts the first two columns tell them apart, and the third
+// explains why a sudo session sees a different set than the plain user.
+type loginRow struct {
+	Provider  string `json:"provider"`
+	Account   string `json:"account"`
+	Token     bool   `json:"token,omitempty"`
+	LocalUser string `json:"localUser"`
+	AuthFile  string `json:"authFile"`
+}
+
+// listLogins prints the configured logins, never the secrets.
 func listLogins(cmd *cobra.Command, opts Options) error {
-	store, err := registry.NewStore(authFilePath())
+	path := authFilePath()
+	store, err := registry.NewStore(path)
 	if err != nil {
 		return New(KindGeneric, err.Error(), "opening credential store")
 	}
-	hosts, err := store.List()
+	accounts, err := store.Accounts()
 	if err != nil {
 		return New(KindGeneric, "", "listing credentials: %v", err)
 	}
+	owner := fileOwner(path)
+	rows := make([]loginRow, 0, len(accounts))
+	for _, a := range accounts {
+		account := a.Username
+		if a.Token {
+			account = "(token)"
+		}
+		rows = append(rows, loginRow{Provider: a.Registry, Account: account, Token: a.Token, LocalUser: owner, AuthFile: path})
+	}
+	pr := NewPrinter(cmd.OutOrStdout(), cmd.ErrOrStderr(), opts)
 	if opts.JSON {
-		return NewPrinter(cmd.OutOrStdout(), cmd.ErrOrStderr(), opts).Result(hosts)
+		return pr.Result(rows)
 	}
-	for _, h := range hosts {
-		fmt.Fprintln(cmd.OutOrStdout(), h)
+	if len(rows) == 0 {
+		pr.Infof("nessun login salvato in %s", path)
+		return nil
 	}
-	return nil
+	out := cmd.OutOrStdout()
+	w := tabwriter.NewWriter(out, 2, 4, 3, ' ', 0)
+	fmt.Fprintln(w, "PROVIDER\tACCOUNT\tLOGIN COME\tFILE")
+	for _, r := range rows {
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", r.Provider, r.Account, r.LocalUser, r.AuthFile)
+	}
+	return w.Flush()
 }
 
 func promptOnTTY(label string) string {
@@ -194,13 +284,21 @@ func promptOnTTY(label string) string {
 }
 
 func newLogoutCommand() *cobra.Command {
-	return &cobra.Command{
+	cmd := &cobra.Command{
 		Use:   "logout [REGISTRY]",
 		Short: "remove stored registry credentials",
 		Long: "remove stored registry credentials.\n\n" +
 			"REGISTRY is a host, e.g. ghcr.io (default: docker.io). Only backimage's\n" +
-			"auth file is touched; Docker's credentials are left alone.",
+			"auth file is touched; Docker's credentials are left alone.\n\n" +
+			"With one account on the host it is removed directly. With several the\n" +
+			"command stops and lists them: pick one with --user NAME, or remove them\n" +
+			"all with --all.\n\n" +
+			"  backimage logout docker.io --user user2\n" +
+			"  backimage logout docker.io --all",
 		Args: cobra.MaximumNArgs(1),
 		RunE: runLogout,
 	}
+	cmd.Flags().String("user", "", "account to remove when the registry holds several logins")
+	cmd.Flags().Bool("all", false, "remove every account stored for the registry")
+	return cmd
 }

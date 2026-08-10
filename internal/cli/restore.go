@@ -36,6 +36,7 @@ type sourceFlags struct {
 	password        string
 	passwordSet     bool
 	identity        string
+	registryUser    string // --registry-user: which login to use on this host
 }
 
 var (
@@ -66,7 +67,7 @@ func readSourceFlags(cmd *cobra.Command) sourceFlags {
 		platform: getFlagString(cmd, "platform"), cacheSize: getFlagString(cmd, "cache-size"),
 		passphraseFile: getFlagString(cmd, "passphrase-file"), passphraseStdin: getFlagBool(cmd, "passphrase-stdin"),
 		password: getFlagString(cmd, "password"), passwordSet: cmd.Flags().Changed("password"),
-		identity: getFlagString(cmd, "identity"),
+		identity: getFlagString(cmd, "identity"), registryUser: registryUser(cmd),
 	}
 	if cmd.Flags().Lookup("repo") != nil {
 		f.repo = getFlagString(cmd, "repo")
@@ -113,7 +114,7 @@ func openImageSource(ctx context.Context, refText string, flags sourceFlags) (re
 	if err != nil {
 		return nil, err
 	}
-	s, err := fromRegistryCLI(ctx, ref, registry.NewKeychain(nil, store), restorepkg.SourceOptions{
+	s, err := fromRegistryCLI(ctx, ref, registry.NewKeychainForUser(nil, store, flags.registryUser), restorepkg.SourceOptions{
 		Platform: flags.platform, CacheSize: cacheBytes,
 	})
 	if err != nil {
