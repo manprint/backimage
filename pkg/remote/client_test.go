@@ -13,13 +13,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fpierri/backimage/pkg/compress"
-	"github.com/fpierri/backimage/pkg/ociimg"
-	"github.com/fpierri/backimage/pkg/protocol"
-	"github.com/fpierri/backimage/pkg/registry"
-	"github.com/fpierri/backimage/pkg/server"
-	"github.com/fpierri/backimage/pkg/transport"
 	"github.com/google/go-containerregistry/pkg/v1"
+	"github.com/manprint/backimage/pkg/compress"
+	"github.com/manprint/backimage/pkg/ociimg"
+	"github.com/manprint/backimage/pkg/protocol"
+	"github.com/manprint/backimage/pkg/registry"
+	"github.com/manprint/backimage/pkg/server"
+	"github.com/manprint/backimage/pkg/transport"
 )
 
 func TestClientUploadAndResumeSkip(t *testing.T) {

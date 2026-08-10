@@ -9,14 +9,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fpierri/backimage/pkg/compress"
-	"github.com/fpierri/backimage/pkg/index"
-	"github.com/fpierri/backimage/pkg/ociimg"
-	"github.com/fpierri/backimage/pkg/protocol"
 	"github.com/google/go-containerregistry/pkg/name"
 	gcrregistry "github.com/google/go-containerregistry/pkg/registry"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 	"github.com/google/go-containerregistry/pkg/v1/types"
+	"github.com/manprint/backimage/pkg/compress"
+	"github.com/manprint/backimage/pkg/index"
+	"github.com/manprint/backimage/pkg/ociimg"
+	"github.com/manprint/backimage/pkg/protocol"
 )
 
 func TestRegistrySinkStreamsAndPublishesIndex(t *testing.T) {

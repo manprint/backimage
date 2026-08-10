@@ -24,22 +24,43 @@ backimage archives, compresses, encrypts and stores your files inside a multi-ar
 ### SEE ALSO
 
 * [backimage backup]()	 - archive, encrypt and push a backup to an OCI registry
-* [backimage doctor]()	 - check privileges and runtime environment
-* [backimage find]()	 - find archived paths by glob
-* [backimage inspect]()	 - show public backup metadata
+* [backimage doctor]()	 - check privileges and runtime environment before a backup
+* [backimage find]()	 - search archived paths by glob pattern
+* [backimage inspect]()	 - show the public metadata of a backup image
 * [backimage listen-remote]()	 - receive encrypted backup streams and publish them to a registry
 * [backimage login]()	 - store registry credentials for backimage
-* [backimage logout]()	 - remove registry credentials
-* [backimage ls]()	 - list archived files
-* [backimage repo]()	 - inspect an OCI backup repository
-* [backimage restore]()	 - restore a backup image to tar or disk
-* [backimage verify]()	 - verify a backup image
+* [backimage logout]()	 - remove stored registry credentials
+* [backimage ls]()	 - list the files archived inside a backup image
+* [backimage repo]()	 - inspect and clean up an OCI backup repository
+* [backimage restore]()	 - restore a backup image to disk or to a tar file
+* [backimage verify]()	 - check that a backup image is complete and intact
 * [backimage version]()	 - print version information
 
 
 ## backimage backup
 
 archive, encrypt and push a backup to an OCI registry
+
+### Synopsis
+
+archive, encrypt and push a backup to an OCI registry.
+
+PATH is one or more files or directories; they are archived together in
+the order given. The result is a multi-arch OCI image that restores
+itself with a plain `docker run`.
+
+Sizes accept binary units (512MiB, 2GiB); a bare number means bytes.
+
+  # local pipeline, encrypted, timestamped tag
+  backimage backup /srv/data --repo ghcr.io/me/dumps --tag daily --timestamp \
+    --passphrase-file ./pass
+
+  # delegate archiving and push to a remote server (little local disk)
+  backimage backup /srv/data --repo ghcr.io/me/dumps --tag nightly \
+    --remote backup.example:7575 --tls-pin <PIN> --passphrase-file ./pass
+
+  # see the plan without writing anything
+  backimage backup /srv/data --repo ghcr.io/me/dumps --dry-run
 
 ```
 backimage backup <PATH...> --repo IMAGE [flags]
@@ -52,21 +73,21 @@ backimage backup <PATH...> --repo IMAGE [flags]
       --allow-degraded            continue despite unreadable files
       --auth-token string         pre-shared remote authentication token
       --auth-token-file string    read the remote authentication token from a file
-      --compression string        zstd|gzip|xz|lz4|none (default "zstd")
-      --compression-level int     codec level (0 = codec default)
-      --created string            fixed RFC3339 image creation time (reproducible builds)
+      --compression string        layer codec: zstd|gzip|xz|lz4|none (xz and lz4 require --runnable=false) (default "zstd")
+      --compression-level int     codec compression level; 0 = codec default, higher = smaller and slower
+      --created string            fixed image creation time in RFC3339, e.g. 2026-08-10T03:15:00Z (reproducible builds)
       --dedup                     enable content-defined incremental deduplication (reveals chunk equality)
-      --dedup-chunk-avg string    advanced CDC average chunk size
-      --dedup-chunk-max string    advanced CDC maximum chunk size
-      --dedup-chunk-min string    advanced CDC minimum chunk size
+      --dedup-chunk-avg string    advanced CDC average chunk size, e.g. 1MiB (default: codec choice)
+      --dedup-chunk-max string    advanced CDC maximum chunk size, e.g. 4MiB (default: codec choice)
+      --dedup-chunk-min string    advanced CDC minimum chunk size, e.g. 256KiB (default: codec choice)
       --dedup-polynomial string   advanced Rabin polynomial (0x...) for CDC
       --dry-run                   print the plan and exit without writing
       --encrypt                   encrypt chunks (default) (default true)
       --exclude strings           glob pattern to exclude (repeatable)
   -h, --help                      help for backup
-      --jobs int                  parallel uploads (default 3)
+      --jobs int                  number of concurrent blob uploads (default 3)
       --local-repo                output to the Docker daemon instead of a registry
-      --max-layer-size string     target layer size, e.g. 512MiB, 2GiB (default "1GiB")
+      --max-layer-size string     target size of each OCI layer, e.g. 512MiB, 2GiB (default "1GiB")
       --no-encrypt                disable encryption (exclusive with --encrypt)
       --no-metadata               omit source paths from labels
       --numeric-owner             do not resolve user/group names
@@ -78,20 +99,20 @@ backimage backup <PATH...> --repo IMAGE [flags]
       --password string           passphrase (visible in shell history and process listings)
       --platform strings          self-extract platforms (repeatable) (default [linux/amd64,linux/arm64])
       --recipient strings         age public key (repeatable)
-      --remote string             delegate the backup to a remote backimage server
+      --remote string             delegate the backup to a remote backimage server, HOST:PORT
       --remote-mode string        stream: the server runs the whole pipeline (default); layers: legacy client-side pipeline (default "stream")
-      --repo string               target repository, e.g. ghcr.io/me/dumps
+      --repo string               target repository without a tag, e.g. ghcr.io/me/dumps (required)
       --resume                    resume from the checkpoint if present (default true)
       --runnable                  build runnable images (false allows non-standard codecs) (default true)
       --server-side-compress      deprecated alias of --remote-mode stream (already the default)
-      --tag string                backup tag (default "latest")
+      --tag string                tag to publish; combine with --timestamp for one tag per run (default "latest")
       --temp-dir string           spool directory (default $TMPDIR)
-      --timestamp                 append a timestamp to the tag
-      --timestamp-format string   Go layout for --timestamp (default "20060102T150405Z")
+      --timestamp                 append a UTC timestamp to --tag, e.g. daily-20260810T031500Z
+      --timestamp-format string   Go time layout used by --timestamp (reference date 2006-01-02 15:04:05) (default "20060102T150405Z")
       --tls-ca string             PEM CA bundle for the remote server
       --tls-cert string           PEM client certificate for mTLS
       --tls-key string            PEM client private key for mTLS
-      --tls-pin string            remote server certificate SHA-256 fingerprint
+      --tls-pin string            remote server certificate SHA-256 fingerprint, hex only (drop the SHA256: prefix printed by the server)
       --udp                       use QUIC instead of TCP for --remote
 ```
 
@@ -112,7 +133,18 @@ backimage backup <PATH...> --repo IMAGE [flags]
 
 ## backimage doctor
 
-check privileges and runtime environment
+check privileges and runtime environment before a backup
+
+### Synopsis
+
+check privileges and runtime environment before a backup.
+
+With PATH arguments it reports whether those sources can be read whole
+(ownership, xattrs, ACLs, sparse files); without arguments it checks the
+environment only. Each unavailable capability comes with a remedy.
+
+  backimage doctor
+  sudo backimage doctor /srv/data /var/lib/postgresql
 
 ```
 backimage doctor [PATH...] [flags]
@@ -141,7 +173,18 @@ backimage doctor [PATH...] [flags]
 
 ## backimage find
 
-find archived paths by glob
+search archived paths by glob pattern
+
+### Synopsis
+
+search archived paths by glob pattern.
+
+PATTERN is a shell-style glob matched against the whole archived path;
+quote it so the local shell does not expand it first. Like `ls`, this
+reads the index only and needs the passphrase for an encrypted backup.
+
+  backimage find ghcr.io/me/dumps:daily '**/*.conf' --passphrase-file ./pass
+  backimage find ghcr.io/me/dumps:daily 'etc/nginx/*' -l
 
 ```
 backimage find IMAGE PATTERN [flags]
@@ -150,16 +193,16 @@ backimage find IMAGE PATTERN [flags]
 ### Options
 
 ```
-      --cache-size string        maximum downloaded-layer cache size (default "2GiB")
+      --cache-size string        maximum size of the downloaded-layer cache, e.g. 512MiB, 4GiB (0 disables it) (default "2GiB")
   -h, --help                     help for find
-      --identity string          age private key file
-      --local-repo               read the image from the local Docker daemon
-  -l, --long                     long listing
-      --oci-layout string        read from a local OCI layout directory
-      --passphrase-file string   read passphrase from a file
-      --passphrase-stdin         read passphrase from stdin
-      --password string          passphrase (visible in shell history and process listings)
-      --platform string          source platform (default "linux/amd64")
+      --identity string          age private key file, for a backup encrypted with --recipient
+      --local-repo               read the image from the local Docker daemon instead of a registry
+  -l, --long                     long listing: mode, owner, size and modification time
+      --oci-layout string        read the image from this local OCI layout directory
+      --passphrase-file string   read the backup passphrase from this file (first line)
+      --passphrase-stdin         read the backup passphrase from stdin
+      --password ps              backup passphrase inline (visible in shell history and in ps: prefer --passphrase-file)
+      --platform string          platform variant to read from the multi-arch image, OS/ARCH (default "linux/amd64")
 ```
 
 ### Options inherited from parent commands
@@ -179,7 +222,19 @@ backimage find IMAGE PATTERN [flags]
 
 ## backimage inspect
 
-show public backup metadata
+show the public metadata of a backup image
+
+### Synopsis
+
+show the public metadata of a backup image.
+
+IMAGE is a reference such as ghcr.io/me/dumps:nightly-20260810T031500Z,
+or a local source when --local-repo/--oci-layout is used. Public
+metadata (sizes, counts, compression, encryption) needs no passphrase;
+--files reads the encrypted index and therefore does.
+
+  backimage inspect ghcr.io/me/dumps:daily
+  backimage inspect ghcr.io/me/dumps:daily --files --passphrase-file ./pass
 
 ```
 backimage inspect IMAGE [flags]
@@ -188,17 +243,17 @@ backimage inspect IMAGE [flags]
 ### Options
 
 ```
-      --cache-size string        maximum downloaded-layer cache size (default "2GiB")
-      --files                    also list archived files (requires credentials)
+      --cache-size string        maximum size of the downloaded-layer cache, e.g. 512MiB, 4GiB (0 disables it) (default "2GiB")
+      --files                    also list archived files (decrypts the index: needs the passphrase or age identity)
   -h, --help                     help for inspect
-      --identity string          age private key file
-      --layers                   show data layer details
-      --local-repo               read the image from the local Docker daemon
-      --oci-layout string        read from a local OCI layout directory
-      --passphrase-file string   read passphrase from a file
-      --passphrase-stdin         read passphrase from stdin
-      --password string          passphrase (visible in shell history and process listings)
-      --platform string          source platform (default "linux/amd64")
+      --identity string          age private key file, for a backup encrypted with --recipient
+      --layers                   show per-layer digest, size and chunk count
+      --local-repo               read the image from the local Docker daemon instead of a registry
+      --oci-layout string        read the image from this local OCI layout directory
+      --passphrase-file string   read the backup passphrase from this file (first line)
+      --passphrase-stdin         read the backup passphrase from stdin
+      --password ps              backup passphrase inline (visible in shell history and in ps: prefer --passphrase-file)
+      --platform string          platform variant to read from the multi-arch image, OS/ARCH (default "linux/amd64")
 ```
 
 ### Options inherited from parent commands
@@ -220,6 +275,15 @@ backimage inspect IMAGE [flags]
 
 receive encrypted backup streams and publish them to a registry
 
+### Synopsis
+
+receive encrypted backup streams and publish them to a registry.
+
+Every flag can also be set through the environment as BACKIMAGE_<FLAG>
+with dashes replaced by underscores (--bind-address becomes
+BACKIMAGE_BIND_ADDRESS); an explicit flag always wins. This is what makes
+the container image configurable without a shell in the entrypoint.
+
 ```
 backimage listen-remote [flags]
 ```
@@ -227,23 +291,23 @@ backimage listen-remote [flags]
 ### Options
 
 ```
-      --allow-repo strings       allowed repository prefix (repeatable)
+      --allow-repo strings       repository prefix a client may push to, e.g. ghcr.io/team/ (repeatable; empty = any)
       --also-tcp                 when using --udp, also listen on TCP at the same address
       --auth-token string        pre-shared client authentication token
       --auth-token-file string   read the pre-shared token from a file
-      --bind-address string      listen address (default "0.0.0.0:7575")
+      --bind-address string      address to listen on, HOST:PORT (0.0.0.0 = every interface) (default "0.0.0.0:7575")
   -h, --help                     help for listen-remote
       --insecure-no-auth         allow unauthenticated clients (strongly discouraged)
-      --log-format string        text|json (default "text")
-      --max-bytes string         maximum bytes per session (0 = unlimited) (default "0")
-      --max-sessions int         maximum concurrent sessions (default 4)
-      --metrics-address string   listen address for /healthz and /metrics
-      --rate-limit string        bytes per second per session (0 = unlimited) (default "0")
+      --log-format string        diagnostics format: text|json (default "text")
+      --max-bytes string         maximum bytes accepted per session, e.g. 200GiB (0 = unlimited) (default "0")
+      --max-sessions int         maximum concurrent backup sessions; server disk needed is 2 x layer size x sessions (default 4)
+      --metrics-address string   serve /healthz and /metrics on this HOST:PORT (empty = disabled)
+      --rate-limit string        bytes per second per session, e.g. 80MiB (0 = unlimited) (default "0")
       --spool                    deprecated: the streaming protocol always spools one layer at a time
       --tls-ca string            PEM CA bundle used to authenticate mTLS clients
       --tls-cert string          PEM server certificate
       --tls-key string           PEM server private key
-      --tls-self-signed          generate an ephemeral certificate and print its SHA-256 pin
+      --tls-self-signed          generate a self-signed certificate and print its SHA-256 pin; persisted in --tls-cert/--tls-key or under --work-dir when either is set
       --udp                      use QUIC instead of TCP
       --work-dir string          directory for the per-layer spool of streaming sessions (default $TMPDIR)
 ```
@@ -266,6 +330,19 @@ backimage listen-remote [flags]
 ## backimage login
 
 store registry credentials for backimage
+
+### Synopsis
+
+store registry credentials for backimage.
+
+REGISTRY is a host, e.g. ghcr.io or docker.io (default: docker.io).
+Credentials are kept in backimage's own auth file, separate from
+Docker's; several registries can be logged in at the same time.
+On Docker Hub the password must be an access token, and a repository
+must include the namespace: docker.io/USER/NAME.
+
+  backimage login ghcr.io --username me --password-stdin < token.txt
+  backimage login --list
 
 ```
 backimage login [REGISTRY] [flags]
@@ -299,7 +376,14 @@ backimage login [REGISTRY] [flags]
 
 ## backimage logout
 
-remove registry credentials
+remove stored registry credentials
+
+### Synopsis
+
+remove stored registry credentials.
+
+REGISTRY is a host, e.g. ghcr.io (default: docker.io). Only backimage's
+auth file is touched; Docker's credentials are left alone.
 
 ```
 backimage logout [REGISTRY] [flags]
@@ -328,7 +412,19 @@ backimage logout [REGISTRY] [flags]
 
 ## backimage ls
 
-list archived files
+list the files archived inside a backup image
+
+### Synopsis
+
+list the files archived inside a backup image.
+
+PATH restricts the listing to one directory inside the archive (default:
+everything). Reading the file list decrypts the index, so an encrypted
+backup needs the passphrase or the age identity. No data layer is
+downloaded.
+
+  backimage ls ghcr.io/me/dumps:daily --passphrase-file ./pass
+  backimage ls ghcr.io/me/dumps:daily var/log -l
 
 ```
 backimage ls IMAGE [PATH] [flags]
@@ -337,18 +433,18 @@ backimage ls IMAGE [PATH] [flags]
 ### Options
 
 ```
-      --cache-size string        maximum downloaded-layer cache size (default "2GiB")
-      --exclude strings          exclude glob (repeatable)
+      --cache-size string        maximum size of the downloaded-layer cache, e.g. 512MiB, 4GiB (0 disables it) (default "2GiB")
+      --exclude strings          skip paths matching this glob (repeatable)
   -h, --help                     help for ls
-      --identity string          age private key file
-      --include strings          include glob (repeatable)
-      --local-repo               read the image from the local Docker daemon
-  -l, --long                     long listing
-      --oci-layout string        read from a local OCI layout directory
-      --passphrase-file string   read passphrase from a file
-      --passphrase-stdin         read passphrase from stdin
-      --password string          passphrase (visible in shell history and process listings)
-      --platform string          source platform (default "linux/amd64")
+      --identity string          age private key file, for a backup encrypted with --recipient
+      --include strings          list only paths matching this glob, e.g. '**/*.pdf' (repeatable)
+      --local-repo               read the image from the local Docker daemon instead of a registry
+  -l, --long                     long listing: mode, owner, size and modification time
+      --oci-layout string        read the image from this local OCI layout directory
+      --passphrase-file string   read the backup passphrase from this file (first line)
+      --passphrase-stdin         read the backup passphrase from stdin
+      --password ps              backup passphrase inline (visible in shell history and in ps: prefer --passphrase-file)
+      --platform string          platform variant to read from the multi-arch image, OS/ARCH (default "linux/amd64")
 ```
 
 ### Options inherited from parent commands
@@ -368,7 +464,14 @@ backimage ls IMAGE [PATH] [flags]
 
 ## backimage repo
 
-inspect an OCI backup repository
+inspect and clean up an OCI backup repository
+
+### Synopsis
+
+inspect and clean up an OCI backup repository.
+
+REPO is a repository without a tag, e.g. ghcr.io/me/dumps or
+docker.io/me/backups. Credentials come from `backimage login`.
 
 ### Options
 
@@ -389,16 +492,24 @@ inspect an OCI backup repository
 ### SEE ALSO
 
 * [backimage]()	 - store backups inside runnable, encrypted OCI images
-* [backimage repo caps]()	 - show repository lifecycle capabilities
-* [backimage repo prune]()	 - apply a retention policy
-* [backimage repo rm]()	 - delete an OCI manifest
+* [backimage repo caps]()	 - show which lifecycle operations a registry supports
+* [backimage repo prune]()	 - delete old backup tags according to a retention policy
+* [backimage repo rm]()	 - delete one tag or manifest from the registry
 * [backimage repo stats]()	 - show shared OCI blobs and effective repository storage
-* [backimage repo tags]()	 - list repository tags
+* [backimage repo tags]()	 - list repository tags with digest and creation time
 
 
 ## backimage repo caps
 
-show repository lifecycle capabilities
+show which lifecycle operations a registry supports
+
+### Synopsis
+
+show which lifecycle operations a registry supports.
+
+REGISTRY is a host, e.g. ghcr.io or docker.io. Capabilities are the
+protocol features the adapter implements, not a permission check on
+your account.
 
 ```
 backimage repo caps REGISTRY [flags]
@@ -422,12 +533,37 @@ backimage repo caps REGISTRY [flags]
 
 ### SEE ALSO
 
-* [backimage repo]()	 - inspect an OCI backup repository
+* [backimage repo]()	 - inspect and clean up an OCI backup repository
 
 
 ## backimage repo prune
 
-apply a retention policy
+delete old backup tags according to a retention policy
+
+### Synopsis
+
+delete old backup tags according to a retention policy.
+
+A tag is kept when at least one rule selects it, and deleted only when
+no rule does. With no rule at all nothing is deleted. Tags without a
+creation timestamp are always kept, so a non-backimage tag is never
+removed by accident.
+
+Durations accept units: s, m, h, d (days), w (weeks); e.g. 90m, 12h, 3d, 2w.
+
+Examples:
+  # keep the 7 newest backups, delete the rest
+  backimage repo prune ghcr.io/me/dumps --keep-last 7 --dry-run
+
+  # delete everything older than 3 days
+  backimage repo prune ghcr.io/me/dumps --delete-older-than 3d --yes
+
+  # delete backups older than 12 hours, but always keep the 2 newest
+  # and every tag named release-*
+  backimage repo prune ghcr.io/me/dumps --delete-older-than 12h \
+    --keep-last 2 --keep-tag 'release-*' --yes
+
+Always run with --dry-run first: deletions cannot be undone.
 
 ```
 backimage repo prune REPO [flags]
@@ -436,12 +572,13 @@ backimage repo prune REPO [flags]
 ### Options
 
 ```
-      --dry-run                show deletions without changing the registry
-  -h, --help                   help for prune
-      --keep-last int          keep the newest N backups
-      --keep-tag strings       glob pattern for tags to keep
-      --keep-within duration   keep backups newer than this duration
-      --yes                    confirm destructive deletions
+      --delete-older-than duration   delete backups older than this age; inverse wording of --keep-within, same rule (units: s, m, h, d (days), w (weeks); e.g. 90m, 12h, 3d, 2w)
+      --dry-run                      list what would be deleted and exit without touching the registry
+  -h, --help                         help for prune
+      --keep-last int                keep the N newest backups regardless of age (0 = rule disabled)
+      --keep-tag strings             glob pattern of tag names to keep, e.g. 'release-*' (repeatable)
+      --keep-within duration         keep backups newer than this age (units: s, m, h, d (days), w (weeks); e.g. 90m, 12h, 3d, 2w)
+      --yes                          required to actually delete: without it the command refuses to run
 ```
 
 ### Options inherited from parent commands
@@ -456,12 +593,21 @@ backimage repo prune REPO [flags]
 
 ### SEE ALSO
 
-* [backimage repo]()	 - inspect an OCI backup repository
+* [backimage repo]()	 - inspect and clean up an OCI backup repository
 
 
 ## backimage repo rm
 
-delete an OCI manifest
+delete one tag or manifest from the registry
+
+### Synopsis
+
+delete one tag or manifest from the registry.
+
+Irreversible: the manifest is deleted by digest, and a registry with
+deletion disabled rejects the request. When several tags point at the
+same manifest the command refuses to proceed unless --force is given,
+because deleting the manifest removes all of them at once.
 
 ```
 backimage repo rm REPO:TAG|REPO@DIGEST [flags]
@@ -470,9 +616,9 @@ backimage repo rm REPO:TAG|REPO@DIGEST [flags]
 ### Options
 
 ```
-      --force   delete a manifest even when other tags reference it
+      --force   delete the manifest even when other tags point at it (they are removed too)
   -h, --help    help for rm
-      --yes     confirm this destructive operation
+      --yes     required to actually delete: without it the command refuses to run
 ```
 
 ### Options inherited from parent commands
@@ -487,12 +633,19 @@ backimage repo rm REPO:TAG|REPO@DIGEST [flags]
 
 ### SEE ALSO
 
-* [backimage repo]()	 - inspect an OCI backup repository
+* [backimage repo]()	 - inspect and clean up an OCI backup repository
 
 
 ## backimage repo stats
 
 show shared OCI blobs and effective repository storage
+
+### Synopsis
+
+show shared OCI blobs and effective repository storage.
+
+Storage is what the registry stores once deduplication between tags is
+taken into account; referred bytes is the sum over all tags.
 
 ```
 backimage repo stats REPO [flags]
@@ -516,12 +669,20 @@ backimage repo stats REPO [flags]
 
 ### SEE ALSO
 
-* [backimage repo]()	 - inspect an OCI backup repository
+* [backimage repo]()	 - inspect and clean up an OCI backup repository
 
 
 ## backimage repo tags
 
-list repository tags
+list repository tags with digest and creation time
+
+### Synopsis
+
+list repository tags with digest and creation time.
+
+Columns: tag, manifest digest, creation time (RFC3339, UTC). A dash
+means the image carries no creation timestamp; `prune` never removes
+such a tag. Use --json for machine-readable output.
 
 ```
 backimage repo tags REPO [flags]
@@ -545,12 +706,31 @@ backimage repo tags REPO [flags]
 
 ### SEE ALSO
 
-* [backimage repo]()	 - inspect an OCI backup repository
+* [backimage repo]()	 - inspect and clean up an OCI backup repository
 
 
 ## backimage restore
 
-restore a backup image to tar or disk
+restore a backup image to disk or to a tar file
+
+### Synopsis
+
+restore a backup image to disk or to a tar file.
+
+IMAGE is the reference to restore (or --repo, or a local source with
+--local-repo/--oci-layout). Choose one of two outcomes: -x extracts into
+--destination, -o writes a tar file (- for stdout). Without either, a tar
+is written to stdout.
+
+  # extract everything into /restore
+  backimage restore ghcr.io/me/dumps:daily -x -C /restore --passphrase-file ./pass
+
+  # only the PDFs, without the leading directory level
+  backimage restore ghcr.io/me/dumps:daily -x -C . \
+    --include '**/*.pdf' --strip-components 1 --passphrase-file ./pass
+
+  # keep the archive as a tar file
+  backimage restore ghcr.io/me/dumps:daily -o backup.tar --passphrase-file ./pass
 
 ```
 backimage restore [IMAGE] [flags]
@@ -559,28 +739,28 @@ backimage restore [IMAGE] [flags]
 ### Options
 
 ```
-      --cache-size string        maximum downloaded-layer cache size (default "2GiB")
-      --cpus int                 maximum CPUs used during restore (default: half available CPUs) (default 8)
-  -C, --destination string       destination directory (default ".")
-      --exclude strings          exclude glob (repeatable)
-  -x, --extract                  extract instead of writing a tar
+      --cache-size string        maximum size of the downloaded-layer cache, e.g. 512MiB, 4GiB (0 disables it) (default "2GiB")
+      --cpus int                 maximum CPUs used for decompression and decryption (default: half the available CPUs) (default 8)
+  -C, --destination string       directory the files are extracted into (with -x) (default ".")
+      --exclude strings          skip paths matching this glob (repeatable)
+  -x, --extract                  extract the files into --destination instead of writing a tar
   -h, --help                     help for restore
-      --identity string          age private key file
-      --include strings          include glob (repeatable)
-      --jobs int                 parallel layer downloads (default 3)
-      --local-repo               read the image from the local Docker daemon
-      --no-preserve-owner        do not preserve ownership
-      --no-verify                skip plaintext chunk digest verification
-      --oci-layout string        read from a local OCI layout directory
-  -o, --output string            tar filename (- for stdout)
-      --overwrite                replace an existing output
-      --passphrase-file string   read passphrase from a file
-      --passphrase-stdin         read passphrase from stdin
-      --password string          passphrase (visible in shell history and process listings)
-      --platform string          source platform (default "linux/amd64")
-      --remove-local-image       remove the local Docker image after a successful restore
+      --identity string          age private key file, for a backup encrypted with --recipient
+      --include strings          restore only paths matching this glob, e.g. '**/*.pdf' (repeatable)
+      --jobs int                 number of concurrent layer downloads (default 3)
+      --local-repo               read the image from the local Docker daemon instead of a registry
+      --no-preserve-owner        restore files as the current user instead of the archived owner
+      --no-verify                skip the plaintext chunk digest check (faster, unsafe)
+      --oci-layout string        read the image from this local OCI layout directory
+  -o, --output string            write the archive to this tar file; - means stdout
+      --overwrite                allow writing over an existing tar file or a non-empty destination
+      --passphrase-file string   read the backup passphrase from this file (first line)
+      --passphrase-stdin         read the backup passphrase from stdin
+      --password ps              backup passphrase inline (visible in shell history and in ps: prefer --passphrase-file)
+      --platform string          platform variant to read from the multi-arch image, OS/ARCH (default "linux/amd64")
+      --remove-local-image       delete the pulled Docker image once the restore succeeded
       --repo string              image reference (alias for positional IMAGE)
-      --strip-components int     remove leading path components
+      --strip-components int     drop this many leading path components from each restored path (like tar)
 ```
 
 ### Options inherited from parent commands
@@ -600,7 +780,19 @@ backimage restore [IMAGE] [flags]
 
 ## backimage verify
 
-verify a backup image
+check that a backup image is complete and intact
+
+### Synopsis
+
+check that a backup image is complete and intact.
+
+By default every data layer is downloaded and each chunk digest is
+recomputed, which costs the full backup size in network traffic; --quick
+validates manifest, index and layer digests only. Run this before
+trusting a backup for a restore. Exit code 5 means an integrity failure.
+
+  backimage verify ghcr.io/me/dumps:daily --quick
+  backimage verify ghcr.io/me/dumps:daily --passphrase-file ./pass --continue
 
 ```
 backimage verify IMAGE [flags]
@@ -609,17 +801,17 @@ backimage verify IMAGE [flags]
 ### Options
 
 ```
-      --cache-size string        maximum downloaded-layer cache size (default "2GiB")
-      --continue                 report every integrity error
+      --cache-size string        maximum size of the downloaded-layer cache, e.g. 512MiB, 4GiB (0 disables it) (default "2GiB")
+      --continue                 do not stop at the first integrity error: report them all
   -h, --help                     help for verify
-      --identity string          age private key file
-      --local-repo               read the image from the local Docker daemon
-      --oci-layout string        read from a local OCI layout directory
-      --passphrase-file string   read passphrase from a file
-      --passphrase-stdin         read passphrase from stdin
-      --password string          passphrase (visible in shell history and process listings)
-      --platform string          source platform (default "linux/amd64")
-      --quick                    validate public metadata without downloading data layers
+      --identity string          age private key file, for a backup encrypted with --recipient
+      --local-repo               read the image from the local Docker daemon instead of a registry
+      --oci-layout string        read the image from this local OCI layout directory
+      --passphrase-file string   read the backup passphrase from this file (first line)
+      --passphrase-stdin         read the backup passphrase from stdin
+      --password ps              backup passphrase inline (visible in shell history and in ps: prefer --passphrase-file)
+      --platform string          platform variant to read from the multi-arch image, OS/ARCH (default "linux/amd64")
+      --quick                    check public metadata and layer digests only, without downloading the data layers
 ```
 
 ### Options inherited from parent commands

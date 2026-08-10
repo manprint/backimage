@@ -4,7 +4,7 @@ import (
 	"context"
 	"os"
 
-	"github.com/fpierri/backimage/internal/cli"
+	"github.com/manprint/backimage/internal/cli"
 )
 
 func main() {

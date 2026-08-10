@@ -17,7 +17,7 @@
 ```protobuf
 syntax = "proto3";
 package backimage.v1;
-option go_package = "github.com/fpierri/backimage/pkg/protocol";
+option go_package = "github.com/manprint/backimage/pkg/protocol";
 
 message Hello {
   string client_version = 1;

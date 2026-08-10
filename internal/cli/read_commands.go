@@ -9,16 +9,28 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/fpierri/backimage/pkg/archive"
-	"github.com/fpierri/backimage/pkg/index"
-	"github.com/fpierri/backimage/pkg/recovery"
+	"github.com/manprint/backimage/pkg/archive"
+	"github.com/manprint/backimage/pkg/index"
+	"github.com/manprint/backimage/pkg/recovery"
 )
 
 func newInspectCommand() *cobra.Command {
-	cmd := &cobra.Command{Use: "inspect IMAGE", Short: "show public backup metadata", Args: cobra.ExactArgs(1), RunE: runInspect}
+	cmd := &cobra.Command{
+		Use:   "inspect IMAGE",
+		Short: "show the public metadata of a backup image",
+		Long: "show the public metadata of a backup image.\n\n" +
+			"IMAGE is a reference such as ghcr.io/me/dumps:nightly-20260810T031500Z,\n" +
+			"or a local source when --local-repo/--oci-layout is used. Public\n" +
+			"metadata (sizes, counts, compression, encryption) needs no passphrase;\n" +
+			"--files reads the encrypted index and therefore does.\n\n" +
+			"  backimage inspect ghcr.io/me/dumps:daily\n" +
+			"  backimage inspect ghcr.io/me/dumps:daily --files --passphrase-file ./pass",
+		Args: cobra.ExactArgs(1),
+		RunE: runInspect,
+	}
 	addSourceFlags(cmd, false)
-	cmd.Flags().Bool("files", false, "also list archived files (requires credentials)")
-	cmd.Flags().Bool("layers", false, "show data layer details")
+	cmd.Flags().Bool("files", false, "also list archived files (decrypts the index: needs the passphrase or age identity)")
+	cmd.Flags().Bool("layers", false, "show per-layer digest, size and chunk count")
 	return cmd
 }
 
@@ -77,11 +89,23 @@ func runInspect(cmd *cobra.Command, args []string) error {
 }
 
 func newLSCommand() *cobra.Command {
-	cmd := &cobra.Command{Use: "ls IMAGE [PATH]", Short: "list archived files", Args: cobra.RangeArgs(1, 2), RunE: runLS}
+	cmd := &cobra.Command{
+		Use:   "ls IMAGE [PATH]",
+		Short: "list the files archived inside a backup image",
+		Long: "list the files archived inside a backup image.\n\n" +
+			"PATH restricts the listing to one directory inside the archive (default:\n" +
+			"everything). Reading the file list decrypts the index, so an encrypted\n" +
+			"backup needs the passphrase or the age identity. No data layer is\n" +
+			"downloaded.\n\n" +
+			"  backimage ls ghcr.io/me/dumps:daily --passphrase-file ./pass\n" +
+			"  backimage ls ghcr.io/me/dumps:daily var/log -l",
+		Args: cobra.RangeArgs(1, 2),
+		RunE: runLS,
+	}
 	addSourceFlags(cmd, false)
-	cmd.Flags().BoolP("long", "l", false, "long listing")
-	cmd.Flags().StringSlice("include", nil, "include glob (repeatable)")
-	cmd.Flags().StringSlice("exclude", nil, "exclude glob (repeatable)")
+	cmd.Flags().BoolP("long", "l", false, "long listing: mode, owner, size and modification time")
+	cmd.Flags().StringSlice("include", nil, "list only paths matching this glob, e.g. '**/*.pdf' (repeatable)")
+	cmd.Flags().StringSlice("exclude", nil, "skip paths matching this glob (repeatable)")
 	return cmd
 }
 
@@ -116,9 +140,20 @@ func runLS(cmd *cobra.Command, args []string) error {
 }
 
 func newFindCommand() *cobra.Command {
-	cmd := &cobra.Command{Use: "find IMAGE PATTERN", Short: "find archived paths by glob", Args: cobra.ExactArgs(2), RunE: runFind}
+	cmd := &cobra.Command{
+		Use:   "find IMAGE PATTERN",
+		Short: "search archived paths by glob pattern",
+		Long: "search archived paths by glob pattern.\n\n" +
+			"PATTERN is a shell-style glob matched against the whole archived path;\n" +
+			"quote it so the local shell does not expand it first. Like `ls`, this\n" +
+			"reads the index only and needs the passphrase for an encrypted backup.\n\n" +
+			"  backimage find ghcr.io/me/dumps:daily '**/*.conf' --passphrase-file ./pass\n" +
+			"  backimage find ghcr.io/me/dumps:daily 'etc/nginx/*' -l",
+		Args: cobra.ExactArgs(2),
+		RunE: runFind,
+	}
 	addSourceFlags(cmd, false)
-	cmd.Flags().BoolP("long", "l", false, "long listing")
+	cmd.Flags().BoolP("long", "l", false, "long listing: mode, owner, size and modification time")
 	return cmd
 }
 
@@ -149,10 +184,22 @@ func runFind(cmd *cobra.Command, args []string) error {
 }
 
 func newVerifyCommand() *cobra.Command {
-	cmd := &cobra.Command{Use: "verify IMAGE", Short: "verify a backup image", Args: cobra.ExactArgs(1), RunE: runVerify}
+	cmd := &cobra.Command{
+		Use:   "verify IMAGE",
+		Short: "check that a backup image is complete and intact",
+		Long: "check that a backup image is complete and intact.\n\n" +
+			"By default every data layer is downloaded and each chunk digest is\n" +
+			"recomputed, which costs the full backup size in network traffic; --quick\n" +
+			"validates manifest, index and layer digests only. Run this before\n" +
+			"trusting a backup for a restore. Exit code 5 means an integrity failure.\n\n" +
+			"  backimage verify ghcr.io/me/dumps:daily --quick\n" +
+			"  backimage verify ghcr.io/me/dumps:daily --passphrase-file ./pass --continue",
+		Args: cobra.ExactArgs(1),
+		RunE: runVerify,
+	}
 	addSourceFlags(cmd, false)
-	cmd.Flags().Bool("quick", false, "validate public metadata without downloading data layers")
-	cmd.Flags().Bool("continue", false, "report every integrity error")
+	cmd.Flags().Bool("quick", false, "check public metadata and layer digests only, without downloading the data layers")
+	cmd.Flags().Bool("continue", false, "do not stop at the first integrity error: report them all")
 	return cmd
 }
 
@@ -206,7 +253,18 @@ type doctorCheck struct {
 }
 
 func newDoctorCommand() *cobra.Command {
-	return &cobra.Command{Use: "doctor [PATH...]", Short: "check privileges and runtime environment", Args: cobra.ArbitraryArgs, RunE: runDoctor}
+	return &cobra.Command{
+		Use:   "doctor [PATH...]",
+		Short: "check privileges and runtime environment before a backup",
+		Long: "check privileges and runtime environment before a backup.\n\n" +
+			"With PATH arguments it reports whether those sources can be read whole\n" +
+			"(ownership, xattrs, ACLs, sparse files); without arguments it checks the\n" +
+			"environment only. Each unavailable capability comes with a remedy.\n\n" +
+			"  backimage doctor\n" +
+			"  sudo backimage doctor /srv/data /var/lib/postgresql",
+		Args: cobra.ArbitraryArgs,
+		RunE: runDoctor,
+	}
 }
 
 func runDoctor(cmd *cobra.Command, args []string) error {

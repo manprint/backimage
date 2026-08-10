@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/fpierri/backimage/pkg/protocol"
-	"github.com/fpierri/backimage/pkg/transport"
+	"github.com/manprint/backimage/pkg/protocol"
+	"github.com/manprint/backimage/pkg/transport"
 )
 
 // streamStart opens a protocol v2 session. From here on the client only sends

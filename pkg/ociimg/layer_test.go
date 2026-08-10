@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/fpierri/backimage/pkg/compress"
+	"github.com/manprint/backimage/pkg/compress"
 )
 
 func fileOpen(payload []byte) func() (io.ReadCloser, error) {

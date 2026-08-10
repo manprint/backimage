@@ -7,7 +7,7 @@ cd "$(dirname "$0")/.."
 DOC="docs/DEPENDENCIES.md"
 [ -f "$DOC" ] || { echo "missing $DOC"; exit 1; }
 
-direct=$(go list -m -f '{{if not .Indirect}}{{.Path}}{{end}}' all 2>/dev/null | grep -v '^$' | grep -v '^github.com/fpierri/backimage$')
+direct=$(go list -m -f '{{if not .Indirect}}{{.Path}}{{end}}' all 2>/dev/null | grep -v '^$' | grep -v '^github.com/manprint/backimage$')
 
 fail=0
 for mod in $direct; do

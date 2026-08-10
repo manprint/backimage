@@ -8,7 +8,7 @@ import (
 
 	"github.com/google/go-containerregistry/pkg/v1"
 
-	"github.com/fpierri/backimage/pkg/index"
+	"github.com/manprint/backimage/pkg/index"
 )
 
 // TagInfo describes one repository tag. Adapter implementations enrich it

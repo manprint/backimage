@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/fpierri/backimage/test/fixtures"
+	"github.com/manprint/backimage/test/fixtures"
 )
 
 // TestRoundTrip covers the non-root feature matrix: each case archives the

@@ -8,8 +8,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/fpierri/backimage/pkg/archive"
-	"github.com/fpierri/backimage/pkg/index"
+	"github.com/manprint/backimage/pkg/archive"
+	"github.com/manprint/backimage/pkg/index"
 )
 
 // TestScanArchiveMatchesLocalWriter locks the invariant the streaming protocol

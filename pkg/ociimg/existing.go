@@ -4,11 +4,11 @@ import (
 	"errors"
 	"time"
 
-	"github.com/fpierri/backimage/pkg/index"
 	"github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/empty"
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
 	"github.com/google/go-containerregistry/pkg/v1/types"
+	"github.com/manprint/backimage/pkg/index"
 )
 
 // ExistingLayerOptions builds an image around data blobs that the remote

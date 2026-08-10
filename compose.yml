@@ -1,0 +1,152 @@
+# backimage listen-remote via Docker.
+#
+# Equivalent to:
+#   backimage listen-remote --bind-address 0.0.0.0:7575 --udp --also-tcp \
+#     --tls-self-signed --insecure-no-auth --work-dir /data --max-sessions 3
+#
+# Every listen-remote flag is also an environment variable: BACKIMAGE_ + the
+# flag name uppercased with dashes turned into underscores. An empty value
+# means "not set", so the commented lines below can be filled in place.
+#
+#   docker compose up -d
+#   docker compose logs -f            # read the "TLS fingerprint SHA256:..." line
+#
+# The pin is stable across restarts: BACKIMAGE_WORK_DIR is persistent, so the
+# self-signed material is stored in /data/tls and reused.
+
+services:
+  backimage:
+    image: ghcr.io/manprint/backimage:latest
+    # The entrypoint is the binary; only the subcommand is passed as an argument.
+    command: ["listen-remote"]
+    restart: unless-stopped
+    ports:
+      - "7575:7575/tcp"
+      - "7575:7575/udp"
+    volumes:
+      # Layer spool + persistent TLS material. A named volume already belongs
+      # to the image user (65532); a host bind mount must be chown'ed first:
+      #   sudo mkdir -p /srv/backimage/data && sudo chown 65532:65532 /srv/backimage/data
+      # then replace the line below with:
+      #   - /srv/backimage/data:/data
+      - backimage-data:/data
+
+    environment:
+      # ---------------------------------------------------------------------
+      # Defaults of the reference command
+      # ---------------------------------------------------------------------
+      # Listen address inside the container; the host mapping is under `ports`.
+      BACKIMAGE_BIND_ADDRESS: "0.0.0.0:7575"
+      # QUIC transport (UDP).
+      BACKIMAGE_UDP: "true"
+      # Also accept plain TCP clients on the same port. Requires BACKIMAGE_UDP.
+      BACKIMAGE_ALSO_TCP: "true"
+      # Generate the server certificate. Persisted under $BACKIMAGE_WORK_DIR/tls,
+      # so the SHA-256 pin survives a restart; set BACKIMAGE_TLS_CERT and
+      # BACKIMAGE_TLS_KEY to choose another location.
+      BACKIMAGE_TLS_SELF_SIGNED: "true"
+      # No client authentication: anyone who reaches the port may push a backup
+      # to the allowed repositories. Only for an isolated LAN behind a firewall.
+      # Replace with BACKIMAGE_AUTH_TOKEN_FILE or mTLS when the network is shared.
+      BACKIMAGE_INSECURE_NO_AUTH: "true"
+      # Layer spool (one layer at a time) and persistent TLS material.
+      BACKIMAGE_WORK_DIR: "/data"
+      # Concurrent sessions. Server disk needed: 2 x layer size x sessions.
+      BACKIMAGE_MAX_SESSIONS: "3"
+
+      # ---------------------------------------------------------------------
+      # TLS: certificate provided instead of generated
+      # ---------------------------------------------------------------------
+      # Mount the PEM files read-only and drop BACKIMAGE_TLS_SELF_SIGNED. The
+      # server prints the pin for a provided certificate too.
+      #   volumes:
+      #     - /etc/backimage/server.crt:/tls/server.crt:ro
+      #     - /etc/backimage/server.key:/tls/server.key:ro
+      # BACKIMAGE_TLS_CERT: "/tls/server.crt"
+      # BACKIMAGE_TLS_KEY: "/tls/server.key"
+      #
+      # Keeping BACKIMAGE_TLS_SELF_SIGNED=true together with these two paths
+      # means "generate once into these files, then reuse them".
+      #
+      # CA bundle that authenticates mTLS clients. Setting it enables mTLS and
+      # makes BACKIMAGE_INSECURE_NO_AUTH unnecessary.
+      # BACKIMAGE_TLS_CA: "/tls/clients-ca.crt"
+
+      # ---------------------------------------------------------------------
+      # Client authentication (alternative to --insecure-no-auth)
+      # ---------------------------------------------------------------------
+      # Shared token read from a file: never appears in the process list.
+      #   head -c 32 /dev/urandom | base64 > /etc/backimage/remote-token
+      #   volumes:
+      #     - /etc/backimage/remote-token:/run/secrets/remote-token:ro
+      # BACKIMAGE_AUTH_TOKEN_FILE: "/run/secrets/remote-token"
+      #
+      # Same token inline. Visible in `docker inspect`: prefer the file form.
+      # BACKIMAGE_AUTH_TOKEN: ""
+
+      # ---------------------------------------------------------------------
+      # Limits and authorization
+      # ---------------------------------------------------------------------
+      # Repository prefixes a client may push to; comma-separated list.
+      # Unset means any repository the brokered registry token allows.
+      # BACKIMAGE_ALLOW_REPO: "ghcr.io/team/dumps,docker.io/team/"
+      #
+      # Maximum bytes per session; 0 = unlimited.
+      # BACKIMAGE_MAX_BYTES: "200GiB"
+      #
+      # Bytes per second per session; 0 = unlimited.
+      # BACKIMAGE_RATE_LIMIT: "80MiB"
+
+      # ---------------------------------------------------------------------
+      # Observability
+      # ---------------------------------------------------------------------
+      # /healthz and /metrics. Bind to 0.0.0.0 inside the container and publish
+      # the port (add "9090:9090" under `ports`); 127.0.0.1 would only be
+      # reachable from inside the container.
+      # BACKIMAGE_METRICS_ADDRESS: "0.0.0.0:9090"
+      #
+      # text (default) or json.
+      # BACKIMAGE_LOG_FORMAT: "json"
+      #
+      # Log verbosity: 1 = debug, 2 = trace.
+      # BACKIMAGE_VERBOSE: "1"
+      #
+      # Structured JSON on stdout, and progress suppression.
+      # BACKIMAGE_JSON: "true"
+      # BACKIMAGE_QUIET: "true"
+      # BACKIMAGE_NO_COLOR: "true"
+      #
+      # Config file path (default $XDG_CONFIG_HOME/backimage/config.yaml).
+      # BACKIMAGE_CONFIG: "/data/config.yaml"
+
+      # ---------------------------------------------------------------------
+      # Registry credentials
+      # ---------------------------------------------------------------------
+      # A streaming client brokers short-lived registry tokens, so the server
+      # normally needs no login of its own. Set this only if you run
+      # `backimage login` inside this container and want the file on a volume.
+      # BACKIMAGE_AUTH_FILE: "/data/auth.json"
+
+      # ---------------------------------------------------------------------
+      # Experimental QUIC tuning (hidden flags; leave alone unless measuring)
+      # ---------------------------------------------------------------------
+      # BACKIMAGE_X_QUIC_STREAMS: "1"
+      # BACKIMAGE_X_QUIC_WINDOW: "0"
+      # BACKIMAGE_X_QUIC_GSO: "true"
+      # BACKIMAGE_X_QUIC_CC: "cubic"
+
+    # QUIC wants a large UDP receive buffer; without this the log shows a
+    # "failed to sufficiently increase receive buffer size" warning from
+    # quic-go. Uncomment if the host allows setting these sysctls.
+    # sysctls:
+    #   net.core.rmem_max: "7500000"
+    #   net.core.wmem_max: "7500000"
+
+    # The image is distroless: no shell, so a `test`-based healthcheck cannot
+    # run. Use the metrics endpoint from outside, or an image with curl.
+    # healthcheck:
+    #   test: ["CMD", "/usr/local/bin/backimage", "version"]
+    #   interval: 30s
+
+volumes:
+  backimage-data:

@@ -15,13 +15,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/fpierri/backimage/pkg/chunk"
-	"github.com/fpierri/backimage/pkg/compress"
-	"github.com/fpierri/backimage/pkg/crypt"
-	"github.com/fpierri/backimage/pkg/index"
-	"github.com/fpierri/backimage/pkg/ociimg"
-	"github.com/fpierri/backimage/pkg/protocol"
 	"github.com/google/go-containerregistry/pkg/v1"
+	"github.com/manprint/backimage/pkg/chunk"
+	"github.com/manprint/backimage/pkg/compress"
+	"github.com/manprint/backimage/pkg/crypt"
+	"github.com/manprint/backimage/pkg/index"
+	"github.com/manprint/backimage/pkg/ociimg"
+	"github.com/manprint/backimage/pkg/protocol"
 )
 
 // maxDataLayers is the OCI layer budget reserved for data layers: the image

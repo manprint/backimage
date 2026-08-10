@@ -4,14 +4,15 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/hex"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/fpierri/backimage/pkg/server"
-	"github.com/fpierri/backimage/pkg/transport"
+	"github.com/manprint/backimage/pkg/server"
+	"github.com/manprint/backimage/pkg/transport"
 	"github.com/spf13/cobra"
 )
 
@@ -35,7 +36,7 @@ func TestListenTLSAndLimitHelpers(t *testing.T) {
 	if err := cmd.ParseFlags([]string{"--tls-self-signed", "--auth-token", "x"}); err != nil {
 		t.Fatal(err)
 	}
-	cfg, pin, mtls, err := listenTLSConfig(cmd, "127.0.0.1:0")
+	cfg, pin, mtls, err := listenTLSConfig(cmd, "127.0.0.1:0", "", NewPrinter(io.Discard, io.Discard, Options{}))
 	if err != nil {
 		t.Fatal(err)
 	}

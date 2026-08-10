@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"io"
 
-	"github.com/fpierri/backimage/pkg/protocol"
-	backremote "github.com/fpierri/backimage/pkg/remote"
 	"github.com/google/go-containerregistry/pkg/v1"
+	"github.com/manprint/backimage/pkg/protocol"
+	backremote "github.com/manprint/backimage/pkg/remote"
 )
 
 func (b *builder) remotePayload(images map[string]v1.Image) (backremote.Backup, error) {

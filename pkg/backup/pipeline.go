@@ -18,18 +18,18 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fpierri/backimage/pkg/archive"
-	"github.com/fpierri/backimage/pkg/chunk"
-	"github.com/fpierri/backimage/pkg/compress"
-	"github.com/fpierri/backimage/pkg/crypt"
-	"github.com/fpierri/backimage/pkg/index"
-	"github.com/fpierri/backimage/pkg/ociimg"
-	"github.com/fpierri/backimage/pkg/registry"
-	backremote "github.com/fpierri/backimage/pkg/remote"
-	"github.com/fpierri/backimage/pkg/restore"
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/v1"
 	v1remote "github.com/google/go-containerregistry/pkg/v1/remote"
+	"github.com/manprint/backimage/pkg/archive"
+	"github.com/manprint/backimage/pkg/chunk"
+	"github.com/manprint/backimage/pkg/compress"
+	"github.com/manprint/backimage/pkg/crypt"
+	"github.com/manprint/backimage/pkg/index"
+	"github.com/manprint/backimage/pkg/ociimg"
+	"github.com/manprint/backimage/pkg/registry"
+	backremote "github.com/manprint/backimage/pkg/remote"
+	"github.com/manprint/backimage/pkg/restore"
 )
 
 // DefaultVersion is embedded in the archive manifest when the CLI does

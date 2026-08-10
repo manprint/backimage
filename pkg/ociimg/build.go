@@ -17,8 +17,8 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/mutate"
 	"github.com/google/go-containerregistry/pkg/v1/types"
 
-	"github.com/fpierri/backimage/pkg/compress"
-	"github.com/fpierri/backimage/pkg/index"
+	"github.com/manprint/backimage/pkg/compress"
+	"github.com/manprint/backimage/pkg/index"
 )
 
 var (
@@ -252,6 +252,14 @@ func BuildIndex(imgs []BuiltImage) (v1.ImageIndex, error) {
 				Platform:  &p,
 			},
 		})
+	}
+	// Mirror the platform labels onto the index. A tag points at the index, so
+	// without these a reader (retention, repo tags) must fetch a child manifest
+	// just to learn when the backup was created.
+	if m, err := sorted[0].Image.Manifest(); err == nil && len(m.Annotations) > 0 {
+		if annotated, ok := mutate.Annotations(idx, m.Annotations).(v1.ImageIndex); ok {
+			idx = annotated
+		}
 	}
 	return idx, nil
 }

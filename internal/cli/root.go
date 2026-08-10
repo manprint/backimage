@@ -48,8 +48,16 @@ func classify(err error) error {
 		return nil
 	}
 	msg := err.Error()
-	if strings.Contains(msg, "unknown command") || strings.Contains(msg, "unknown flag") {
-		return &Error{Kind: KindUsage, Msg: msg}
+	// Flag-level mistakes are usage errors (exit 2), including the ones cobra
+	// and pflag report before RunE is reached.
+	for _, usage := range []string{
+		"unknown command", "unknown flag", "unknown shorthand flag",
+		"invalid argument", "flag needs an argument", "required flag",
+		"accepts", "requires at least", "requires at most",
+	} {
+		if strings.Contains(msg, usage) {
+			return &Error{Kind: KindUsage, Msg: msg}
+		}
 	}
 	return err
 }

@@ -13,7 +13,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/fpierri/backimage/test/fixtures"
+	"github.com/manprint/backimage/test/fixtures"
 )
 
 func writeTree(t *testing.T, dir string, feats fixtures.Feature) *fixtures.Manifest {

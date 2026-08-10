@@ -15,13 +15,13 @@ import (
 
 	"github.com/google/go-containerregistry/pkg/name"
 
-	"github.com/fpierri/backimage/pkg/crypt"
-	"github.com/fpierri/backimage/pkg/recovery"
-	"github.com/fpierri/backimage/pkg/registry"
-	backremote "github.com/fpierri/backimage/pkg/remote"
-	"github.com/fpierri/backimage/pkg/restore"
-	"github.com/fpierri/backimage/pkg/server"
-	"github.com/fpierri/backimage/pkg/transport"
+	"github.com/manprint/backimage/pkg/crypt"
+	"github.com/manprint/backimage/pkg/recovery"
+	"github.com/manprint/backimage/pkg/registry"
+	backremote "github.com/manprint/backimage/pkg/remote"
+	"github.com/manprint/backimage/pkg/restore"
+	"github.com/manprint/backimage/pkg/server"
+	"github.com/manprint/backimage/pkg/transport"
 )
 
 func netPipe() (net.Conn, net.Conn) { return net.Pipe() }

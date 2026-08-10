@@ -9,12 +9,12 @@ import (
 	"runtime"
 	"time"
 
-	"github.com/fpierri/backimage/pkg/archive"
-	"github.com/fpierri/backimage/pkg/chunk"
-	"github.com/fpierri/backimage/pkg/crypt"
-	"github.com/fpierri/backimage/pkg/protocol"
-	backremote "github.com/fpierri/backimage/pkg/remote"
 	"github.com/google/go-containerregistry/pkg/v1"
+	"github.com/manprint/backimage/pkg/archive"
+	"github.com/manprint/backimage/pkg/chunk"
+	"github.com/manprint/backimage/pkg/crypt"
+	"github.com/manprint/backimage/pkg/protocol"
+	backremote "github.com/manprint/backimage/pkg/remote"
 )
 
 // RemoteStreamUploader is implemented by remote.Client. In streaming mode the

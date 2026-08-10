@@ -11,7 +11,7 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/cobra/doc"
 
-	"github.com/fpierri/backimage/internal/cli"
+	"github.com/manprint/backimage/internal/cli"
 )
 
 func main() {

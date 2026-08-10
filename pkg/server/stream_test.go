@@ -12,12 +12,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fpierri/backimage/pkg/archive"
-	"github.com/fpierri/backimage/pkg/crypt"
-	"github.com/fpierri/backimage/pkg/index"
-	"github.com/fpierri/backimage/pkg/protocol"
 	"github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/types"
+	"github.com/manprint/backimage/pkg/archive"
+	"github.com/manprint/backimage/pkg/crypt"
+	"github.com/manprint/backimage/pkg/index"
+	"github.com/manprint/backimage/pkg/protocol"
 )
 
 type streamSink struct {

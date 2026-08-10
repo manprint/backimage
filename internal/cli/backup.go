@@ -12,14 +12,14 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/fpierri/backimage/internal/buildinfo"
-	"github.com/fpierri/backimage/internal/embedded"
-	"github.com/fpierri/backimage/pkg/backup"
-	"github.com/fpierri/backimage/pkg/chunk"
-	"github.com/fpierri/backimage/pkg/crypt"
-	"github.com/fpierri/backimage/pkg/progress"
-	"github.com/fpierri/backimage/pkg/registry"
-	backremote "github.com/fpierri/backimage/pkg/remote"
+	"github.com/manprint/backimage/internal/buildinfo"
+	"github.com/manprint/backimage/internal/embedded"
+	"github.com/manprint/backimage/pkg/backup"
+	"github.com/manprint/backimage/pkg/chunk"
+	"github.com/manprint/backimage/pkg/crypt"
+	"github.com/manprint/backimage/pkg/progress"
+	"github.com/manprint/backimage/pkg/registry"
+	backremote "github.com/manprint/backimage/pkg/remote"
 )
 
 func flagErr(name string, err error) {
@@ -105,17 +105,30 @@ func newBackupCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "backup <PATH...> --repo IMAGE [flags]",
 		Short: "archive, encrypt and push a backup to an OCI registry",
-		Args:  cobra.MinimumNArgs(1),
-		RunE:  runBackup,
+		Long: "archive, encrypt and push a backup to an OCI registry.\n\n" +
+			"PATH is one or more files or directories; they are archived together in\n" +
+			"the order given. The result is a multi-arch OCI image that restores\n" +
+			"itself with a plain `docker run`.\n\n" +
+			"Sizes accept binary units (512MiB, 2GiB); a bare number means bytes.\n\n" +
+			"  # local pipeline, encrypted, timestamped tag\n" +
+			"  backimage backup /srv/data --repo ghcr.io/me/dumps --tag daily --timestamp \\\n" +
+			"    --passphrase-file ./pass\n\n" +
+			"  # delegate archiving and push to a remote server (little local disk)\n" +
+			"  backimage backup /srv/data --repo ghcr.io/me/dumps --tag nightly \\\n" +
+			"    --remote backup.example:7575 --tls-pin <PIN> --passphrase-file ./pass\n\n" +
+			"  # see the plan without writing anything\n" +
+			"  backimage backup /srv/data --repo ghcr.io/me/dumps --dry-run",
+		Args: cobra.MinimumNArgs(1),
+		RunE: runBackup,
 	}
 	f := cmd.Flags()
-	f.String("repo", "", "target repository, e.g. ghcr.io/me/dumps")
-	f.String("tag", "latest", "backup tag")
-	f.Bool("timestamp", false, "append a timestamp to the tag")
-	f.String("timestamp-format", "20060102T150405Z", "Go layout for --timestamp")
-	f.String("compression", "zstd", "zstd|gzip|xz|lz4|none")
-	f.Int("compression-level", 0, "codec level (0 = codec default)")
-	f.String("max-layer-size", "1GiB", "target layer size, e.g. 512MiB, 2GiB")
+	f.String("repo", "", "target repository without a tag, e.g. ghcr.io/me/dumps (required)")
+	f.String("tag", "latest", "tag to publish; combine with --timestamp for one tag per run")
+	f.Bool("timestamp", false, "append a UTC timestamp to --tag, e.g. daily-20260810T031500Z")
+	f.String("timestamp-format", "20060102T150405Z", "Go time layout used by --timestamp (reference date 2006-01-02 15:04:05)")
+	f.String("compression", "zstd", "layer codec: zstd|gzip|xz|lz4|none (xz and lz4 require --runnable=false)")
+	f.Int("compression-level", 0, "codec compression level; 0 = codec default, higher = smaller and slower")
+	f.String("max-layer-size", "1GiB", "target size of each OCI layer, e.g. 512MiB, 2GiB")
 	f.Bool("encrypt", true, "encrypt chunks (default)")
 	f.Bool("no-encrypt", false, "disable encryption (exclusive with --encrypt)")
 	f.String("passphrase-file", "", "read the passphrase from a file")
@@ -124,9 +137,9 @@ func newBackupCommand() *cobra.Command {
 	f.StringSlice("recipient", nil, "age public key (repeatable)")
 	f.String("age-identity", "", "age identity file used to reuse a deduplication key")
 	f.Bool("dedup", false, "enable content-defined incremental deduplication (reveals chunk equality)")
-	f.String("dedup-chunk-min", "", "advanced CDC minimum chunk size")
-	f.String("dedup-chunk-avg", "", "advanced CDC average chunk size")
-	f.String("dedup-chunk-max", "", "advanced CDC maximum chunk size")
+	f.String("dedup-chunk-min", "", "advanced CDC minimum chunk size, e.g. 256KiB (default: codec choice)")
+	f.String("dedup-chunk-avg", "", "advanced CDC average chunk size, e.g. 1MiB (default: codec choice)")
+	f.String("dedup-chunk-max", "", "advanced CDC maximum chunk size, e.g. 4MiB (default: codec choice)")
 	f.String("dedup-polynomial", "", "advanced Rabin polynomial (0x...) for CDC")
 	f.Bool("local-repo", false, "output to the Docker daemon instead of a registry")
 	f.String("output", "registry", "registry|daemon|oci-layout|tar")
@@ -135,18 +148,18 @@ func newBackupCommand() *cobra.Command {
 	f.Bool("one-file-system", false, "do not cross mount points")
 	f.Bool("numeric-owner", false, "do not resolve user/group names")
 	f.Bool("allow-degraded", false, "continue despite unreadable files")
-	f.Int("jobs", 3, "parallel uploads")
+	f.Int("jobs", 3, "number of concurrent blob uploads")
 	f.StringSlice("platform", []string{"linux/amd64", "linux/arm64"}, "self-extract platforms (repeatable)")
 	f.Bool("no-metadata", false, "omit source paths from labels")
 	f.Bool("dry-run", false, "print the plan and exit without writing")
 	f.Bool("resume", true, "resume from the checkpoint if present")
 	f.Bool("runnable", true, "build runnable images (false allows non-standard codecs)")
 	f.String("temp-dir", "", "spool directory (default $TMPDIR)")
-	f.String("created", "", "fixed RFC3339 image creation time (reproducible builds)")
-	f.String("remote", "", "delegate the backup to a remote backimage server")
+	f.String("created", "", "fixed image creation time in RFC3339, e.g. 2026-08-10T03:15:00Z (reproducible builds)")
+	f.String("remote", "", "delegate the backup to a remote backimage server, HOST:PORT")
 	f.String("remote-mode", "stream", "stream: the server runs the whole pipeline (default); layers: legacy client-side pipeline")
 	f.Bool("udp", false, "use QUIC instead of TCP for --remote")
-	f.String("tls-pin", "", "remote server certificate SHA-256 fingerprint")
+	f.String("tls-pin", "", "remote server certificate SHA-256 fingerprint, hex only (drop the SHA256: prefix printed by the server)")
 	f.String("tls-ca", "", "PEM CA bundle for the remote server")
 	f.String("tls-cert", "", "PEM client certificate for mTLS")
 	f.String("tls-key", "", "PEM client private key for mTLS")

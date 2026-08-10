@@ -15,9 +15,9 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/layout"
 
-	"github.com/fpierri/backimage/pkg/crypt"
-	"github.com/fpierri/backimage/pkg/index"
-	"github.com/fpierri/backimage/pkg/registry"
+	"github.com/manprint/backimage/pkg/crypt"
+	"github.com/manprint/backimage/pkg/index"
+	"github.com/manprint/backimage/pkg/registry"
 )
 
 func stubSelf(goarch string) ([]byte, error) { return []byte("ELF-STUB-" + goarch), nil }

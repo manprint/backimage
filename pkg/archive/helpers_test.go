@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/fpierri/backimage/test/fixtures"
+	"github.com/manprint/backimage/test/fixtures"
 )
 
 // BuildLocal builds a fixture tree under dir (the fixture package requires a

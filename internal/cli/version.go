@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"runtime"
 
-	"github.com/fpierri/backimage/internal/buildinfo"
+	"github.com/manprint/backimage/internal/buildinfo"
 	"github.com/spf13/cobra"
 )
 

@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fpierri/backimage/pkg/protocol"
+	"github.com/manprint/backimage/pkg/protocol"
 )
 
 // streamPeer drives the client half of a streaming session: it reads server

@@ -10,8 +10,8 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/types"
 
-	"github.com/fpierri/backimage/pkg/compress"
-	"github.com/fpierri/backimage/pkg/index"
+	"github.com/manprint/backimage/pkg/compress"
+	"github.com/manprint/backimage/pkg/index"
 )
 
 func sampleManifest() *index.Manifest {

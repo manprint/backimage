@@ -9,7 +9,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/fpierri/backimage/pkg/compress"
+	"github.com/manprint/backimage/pkg/compress"
 )
 
 // NonceMode selects how the per-chunk nonce is derived.

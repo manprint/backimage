@@ -40,7 +40,7 @@ CLI Go all-in-one, singolo binario, che:
 
 ### Punti aperti (da confermare prima della fase 00)
 
-- **A01** — Module path Go. Il piano usa `github.com/fpierri/backimage`. Se il repo reale ha un altro path, cambiarlo in `go.mod` e nei soli import (un `gofmt -r` risolve).
+- **A01** — Module path Go. Il piano usa `github.com/manprint/backimage`. Se il repo reale ha un altro path, cambiarlo in `go.mod` e nei soli import (un `gofmt -r` risolve).
 
 ---
 

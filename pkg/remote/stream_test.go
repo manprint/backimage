@@ -14,9 +14,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fpierri/backimage/pkg/protocol"
-	"github.com/fpierri/backimage/pkg/server"
-	"github.com/fpierri/backimage/pkg/transport"
+	"github.com/manprint/backimage/pkg/protocol"
+	"github.com/manprint/backimage/pkg/server"
+	"github.com/manprint/backimage/pkg/transport"
 )
 
 type streamingSink struct {

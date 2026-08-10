@@ -8,10 +8,10 @@ import (
 	"os"
 	"strings"
 
-	"github.com/fpierri/backimage/pkg/registry"
-	backremote "github.com/fpierri/backimage/pkg/remote"
-	"github.com/fpierri/backimage/pkg/transport"
 	"github.com/google/go-containerregistry/pkg/name"
+	"github.com/manprint/backimage/pkg/registry"
+	backremote "github.com/manprint/backimage/pkg/remote"
+	"github.com/manprint/backimage/pkg/transport"
 	"github.com/spf13/cobra"
 )
 

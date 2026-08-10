@@ -10,12 +10,12 @@ import (
 	"time"
 
 	"filippo.io/age"
-	backarchive "github.com/fpierri/backimage/pkg/archive"
-	"github.com/fpierri/backimage/pkg/chunk"
-	"github.com/fpierri/backimage/pkg/compress"
-	"github.com/fpierri/backimage/pkg/crypt"
-	"github.com/fpierri/backimage/pkg/index"
-	"github.com/fpierri/backimage/pkg/registry"
+	backarchive "github.com/manprint/backimage/pkg/archive"
+	"github.com/manprint/backimage/pkg/chunk"
+	"github.com/manprint/backimage/pkg/compress"
+	"github.com/manprint/backimage/pkg/crypt"
+	"github.com/manprint/backimage/pkg/index"
+	"github.com/manprint/backimage/pkg/registry"
 )
 
 func TestPipelineHelpersAndTypeMapping(t *testing.T) {

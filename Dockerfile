@@ -19,7 +19,7 @@ RUN make embed
 RUN CGO_ENABLED=0 GOOS="$TARGETOS" GOARCH="$TARGETARCH" \
     GOARM="${TARGETVARIANT#v}" \
     go build -trimpath \
-      -ldflags "-s -w -X github.com/fpierri/backimage/internal/buildinfo.Version=${VERSION} -X github.com/fpierri/backimage/internal/buildinfo.Commit=${COMMIT} -X github.com/fpierri/backimage/internal/buildinfo.Date=${DATE}" \
+      -ldflags "-s -w -X github.com/manprint/backimage/internal/buildinfo.Version=${VERSION} -X github.com/manprint/backimage/internal/buildinfo.Commit=${COMMIT} -X github.com/manprint/backimage/internal/buildinfo.Date=${DATE}" \
       -o /out/backimage ./cmd/backimage
 
 FROM gcr.io/distroless/static-debian12:nonroot

@@ -10,15 +10,16 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"time"
 
-	"github.com/fpierri/backimage/internal/buildinfo"
-	"github.com/fpierri/backimage/internal/embedded"
-	"github.com/fpierri/backimage/pkg/protocol"
-	"github.com/fpierri/backimage/pkg/server"
-	"github.com/fpierri/backimage/pkg/transport"
+	"github.com/manprint/backimage/internal/buildinfo"
+	"github.com/manprint/backimage/internal/embedded"
+	"github.com/manprint/backimage/pkg/protocol"
+	"github.com/manprint/backimage/pkg/server"
+	"github.com/manprint/backimage/pkg/transport"
 	"github.com/spf13/cobra"
 )
 
@@ -26,26 +27,32 @@ func newListenRemoteCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "listen-remote [flags]",
 		Short: "receive encrypted backup streams and publish them to a registry",
-		Args:  cobra.NoArgs,
-		RunE:  runListenRemote,
+		Long: "receive encrypted backup streams and publish them to a registry.\n\n" +
+			"Every flag can also be set through the environment as BACKIMAGE_<FLAG>\n" +
+			"with dashes replaced by underscores (--bind-address becomes\n" +
+			"BACKIMAGE_BIND_ADDRESS); an explicit flag always wins. This is what makes\n" +
+			"the container image configurable without a shell in the entrypoint.",
+		Args:    cobra.NoArgs,
+		PreRunE: func(cmd *cobra.Command, _ []string) error { return applyEnvDefaults(cmd) },
+		RunE:    runListenRemote,
 	}
 	f := cmd.Flags()
-	f.String("bind-address", "0.0.0.0:7575", "listen address")
+	f.String("bind-address", "0.0.0.0:7575", "address to listen on, HOST:PORT (0.0.0.0 = every interface)")
 	f.Bool("udp", false, "use QUIC instead of TCP")
 	f.Bool("also-tcp", false, "when using --udp, also listen on TCP at the same address")
 	f.String("tls-cert", "", "PEM server certificate")
 	f.String("tls-key", "", "PEM server private key")
 	f.String("tls-ca", "", "PEM CA bundle used to authenticate mTLS clients")
-	f.Bool("tls-self-signed", false, "generate an ephemeral certificate and print its SHA-256 pin")
+	f.Bool("tls-self-signed", false, "generate a self-signed certificate and print its SHA-256 pin; persisted in --tls-cert/--tls-key or under --work-dir when either is set")
 	f.String("auth-token", "", "pre-shared client authentication token")
 	f.String("auth-token-file", "", "read the pre-shared token from a file")
 	f.Bool("insecure-no-auth", false, "allow unauthenticated clients (strongly discouraged)")
-	f.StringSlice("allow-repo", nil, "allowed repository prefix (repeatable)")
-	f.Int("max-sessions", 4, "maximum concurrent sessions")
-	f.String("max-bytes", "0", "maximum bytes per session (0 = unlimited)")
-	f.String("rate-limit", "0", "bytes per second per session (0 = unlimited)")
-	f.String("metrics-address", "", "listen address for /healthz and /metrics")
-	f.String("log-format", "text", "text|json")
+	f.StringSlice("allow-repo", nil, "repository prefix a client may push to, e.g. ghcr.io/team/ (repeatable; empty = any)")
+	f.Int("max-sessions", 4, "maximum concurrent backup sessions; server disk needed is 2 x layer size x sessions")
+	f.String("max-bytes", "0", "maximum bytes accepted per session, e.g. 200GiB (0 = unlimited)")
+	f.String("rate-limit", "0", "bytes per second per session, e.g. 80MiB (0 = unlimited)")
+	f.String("metrics-address", "", "serve /healthz and /metrics on this HOST:PORT (empty = disabled)")
+	f.String("log-format", "text", "diagnostics format: text|json")
 	f.String("work-dir", "", "directory for the per-layer spool of streaming sessions (default $TMPDIR)")
 	f.Bool("spool", false, "deprecated: the streaming protocol always spools one layer at a time")
 	addQUICExperimentalFlags(cmd)
@@ -78,7 +85,7 @@ func runListenRemote(cmd *cobra.Command, _ []string) error {
 		return New(KindUsage, "", "%v", err)
 	}
 	bind := getFlagString(cmd, "bind-address")
-	tlsConfig, pin, mtls, err := listenTLSConfig(cmd, bind)
+	tlsConfig, pin, mtls, err := listenTLSConfig(cmd, bind, workDir, printer)
 	if err != nil {
 		return New(KindUsage, "", "%v", err)
 	}
@@ -198,22 +205,20 @@ func closeOptionalListener(listener transport.Listener) error {
 	return listener.Close()
 }
 
-func listenTLSConfig(cmd *cobra.Command, bind string) (*tls.Config, string, bool, error) {
+// selfSignedDirName holds the persistent self-signed material generated under
+// --work-dir when no explicit path is given.
+const selfSignedDirName = "tls"
+
+func listenTLSConfig(cmd *cobra.Command, bind, workDir string, printer Printer) (*tls.Config, string, bool, error) {
 	selfSigned := getFlagBool(cmd, "tls-self-signed")
 	certPath, keyPath := getFlagString(cmd, "tls-cert"), getFlagString(cmd, "tls-key")
-	if selfSigned && (certPath != "" || keyPath != "") {
-		return nil, "", false, errors.New("--tls-self-signed conflicts with --tls-cert/--tls-key")
-	}
 	var cert tls.Certificate
 	var pin string
 	var err error
-	if selfSigned {
-		host, _, splitErr := net.SplitHostPort(bind)
-		if splitErr != nil {
-			return nil, "", false, fmt.Errorf("--bind-address: %w", splitErr)
-		}
-		cert, pin, err = transport.SelfSignedCertificate([]string{host, "localhost", "127.0.0.1"}, time.Now())
-	} else {
+	switch {
+	case selfSigned:
+		cert, pin, err = selfSignedListenCertificate(bind, certPath, keyPath, workDir, printer)
+	default:
 		pair, pairErr := optionalKeyPair(certPath, keyPath)
 		if pairErr != nil {
 			return nil, "", false, pairErr
@@ -222,6 +227,9 @@ func listenTLSConfig(cmd *cobra.Command, bind string) (*tls.Config, string, bool
 			return nil, "", false, errors.New("TLS certificate required: use --tls-cert/--tls-key or --tls-self-signed")
 		}
 		cert = *pair
+		// The pin is what a client passes to --tls-pin, so it is printed for
+		// a provided certificate too, not only for a generated one.
+		pin, err = transport.CertificatePin(cert)
 	}
 	if err != nil {
 		return nil, "", false, err
@@ -242,6 +250,80 @@ func listenTLSConfig(cmd *cobra.Command, bind string) (*tls.Config, string, bool
 		mtls = true
 	}
 	return cfg, pin, mtls, nil
+}
+
+// selfSignedListenCertificate resolves the self-signed material. It persists
+// the key pair whenever a location is available (explicit --tls-cert/--tls-key
+// or --work-dir) so the pin survives a restart; only a server with nowhere to
+// write falls back to an ephemeral certificate.
+func selfSignedListenCertificate(bind, certPath, keyPath, workDir string, printer Printer) (tls.Certificate, string, error) {
+	hosts, err := selfSignedHosts(bind)
+	if err != nil {
+		return tls.Certificate{}, "", err
+	}
+	if (certPath == "") != (keyPath == "") {
+		return tls.Certificate{}, "", errors.New("--tls-cert and --tls-key must be provided together")
+	}
+	if certPath == "" && workDir != "" {
+		dir := filepath.Join(workDir, selfSignedDirName)
+		certPath = filepath.Join(dir, "self-signed.crt")
+		keyPath = filepath.Join(dir, "self-signed.key")
+	}
+	if certPath == "" {
+		cert, pin, genErr := transport.SelfSignedCertificate(hosts, time.Now())
+		if genErr != nil {
+			return tls.Certificate{}, "", genErr
+		}
+		printer.Warnf("ephemeral TLS certificate: the fingerprint changes at every restart; pass --work-dir or --tls-cert/--tls-key to persist it")
+		return cert, pin, nil
+	}
+	cert, pin, created, err := transport.LoadOrCreateSelfSigned(certPath, keyPath, hosts, time.Now())
+	if err != nil {
+		return tls.Certificate{}, "", err
+	}
+	if created {
+		printer.Infof("generated a persistent self-signed certificate in %s (valid %d years)", certPath, int(transport.PersistentCertificateValidity.Hours()/24/365))
+	} else {
+		printer.Infof("reusing the self-signed certificate in %s", certPath)
+	}
+	return cert, pin, nil
+}
+
+// selfSignedHosts lists the SAN entries of a generated certificate. A wildcard
+// bind address names no host, so it is dropped rather than embedded as 0.0.0.0.
+func selfSignedHosts(bind string) ([]string, error) {
+	host, _, err := net.SplitHostPort(bind)
+	if err != nil {
+		return nil, fmt.Errorf("--bind-address: %w", err)
+	}
+	hosts := []string{"localhost", "127.0.0.1", "::1"}
+	if ip := net.ParseIP(host); ip != nil {
+		if ip.IsUnspecified() {
+			return append(hosts, localAddresses()...), nil
+		}
+	}
+	if host != "" {
+		hosts = append(hosts, host)
+	}
+	return hosts, nil
+}
+
+// localAddresses returns the non-loopback unicast addresses of this host, so a
+// certificate bound to 0.0.0.0 still names the LAN address clients dial.
+func localAddresses() []string {
+	addrs, err := net.InterfaceAddrs()
+	if err != nil {
+		return nil
+	}
+	out := make([]string, 0, len(addrs))
+	for _, addr := range addrs {
+		ipNet, ok := addr.(*net.IPNet)
+		if !ok || ipNet.IP.IsLoopback() || !ipNet.IP.IsGlobalUnicast() {
+			continue
+		}
+		out = append(out, ipNet.IP.String())
+	}
+	return out
 }
 
 func parseLimitFlag(value string) (uint64, error) {

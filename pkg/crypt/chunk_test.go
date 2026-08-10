@@ -7,7 +7,7 @@ import (
 	"math/rand"
 	"testing"
 
-	"github.com/fpierri/backimage/pkg/compress"
+	"github.com/manprint/backimage/pkg/compress"
 )
 
 func mustSealer(t *testing.T, km *KeyMaterial, mode NonceMode) Sealer {

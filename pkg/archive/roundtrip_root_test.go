@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/fpierri/backimage/test/fixtures"
+	"github.com/manprint/backimage/test/fixtures"
 )
 
 // TestRoundTripRoot exercises the root-gated feature matrix (ACLs, caps,

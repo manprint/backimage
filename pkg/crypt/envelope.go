@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/fpierri/backimage/pkg/compress"
+	"github.com/manprint/backimage/pkg/compress"
 )
 
 // Envelope layout (overview.md §4.4):

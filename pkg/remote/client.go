@@ -11,10 +11,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/fpierri/backimage/pkg/protocol"
-	"github.com/fpierri/backimage/pkg/registry"
-	"github.com/fpierri/backimage/pkg/transport"
 	"github.com/google/go-containerregistry/pkg/v1"
+	"github.com/manprint/backimage/pkg/protocol"
+	"github.com/manprint/backimage/pkg/registry"
+	"github.com/manprint/backimage/pkg/transport"
 )
 
 type Config struct {

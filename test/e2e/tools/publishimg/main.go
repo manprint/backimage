@@ -14,9 +14,9 @@ import (
 	"github.com/google/go-containerregistry/pkg/name"
 	"github.com/google/go-containerregistry/pkg/v1"
 
-	"github.com/fpierri/backimage/pkg/compress"
-	"github.com/fpierri/backimage/pkg/index"
-	"github.com/fpierri/backimage/pkg/ociimg"
+	"github.com/manprint/backimage/pkg/compress"
+	"github.com/manprint/backimage/pkg/index"
+	"github.com/manprint/backimage/pkg/ociimg"
 )
 
 func main() {

@@ -13,12 +13,12 @@ import (
 
 	"golang.org/x/term"
 
-	"github.com/fpierri/backimage/pkg/archive"
-	"github.com/fpierri/backimage/pkg/cpu"
-	dockerd "github.com/fpierri/backimage/pkg/docker"
-	"github.com/fpierri/backimage/pkg/index"
-	"github.com/fpierri/backimage/pkg/progress"
-	"github.com/fpierri/backimage/pkg/recovery"
+	"github.com/manprint/backimage/pkg/archive"
+	"github.com/manprint/backimage/pkg/cpu"
+	dockerd "github.com/manprint/backimage/pkg/docker"
+	"github.com/manprint/backimage/pkg/index"
+	"github.com/manprint/backimage/pkg/progress"
+	"github.com/manprint/backimage/pkg/recovery"
 )
 
 var stdoutIsTerminal = func() bool { return term.IsTerminal(int(os.Stdout.Fd())) }

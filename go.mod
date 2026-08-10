@@ -1,4 +1,4 @@
-module github.com/fpierri/backimage
+module github.com/manprint/backimage
 
 go 1.26
 

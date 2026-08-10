@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/fpierri/backimage/internal/buildinfo"
+	"github.com/manprint/backimage/internal/buildinfo"
 )
 
 func runRoot(t *testing.T, args ...string) (stdout, stderr string, err error) {

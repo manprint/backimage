@@ -17,9 +17,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/fpierri/backimage/pkg/compress"
-	"github.com/fpierri/backimage/pkg/crypt"
-	"github.com/fpierri/backimage/pkg/index"
+	"github.com/manprint/backimage/pkg/compress"
+	"github.com/manprint/backimage/pkg/crypt"
+	"github.com/manprint/backimage/pkg/index"
 )
 
 // Source exposes files from the merged filesystem of a backup image.

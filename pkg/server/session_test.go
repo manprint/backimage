@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fpierri/backimage/pkg/protocol"
+	"github.com/manprint/backimage/pkg/protocol"
 )
 
 type memorySink struct {

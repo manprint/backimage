@@ -16,10 +16,10 @@ import (
 
 	"github.com/google/go-containerregistry/pkg/name"
 
-	"github.com/fpierri/backimage/pkg/crypt"
-	"github.com/fpierri/backimage/pkg/index"
-	"github.com/fpierri/backimage/pkg/registry"
-	"github.com/fpierri/backimage/pkg/restore"
+	"github.com/manprint/backimage/pkg/crypt"
+	"github.com/manprint/backimage/pkg/index"
+	"github.com/manprint/backimage/pkg/registry"
+	"github.com/manprint/backimage/pkg/restore"
 )
 
 // memReg is a minimal in-memory v2 registry (no auth challenge: the base

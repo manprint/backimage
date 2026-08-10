@@ -15,10 +15,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fpierri/backimage/internal/cli"
-	"github.com/fpierri/backimage/pkg/compress"
-	"github.com/fpierri/backimage/pkg/crypt"
-	"github.com/fpierri/backimage/pkg/index"
+	"github.com/manprint/backimage/internal/cli"
+	"github.com/manprint/backimage/pkg/compress"
+	"github.com/manprint/backimage/pkg/crypt"
+	"github.com/manprint/backimage/pkg/index"
 )
 
 const commandTestPass = "selfextract-test-passphrase"

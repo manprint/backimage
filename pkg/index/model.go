@@ -20,8 +20,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/fpierri/backimage/pkg/compress"
-	"github.com/fpierri/backimage/pkg/crypt"
+	"github.com/manprint/backimage/pkg/compress"
+	"github.com/manprint/backimage/pkg/crypt"
 )
 
 // SchemaVersion is the version written into every metadata file.

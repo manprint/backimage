@@ -10,7 +10,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/fpierri/backimage/pkg/archive"
+	"github.com/manprint/backimage/pkg/archive"
 )
 
 func main() {

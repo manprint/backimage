@@ -14,10 +14,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fpierri/backimage/pkg/archive"
-	"github.com/fpierri/backimage/pkg/compress"
-	"github.com/fpierri/backimage/pkg/crypt"
-	"github.com/fpierri/backimage/pkg/index"
+	"github.com/manprint/backimage/pkg/archive"
+	"github.com/manprint/backimage/pkg/compress"
+	"github.com/manprint/backimage/pkg/crypt"
+	"github.com/manprint/backimage/pkg/index"
 )
 
 const fixturePassphrase = "correct horse battery staple"

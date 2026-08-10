@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"io/fs"
 
-	"github.com/fpierri/backimage/pkg/crypt"
+	"github.com/manprint/backimage/pkg/crypt"
 )
 
 // Keep these values aligned with internal/cli/errors.go without importing

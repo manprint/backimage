@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fpierri/backimage/pkg/index"
-	backremote "github.com/fpierri/backimage/pkg/remote"
+	"github.com/manprint/backimage/pkg/index"
+	backremote "github.com/manprint/backimage/pkg/remote"
 )
 
 type captureRemote struct {

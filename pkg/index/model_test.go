@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fpierri/backimage/pkg/crypt"
+	"github.com/manprint/backimage/pkg/crypt"
 )
 
 func pad3(i int) string { return fmt.Sprintf("%06d", i) }

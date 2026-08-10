@@ -18,9 +18,27 @@ import (
 	"time"
 )
 
+// EphemeralCertificateValidity is the lifetime of a certificate that lives
+// only as long as the process. PersistentCertificateValidity is the lifetime
+// of one written to disk: a pinning client trusts the fingerprint, not an
+// expiry date, and a pin that silently stops working is worse than a long
+// lived key on a LAN.
+const (
+	EphemeralCertificateValidity  = 24 * time.Hour
+	PersistentCertificateValidity = 10 * 365 * 24 * time.Hour
+)
+
 // SelfSignedCertificate creates an ephemeral ECDSA certificate and its
 // lowercase SHA-256 fingerprint. It is suitable for TLS pinning on a LAN.
 func SelfSignedCertificate(hosts []string, now time.Time) (tls.Certificate, string, error) {
+	return SelfSignedCertificateFor(hosts, now, EphemeralCertificateValidity)
+}
+
+// SelfSignedCertificateFor is SelfSignedCertificate with an explicit validity.
+func SelfSignedCertificateFor(hosts []string, now time.Time, validity time.Duration) (tls.Certificate, string, error) {
+	if validity <= 0 {
+		validity = EphemeralCertificateValidity
+	}
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		return tls.Certificate{}, "", err
@@ -37,7 +55,7 @@ func SelfSignedCertificate(hosts []string, now time.Time) (tls.Certificate, stri
 		SerialNumber: serial,
 		Subject:      pkix.Name{CommonName: "backimage"},
 		NotBefore:    now.Add(-time.Minute),
-		NotAfter:     now.Add(24 * time.Hour),
+		NotAfter:     now.Add(validity),
 		KeyUsage:     x509.KeyUsageDigitalSignature,
 		ExtKeyUsage:  []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
 	}

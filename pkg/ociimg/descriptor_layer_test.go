@@ -6,9 +6,9 @@ import (
 	"io"
 	"testing"
 
-	"github.com/fpierri/backimage/pkg/index"
 	"github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/types"
+	"github.com/manprint/backimage/pkg/index"
 )
 
 func TestDescriptorLayerAndExistingImage(t *testing.T) {

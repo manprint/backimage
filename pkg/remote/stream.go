@@ -7,7 +7,7 @@ import (
 	"io"
 	"sync"
 
-	"github.com/fpierri/backimage/pkg/protocol"
+	"github.com/manprint/backimage/pkg/protocol"
 )
 
 // StreamFrameSize is the payload of one data frame. It bounds client memory:

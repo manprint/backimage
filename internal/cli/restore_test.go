@@ -17,12 +17,12 @@ import (
 
 	"github.com/google/go-containerregistry/pkg/name"
 
-	"github.com/fpierri/backimage/pkg/compress"
-	"github.com/fpierri/backimage/pkg/crypt"
-	"github.com/fpierri/backimage/pkg/index"
-	"github.com/fpierri/backimage/pkg/recovery"
-	"github.com/fpierri/backimage/pkg/registry"
-	restorepkg "github.com/fpierri/backimage/pkg/restore"
+	"github.com/manprint/backimage/pkg/compress"
+	"github.com/manprint/backimage/pkg/crypt"
+	"github.com/manprint/backimage/pkg/index"
+	"github.com/manprint/backimage/pkg/recovery"
+	"github.com/manprint/backimage/pkg/registry"
+	restorepkg "github.com/manprint/backimage/pkg/restore"
 )
 
 const cliRestorePass = "cli-restore-passphrase"

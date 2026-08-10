@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/fpierri/backimage/pkg/protocol"
-	"github.com/fpierri/backimage/pkg/transport"
+	"github.com/manprint/backimage/pkg/protocol"
+	"github.com/manprint/backimage/pkg/transport"
 )
 
 func TestServerConcurrencyLimit(t *testing.T) {

@@ -18,7 +18,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/types"
 
-	"github.com/fpierri/backimage/pkg/compress"
+	"github.com/manprint/backimage/pkg/compress"
 )
 
 // LayerFile is one file to be placed inside a layer tar.

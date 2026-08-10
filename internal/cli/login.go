@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/fpierri/backimage/pkg/registry"
+	"github.com/manprint/backimage/pkg/registry"
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 )
@@ -36,8 +36,16 @@ func newLoginCommand() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "login [REGISTRY]",
 		Short: "store registry credentials for backimage",
-		Args:  cobra.MaximumNArgs(1),
-		RunE:  runLogin,
+		Long: "store registry credentials for backimage.\n\n" +
+			"REGISTRY is a host, e.g. ghcr.io or docker.io (default: docker.io).\n" +
+			"Credentials are kept in backimage's own auth file, separate from\n" +
+			"Docker's; several registries can be logged in at the same time.\n" +
+			"On Docker Hub the password must be an access token, and a repository\n" +
+			"must include the namespace: docker.io/USER/NAME.\n\n" +
+			"  backimage login ghcr.io --username me --password-stdin < token.txt\n" +
+			"  backimage login --list",
+		Args: cobra.MaximumNArgs(1),
+		RunE: runLogin,
 	}
 	cmd.Flags().StringP("username", "u", "", "registry username")
 	cmd.Flags().StringP("password", "p", "", "password or token (visible in `ps`, prefer --password-stdin)")
@@ -188,8 +196,11 @@ func promptOnTTY(label string) string {
 func newLogoutCommand() *cobra.Command {
 	return &cobra.Command{
 		Use:   "logout [REGISTRY]",
-		Short: "remove registry credentials",
-		Args:  cobra.MaximumNArgs(1),
-		RunE:  runLogout,
+		Short: "remove stored registry credentials",
+		Long: "remove stored registry credentials.\n\n" +
+			"REGISTRY is a host, e.g. ghcr.io (default: docker.io). Only backimage's\n" +
+			"auth file is touched; Docker's credentials are left alone.",
+		Args: cobra.MaximumNArgs(1),
+		RunE: runLogout,
 	}
 }

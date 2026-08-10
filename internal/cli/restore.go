@@ -14,15 +14,15 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
-	"github.com/fpierri/backimage/pkg/archive"
-	"github.com/fpierri/backimage/pkg/cpu"
-	"github.com/fpierri/backimage/pkg/crypt"
-	dockerd "github.com/fpierri/backimage/pkg/docker"
-	"github.com/fpierri/backimage/pkg/index"
-	"github.com/fpierri/backimage/pkg/progress"
-	"github.com/fpierri/backimage/pkg/recovery"
-	"github.com/fpierri/backimage/pkg/registry"
-	restorepkg "github.com/fpierri/backimage/pkg/restore"
+	"github.com/manprint/backimage/pkg/archive"
+	"github.com/manprint/backimage/pkg/cpu"
+	"github.com/manprint/backimage/pkg/crypt"
+	dockerd "github.com/manprint/backimage/pkg/docker"
+	"github.com/manprint/backimage/pkg/index"
+	"github.com/manprint/backimage/pkg/progress"
+	"github.com/manprint/backimage/pkg/recovery"
+	"github.com/manprint/backimage/pkg/registry"
+	restorepkg "github.com/manprint/backimage/pkg/restore"
 )
 
 type sourceFlags struct {
@@ -50,14 +50,14 @@ func addSourceFlags(f *cobra.Command, repoAlias bool) {
 	if repoAlias {
 		flags.String("repo", "", "image reference (alias for positional IMAGE)")
 	}
-	flags.Bool("local-repo", false, "read the image from the local Docker daemon")
-	flags.String("oci-layout", "", "read from a local OCI layout directory")
-	flags.String("platform", "linux/amd64", "source platform")
-	flags.String("cache-size", "2GiB", "maximum downloaded-layer cache size")
-	flags.String("passphrase-file", "", "read passphrase from a file")
-	flags.Bool("passphrase-stdin", false, "read passphrase from stdin")
-	flags.String("password", "", "passphrase (visible in shell history and process listings)")
-	flags.String("identity", "", "age private key file")
+	flags.Bool("local-repo", false, "read the image from the local Docker daemon instead of a registry")
+	flags.String("oci-layout", "", "read the image from this local OCI layout directory")
+	flags.String("platform", "linux/amd64", "platform variant to read from the multi-arch image, OS/ARCH")
+	flags.String("cache-size", "2GiB", "maximum size of the downloaded-layer cache, e.g. 512MiB, 4GiB (0 disables it)")
+	flags.String("passphrase-file", "", "read the backup passphrase from this file (first line)")
+	flags.Bool("passphrase-stdin", false, "read the backup passphrase from stdin")
+	flags.String("password", "", "backup passphrase inline (visible in shell history and in `ps`: prefer --passphrase-file)")
+	flags.String("identity", "", "age private key file, for a backup encrypted with --recipient")
 }
 
 func readSourceFlags(cmd *cobra.Command) sourceFlags {
@@ -169,21 +169,38 @@ func wipeBytes(b []byte) {
 }
 
 func newRestoreCommand() *cobra.Command {
-	cmd := &cobra.Command{Use: "restore [IMAGE]", Short: "restore a backup image to tar or disk", Args: cobra.MaximumNArgs(1), RunE: runRestore}
+	cmd := &cobra.Command{
+		Use:   "restore [IMAGE]",
+		Short: "restore a backup image to disk or to a tar file",
+		Long: "restore a backup image to disk or to a tar file.\n\n" +
+			"IMAGE is the reference to restore (or --repo, or a local source with\n" +
+			"--local-repo/--oci-layout). Choose one of two outcomes: -x extracts into\n" +
+			"--destination, -o writes a tar file (- for stdout). Without either, a tar\n" +
+			"is written to stdout.\n\n" +
+			"  # extract everything into /restore\n" +
+			"  backimage restore ghcr.io/me/dumps:daily -x -C /restore --passphrase-file ./pass\n\n" +
+			"  # only the PDFs, without the leading directory level\n" +
+			"  backimage restore ghcr.io/me/dumps:daily -x -C . \\\n" +
+			"    --include '**/*.pdf' --strip-components 1 --passphrase-file ./pass\n\n" +
+			"  # keep the archive as a tar file\n" +
+			"  backimage restore ghcr.io/me/dumps:daily -o backup.tar --passphrase-file ./pass",
+		Args: cobra.MaximumNArgs(1),
+		RunE: runRestore,
+	}
 	addSourceFlags(cmd, true)
 	f := cmd.Flags()
-	f.BoolP("extract", "x", false, "extract instead of writing a tar")
-	f.StringP("destination", "C", ".", "destination directory")
-	f.StringP("output", "o", "", "tar filename (- for stdout)")
-	f.StringSlice("include", nil, "include glob (repeatable)")
-	f.StringSlice("exclude", nil, "exclude glob (repeatable)")
-	f.Int("strip-components", 0, "remove leading path components")
-	f.Int("cpus", cpu.Default(), "maximum CPUs used during restore (default: half available CPUs)")
-	f.Bool("no-preserve-owner", false, "do not preserve ownership")
-	f.Bool("remove-local-image", false, "remove the local Docker image after a successful restore")
-	f.Bool("overwrite", false, "replace an existing output")
-	f.Bool("no-verify", false, "skip plaintext chunk digest verification")
-	f.Int("jobs", 3, "parallel layer downloads")
+	f.BoolP("extract", "x", false, "extract the files into --destination instead of writing a tar")
+	f.StringP("destination", "C", ".", "directory the files are extracted into (with -x)")
+	f.StringP("output", "o", "", "write the archive to this tar file; - means stdout")
+	f.StringSlice("include", nil, "restore only paths matching this glob, e.g. '**/*.pdf' (repeatable)")
+	f.StringSlice("exclude", nil, "skip paths matching this glob (repeatable)")
+	f.Int("strip-components", 0, "drop this many leading path components from each restored path (like tar)")
+	f.Int("cpus", cpu.Default(), "maximum CPUs used for decompression and decryption (default: half the available CPUs)")
+	f.Bool("no-preserve-owner", false, "restore files as the current user instead of the archived owner")
+	f.Bool("remove-local-image", false, "delete the pulled Docker image once the restore succeeded")
+	f.Bool("overwrite", false, "allow writing over an existing tar file or a non-empty destination")
+	f.Bool("no-verify", false, "skip the plaintext chunk digest check (faster, unsafe)")
+	f.Int("jobs", 3, "number of concurrent layer downloads")
 	return cmd
 }
 

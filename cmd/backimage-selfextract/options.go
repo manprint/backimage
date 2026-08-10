@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/fpierri/backimage/pkg/crypt"
-	"github.com/fpierri/backimage/pkg/recovery"
+	"github.com/manprint/backimage/pkg/crypt"
+	"github.com/manprint/backimage/pkg/recovery"
 )
 
 type commonOptions struct {

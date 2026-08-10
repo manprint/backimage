@@ -7,9 +7,9 @@ import (
 	"io"
 	"os"
 
-	"github.com/fpierri/backimage/pkg/compress"
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 	"github.com/google/go-containerregistry/pkg/v1/types"
+	"github.com/manprint/backimage/pkg/compress"
 )
 
 // fileLayer is a v1.Layer backed by a pre-compressed tar file on disk.

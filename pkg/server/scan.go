@@ -8,8 +8,8 @@ import (
 	"io"
 	"os"
 
-	"github.com/fpierri/backimage/pkg/archive"
-	"github.com/fpierri/backimage/pkg/index"
+	"github.com/manprint/backimage/pkg/archive"
+	"github.com/manprint/backimage/pkg/index"
 )
 
 // scanStats mirrors archive.Stats for a stream the server did not produce.

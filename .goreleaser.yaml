@@ -34,7 +34,7 @@ builds:
     flags:
       - -trimpath
     ldflags:
-      - -s -w -X github.com/fpierri/backimage/internal/buildinfo.Version={{ .Version }} -X github.com/fpierri/backimage/internal/buildinfo.Commit={{ .Commit }} -X github.com/fpierri/backimage/internal/buildinfo.Date={{ .Date }}
+      - -s -w -X github.com/manprint/backimage/internal/buildinfo.Version={{ .Version }} -X github.com/manprint/backimage/internal/buildinfo.Commit={{ .Commit }} -X github.com/manprint/backimage/internal/buildinfo.Date={{ .Date }}
 
 archives:
   - formats: [tar.gz]

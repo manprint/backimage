@@ -16,7 +16,7 @@ import (
 
 	"golang.org/x/sys/unix"
 
-	"github.com/fpierri/backimage/test/fixtures"
+	"github.com/manprint/backimage/test/fixtures"
 )
 
 func TestRoundTripIncludesExcludes(t *testing.T) {

@@ -24,7 +24,7 @@ backimage version
 Richiede Go 1.26 o superiore:
 
 ```console
-go install github.com/fpierri/backimage/cmd/backimage@latest
+go install github.com/manprint/backimage/cmd/backimage@latest
 # oppure, dentro il checkout:
 make build
 ```
@@ -901,21 +901,69 @@ backimage repo prune REPO [flags]
 ```
 
 - `stats` mostra tag, blob unici/condivisi e storage effettivo.
-- `tags` elenca tag, digest e data di creazione.
+- `tags` elenca tag, digest e data di creazione (`-` se l'immagine non ha
+  timestamp).
 - `caps` mostra le capacità lifecycle dell’adapter del registry.
 - `rm` elimina un manifest; è sempre richiesto `--yes`, e `--force` consente
   di eliminare un tag ancora referenziato.
-- `prune` applica retention. Flag: `--keep-last N`, `--keep-within DURATION`,
+- `prune` applica retention. Flag: `--keep-last N`,
+  `--keep-within DURATION`, `--delete-older-than DURATION`,
   `--keep-tag GLOB` (ripetibile), `--dry-run`, `--yes`.
 
-Esempio sicuro:
+#### Durate: unità accettate
+
+Le durate di `prune` accettano `s`, `m`, `h`, `d` (giorni), `w` (settimane) e le
+combinazioni: `90m`, `12h`, `3d`, `2w`, `1d12h`. **L'unità è obbligatoria**: un
+numero nudo come `3` viene rifiutato, perché non si capirebbe se sono secondi,
+ore o giorni.
+
+#### Regole di retention
+
+Un tag è conservato se **almeno una** regola lo seleziona, ed eliminato solo se
+nessuna lo seleziona. Senza alcuna regola non viene eliminato nulla. I tag
+**senza data di creazione** sono sempre conservati: un tag estraneo (non prodotto
+da backimage) non viene rimosso per errore.
+
+| Flag | Significato |
+| --- | --- |
+| `--keep-last N` | conserva gli N backup più recenti, a prescindere dall'età |
+| `--keep-within DURATION` | conserva i backup più recenti di DURATION |
+| `--delete-older-than DURATION` | elimina i backup più vecchi di DURATION |
+| `--keep-tag GLOB` | conserva i tag il cui nome corrisponde al glob |
+
+`--keep-within` e `--delete-older-than` sono la stessa regola detta al
+contrario: `--keep-within 3d` ≡ `--delete-older-than 3d`. Indicarle entrambe è
+un errore d'uso, per non lasciare dubbi su quale prevalga.
+
+Esempi:
 
 ```console
-backimage repo prune ghcr.io/team/dumps --keep-last 7 --keep-tag 'release-*' \
-  --dry-run --json
-backimage repo prune ghcr.io/team/dumps --keep-last 7 --keep-tag 'release-*' \
-  --yes
+# 1. Vedere cosa verrebbe eliminato, senza toccare il registry.
+backimage repo prune ghcr.io/team/dumps --keep-last 7 --dry-run
 ```
+
+```text
+regole attive: mantieni i 7 più recenti
+2 tag da eliminare (dry-run, nessuna modifica al registry), 7 conservati:
+  nightly-20260801T031500Z	2026-08-01T03:15:00Z	sha256:7be74df2...
+  nightly-20260802T031500Z	2026-08-02T03:15:00Z	sha256:0f9c21bf...
+ripetere senza --dry-run e con --yes per applicare.
+```
+
+```console
+# 2. Eliminare tutto ciò che è più vecchio di 3 giorni.
+backimage repo prune ghcr.io/team/dumps --delete-older-than 3d --yes
+
+# 3. Più vecchio di 12 ore, ma tenendo sempre i 2 più recenti e le release.
+backimage repo prune ghcr.io/team/dumps --delete-older-than 12h \
+  --keep-last 2 --keep-tag 'release-*' --yes
+
+# 4. Output per script: elenco dei tag rimossi e quanti restano.
+backimage repo prune ghcr.io/team/dumps --keep-last 7 --dry-run --json
+```
+
+Senza `--yes` il comando si rifiuta di eliminare e dice quanti tag sarebbero
+coinvolti; `--dry-run` non richiede `--yes`.
 
 ### `doctor`
 
@@ -945,8 +993,11 @@ backimage listen-remote \
 
 backimage backup /srv/data --repo ghcr.io/team/dumps:remote \
   --remote backup.example:7575 \
-  --tls-pin SHA256:... --auth-token-file /run/secrets/remote-token
+  --tls-pin 9a55ed72... --auth-token-file /run/secrets/remote-token
 ```
+
+`--tls-pin` vuole solo l'esadecimale, senza il prefisso `SHA256:` stampato dal
+server.
 
 ## Backup remoto in streaming (protocollo v2)
 
@@ -983,6 +1034,134 @@ Misure reali su backup da 4 GiB incompressibili con `--max-layer-size 512MiB`:
 spool client 0 byte, RSS client 19 MiB senza cifratura, picco spool server
 1 GiB, directory di lavoro vuota a fine run.
 
+### Certificati TLS del server
+
+Il client autentica il server per **pinning**: confronta l'impronta SHA-256 del
+certificato con il valore di `--tls-pin`. Non serve una CA, ma l'impronta deve
+restare **stabile**: se cambia, tutti i client si fermano con
+`TLS certificate fingerprint mismatch`.
+
+Tre modi di fornire il certificato, dal più semplice al più strutturato.
+
+#### 1. Self-signed persistente (raccomandato in LAN)
+
+`--tls-self-signed` genera la coppia chiave/certificato e la **salva**, così
+l'impronta sopravvive ai riavvii. La destinazione è, in ordine:
+
+| Flag presenti | Dove finisce il materiale |
+| --- | --- |
+| `--tls-self-signed --tls-cert C --tls-key K` | esattamente in `C` e `K` |
+| `--tls-self-signed --work-dir D` | `D/tls/self-signed.crt` e `D/tls/self-signed.key` |
+| solo `--tls-self-signed` | in memoria: **effimero**, impronta nuova a ogni avvio |
+
+Se i file esistono vengono riusati; se mancano vengono creati (certificato
+valido 10 anni, chiave a `0600`, directory create con `0700`). La chiave non
+viene mai sovrascritta.
+
+Percorso esplicito, indipendente dallo spool:
+
+```console
+backimage listen-remote \
+  --bind-address 0.0.0.0:7575 --udp --also-tcp \
+  --tls-self-signed \
+  --tls-cert /etc/backimage/server.crt \
+  --tls-key /etc/backimage/server.key \
+  --insecure-no-auth \
+  --work-dir /var/lib/backimage/spool --max-sessions 3
+```
+
+Primo avvio:
+
+```text
+generated a persistent self-signed certificate in /etc/backimage/server.crt (valid 10 years)
+TLS fingerprint SHA256:9a55ed72...26cc
+listening on [::]:7575 via quic (TLS 1.3, protocol v2, streaming pipeline, layer spool in /var/lib/backimage/spool)
+```
+
+Avvii successivi: stessa impronta, riga diversa.
+
+```text
+reusing the self-signed certificate in /etc/backimage/server.crt
+TLS fingerprint SHA256:9a55ed72...26cc
+```
+
+Variante senza indicare percorsi: basta `--work-dir`.
+
+```console
+backimage listen-remote \
+  --bind-address 0.0.0.0:7575 --tls-self-signed \
+  --insecure-no-auth \
+  --work-dir /home/mint/backimage-srv/data
+# -> /home/mint/backimage-srv/data/tls/self-signed.{crt,key}
+```
+
+Senza `--work-dir` né `--tls-cert/--tls-key` il server avverte esplicitamente
+che l'impronta è usa e getta:
+
+```text
+warning: ephemeral TLS certificate: the fingerprint changes at every restart; pass --work-dir or --tls-cert/--tls-key to persist it
+```
+
+#### 2. Certificato generato a mano con `openssl`
+
+Utile quando la chiave è gestita da un altro processo o va condivisa con altri
+servizi. ECDSA P-256, 10 anni, con gli indirizzi che i client compongono nella
+SAN:
+
+```console
+openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes \
+  -keyout /etc/backimage/server.key -out /etc/backimage/server.crt \
+  -days 3650 -subj "/CN=backimage" \
+  -addext "subjectAltName=IP:192.168.1.20,DNS:backup.example,DNS:localhost,IP:127.0.0.1"
+chmod 600 /etc/backimage/server.key
+```
+
+Avvio **senza** `--tls-self-signed`: il server stampa l'impronta anche per un
+certificato fornito, quindi non serve calcolarla a parte.
+
+```console
+backimage listen-remote \
+  --bind-address 0.0.0.0:7575 \
+  --tls-cert /etc/backimage/server.crt \
+  --tls-key /etc/backimage/server.key \
+  --auth-token-file /etc/backimage/remote-token \
+  --allow-repo ghcr.io/team/dumps \
+  --work-dir /var/lib/backimage/spool
+```
+
+```text
+TLS fingerprint SHA256:4d1b8f...a07e
+listening on 0.0.0.0:7575 via tcp (TLS 1.3, protocol v2, streaming pipeline, layer spool in /var/lib/backimage/spool)
+```
+
+Se serve ricavare l'impronta da un certificato senza avviare il server:
+
+```console
+openssl x509 -in /etc/backimage/server.crt -outform DER | sha256sum | cut -d' ' -f1
+```
+
+#### 3. Certificato firmato da una CA interna
+
+Con una CA il client verifica la catena (`--tls-ca`) e `--tls-pin` non serve;
+`--tls-ca` sul server abilita mTLS e autentica i client (Esempio C).
+
+#### Uso del PIN sul client
+
+`--tls-pin` accetta **solo l'esadecimale**: il prefisso `SHA256:` stampato dal
+server non va incollato. I due punti come separatore sono tollerati.
+
+```console
+# corretto
+backimage backup /srv/data --repo ghcr.io/team/dumps --tag daily \
+  --remote 192.168.1.20:7575 --tls-pin 9a55ed723fdfed5ba61e261ff5bc875e324e4c8296a08f47018fa798fcde26cc
+
+# errato: "SHA256:" non è esadecimale
+backimage backup ... --tls-pin SHA256:9a55ed72...
+```
+
+Il PIN è pubblico: si può distribuire per configuration management o nel
+comando di backup. La chiave privata (`server.key`) non lascia mai il server.
+
 ### Esempio A — senza autenticazione applicativa (LAN isolata)
 
 TLS resta obbligatorio: `--insecure-no-auth` disattiva solo l'autenticazione
@@ -1000,12 +1179,17 @@ backimage listen-remote \
   --max-sessions 2
 ```
 
-Il server stampa due righe da annotare:
+Il server stampa le righe da annotare:
 
 ```text
+generated a persistent self-signed certificate in /var/lib/backimage/spool/tls/self-signed.crt (valid 10 years)
 TLS fingerprint SHA256:9f2c...e41
 listening on 0.0.0.0:7575 via tcp (TLS 1.3, protocol v2, streaming pipeline, layer spool in /var/lib/backimage/spool)
 ```
+
+Con `--work-dir` il certificato è persistente: l'impronta resta la stessa dopo
+un riavvio, quindi il `--tls-pin` dei client non va aggiornato. Vedi
+[Certificati TLS del server](#certificati-tls-del-server).
 
 Client (nessun token; il PIN è obbligatorio, un self-signed senza pin viene
 rifiutato):
@@ -1175,11 +1359,14 @@ backimage backup /srv/data --repo ghcr.io/team/dumps --tag daily \
   --passphrase-file ./backup-passphrase
 ```
 
-In questo scenario non servono `--tls-cert` né `--tls-key` sul client e non
-servono file di certificato sul server: `--tls-self-signed` genera la coppia
-in memoria. Il certificato dura 24 ore e cambia a ogni riavvio; quando cambia,
-occorre copiare il nuovo PIN sul client. `--tls-pin` è obbligatorio per fidarsi
-di un certificato self-signed: senza pin o CA il client rifiuta il collegamento.
+In questo scenario non servono `--tls-cert` né `--tls-key` sul client:
+`--tls-self-signed` produce la coppia sul server. Con `--work-dir` (o con
+`--tls-cert/--tls-key`) il materiale viene salvato e il PIN resta valido dopo
+un riavvio; senza nessuno dei due il certificato vive in memoria, dura 24 ore e
+il PIN va ricopiato sul client a ogni riavvio — vedi
+[Certificati TLS del server](#certificati-tls-del-server). `--tls-pin` è
+obbligatorio per fidarsi di un certificato self-signed: senza pin o CA il
+client rifiuta il collegamento.
 
 Se la LAN è completamente isolata e si accetta di non autenticare i client,
 si può sostituire `--auth-token-file` con `--insecure-no-auth` sul server e
@@ -1214,7 +1401,7 @@ Ruoli distinti:
 
 | Elemento | Serve a | Dove risiede |
 | --- | --- | --- |
-| certificato/chiave server | cifrare TLS e autenticare il server | server, oppure memoria con `--tls-self-signed` |
+| certificato/chiave server | cifrare TLS e autenticare il server | server: file indicati, `WORKDIR/tls/` con `--tls-self-signed`, o memoria se non c'è dove scrivere |
 | `--tls-pin` o `--tls-ca` | verificare il certificato server | client |
 | certificato/chiave client | autenticazione mTLS opzionale | client |
 | `--auth-token-file` | autenticazione applicativa alternativa a mTLS | entrambi, stesso token |
@@ -1227,9 +1414,9 @@ Flag server:
 | `--bind-address` | `0.0.0.0:7575` | Indirizzo di ascolto |
 | `--udp` | `false` | QUIC invece di TCP |
 | `--also-tcp` | `false` | Aggiunge TCP quando è attivo QUIC |
-| `--tls-cert`, `--tls-key` | — | Certificato/chiave server PEM |
+| `--tls-cert`, `--tls-key` | — | Certificato/chiave server PEM; il pin viene stampato anche in questo caso |
 | `--tls-ca` | — | CA per autenticare client mTLS |
-| `--tls-self-signed` | `false` | Certificato effimero e pin stampato |
+| `--tls-self-signed` | `false` | Genera il certificato e stampa il pin; persistente in `--tls-cert/--tls-key` o in `WORKDIR/tls/`, effimero se manca entrambi |
 | `--auth-token`, `--auth-token-file` | — | Token condiviso |
 | `--insecure-no-auth` | `false` | Disabilita auth (fortemente sconsigliato) |
 | `--allow-repo PREFIX` | — | Prefix repository consentiti; ripetibile |
@@ -1242,12 +1429,94 @@ Flag server:
 I flag nascosti `--x-quic-streams`, `--x-quic-window`, `--x-quic-gso` e
 `--x-quic-cc` sono sperimentali e non fanno parte dell’API stabile.
 
+### Server in Docker con `compose.yml`
+
+Ogni flag di `listen-remote` è configurabile anche da ambiente:
+`BACKIMAGE_` + nome del flag in maiuscolo con i `-` sostituiti da `_`
+(`--bind-address` → `BACKIMAGE_BIND_ADDRESS`, `--tls-self-signed` →
+`BACKIMAGE_TLS_SELF_SIGNED`). Un flag esplicito sulla command line vince
+sempre sull'ambiente; una variabile vuota equivale a non impostata. Questo
+rende configurabile l'immagine distroless, che non ha una shell nell'entrypoint.
+
+Il `compose.yml` nella radice del repository avvia il server con i default
+equivalenti a:
+
+```console
+backimage listen-remote --bind-address 0.0.0.0:7575 --udp --also-tcp \
+  --tls-self-signed --insecure-no-auth --work-dir /data --max-sessions 3
+```
+
+```console
+docker compose up -d
+docker compose logs -f     # annotare la riga "TLS fingerprint SHA256:..."
+```
+
+Estratto minimo, se serve un file proprio:
+
+```yaml
+services:
+  backimage:
+    image: ghcr.io/manprint/backimage:latest
+    command: ["listen-remote"]
+    restart: unless-stopped
+    ports:
+      - "7575:7575/tcp"
+      - "7575:7575/udp"
+    volumes:
+      - backimage-data:/data
+    environment:
+      BACKIMAGE_BIND_ADDRESS: "0.0.0.0:7575"
+      BACKIMAGE_UDP: "true"
+      BACKIMAGE_ALSO_TCP: "true"
+      BACKIMAGE_TLS_SELF_SIGNED: "true"
+      BACKIMAGE_INSECURE_NO_AUTH: "true"
+      BACKIMAGE_WORK_DIR: "/data"
+      BACKIMAGE_MAX_SESSIONS: "3"
+
+volumes:
+  backimage-data:
+```
+
+Poiché `BACKIMAGE_WORK_DIR` sta su un volume, il certificato self-signed
+persiste in `/data/tls/` e il PIN resta lo stesso dopo `docker compose restart`.
+
+Il `compose.yml` del repository elenca commentate tutte le altre variabili:
+`BACKIMAGE_TLS_CERT`/`BACKIMAGE_TLS_KEY` (certificato proprio, oppure posizione
+in cui persistere quello generato), `BACKIMAGE_TLS_CA` (mTLS),
+`BACKIMAGE_AUTH_TOKEN_FILE`, `BACKIMAGE_ALLOW_REPO` (lista separata da virgole),
+`BACKIMAGE_MAX_BYTES`, `BACKIMAGE_RATE_LIMIT`, `BACKIMAGE_METRICS_ADDRESS`,
+`BACKIMAGE_LOG_FORMAT`, `BACKIMAGE_VERBOSE`, `BACKIMAGE_JSON`,
+`BACKIMAGE_QUIET`, `BACKIMAGE_NO_COLOR`, `BACKIMAGE_CONFIG`,
+`BACKIMAGE_AUTH_FILE` e le variabili QUIC sperimentali.
+
+Note operative:
+
+- il volume `/data` è dello spool dei layer *e* del materiale TLS: dimensionarlo
+  con `2 × max-layer-size × max-sessions`;
+- con un bind mount host la directory va prima assegnata all'utente
+  dell'immagine: `sudo chown 65532:65532 /srv/backimage/data`;
+- `BACKIMAGE_METRICS_ADDRESS` va legato a `0.0.0.0:9090` dentro al container
+  (con `127.0.0.1` sarebbe raggiungibile solo dall'interno) e la porta va
+  pubblicata;
+- QUIC chiede un buffer UDP grande: senza i `sysctls` commentati nel file,
+  quic-go registra un warning sul receive buffer;
+- immagine distroless: nessuna shell, quindi gli healthcheck basati su `test`
+  non funzionano.
+
+Client verso il container (il PIN è quello stampato nei log):
+
+```console
+backimage backup /srv/data --repo ghcr.io/team/dumps --tag daily --timestamp \
+  --remote HOST:7575 --udp --tls-pin <PIN>
+```
+
 ## File, cache e variabili d’ambiente
 
 | Variabile/percorso | Funzione |
 | --- | --- |
 | `BACKIMAGE_PASSPHRASE` | Passphrase per immagini auto-estraenti e CLI |
 | `BACKIMAGE_AUTH_FILE` | File credenziali custom |
+| `BACKIMAGE_<FLAG>` | Valore di default per il flag omonimo di `listen-remote` (`--bind-address` → `BACKIMAGE_BIND_ADDRESS`) |
 | `XDG_CONFIG_HOME` | Base per `backimage/auth.json` e config |
 | `XDG_CACHE_HOME` | Cache layer e checkpoint; cache restore default 2 GiB |
 | `TMPDIR` | Spool se non è impostato `--temp-dir` |
