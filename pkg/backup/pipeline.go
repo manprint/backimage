@@ -1358,7 +1358,9 @@ func (b *builder) pushRegistry(ctx context.Context, idx v1.ImageIndex, images ma
 				report(false)
 			}
 			if pr.FromCheckpoint && !resumingReported && b.cfg.Progress != nil {
-				b.cfg.Progress("upload: ripresa da checkpoint")
+				// Keep the stable marker used by operators and E2E checks; the
+				// surrounding progress logger adds the timestamp.
+				b.cfg.Progress("resuming from checkpoint")
 				resumingReported = true
 			}
 		}
