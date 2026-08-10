@@ -230,6 +230,27 @@ func TestRestoreTarExtractPartialAndJSON(t *testing.T) {
 	}
 }
 
+func TestRestoreEncryptedStartupProgress(t *testing.T) {
+	s, _ := newMockImageSource(t, true)
+	withMockSource(t, s)
+	dst := filepath.Join(t.TempDir(), "restore")
+	_, stderr, err := runRoot(t, "restore", "example.test/repo:tag", "--extract", "-C", dst,
+		"--no-preserve-owner", "--password", cliRestorePass)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, message := range []string{
+		"restore: metadati backup letti",
+		"restore: apertura file chiavi keys.pass.age",
+		"restore: derivazione chiave dalla passphrase con scrypt in corso",
+		"restore: chiavi backup sbloccate",
+	} {
+		if !strings.Contains(stderr, message) {
+			t.Fatalf("restore startup log %q missing from %q", message, stderr)
+		}
+	}
+}
+
 func TestRestoreRemovesLocalImageAfterSuccess(t *testing.T) {
 	s, _ := newMockImageSource(t, false)
 	withMockSource(t, s)

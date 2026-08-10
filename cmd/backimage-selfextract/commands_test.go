@@ -213,9 +213,20 @@ func TestListEncryptedAndFormats(t *testing.T) {
 func TestExtractEncryptedWithPassword(t *testing.T) {
 	f := newCommandFixture(t, true)
 	dst := filepath.Join(t.TempDir(), "restore")
-	out, _, err := captureRun(t, "extract", "--root", f.root, "--out", dst, "--no-preserve-owner", "--password", commandTestPass)
+	out, stderr, err := captureRun(t, "extract", "--root", f.root, "--out", dst, "--no-preserve-owner", "--password", commandTestPass)
 	if err != nil || !strings.Contains(out, "estratti: 1 file") {
 		t.Fatalf("password extract = %q, %v", out, err)
+	}
+	for _, message := range []string{
+		"restore: apertura backup e caricamento metadati",
+		"restore: metadati backup letti",
+		"restore: apertura file chiavi keys.pass.age",
+		"restore: derivazione chiave dalla passphrase con scrypt in corso",
+		"restore: chiavi backup sbloccate",
+	} {
+		if !strings.Contains(stderr, message) {
+			t.Fatalf("extract startup log %q missing from %q", message, stderr)
+		}
 	}
 	if got, err := os.ReadFile(filepath.Join(dst, "root", "a.txt")); err != nil || string(got) != "hello from selfextract\n" {
 		t.Fatalf("password extracted = %q, %v", got, err)

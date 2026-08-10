@@ -189,6 +189,7 @@ func (b *Backup) Unlock(ctx context.Context, identity crypt.Identity) error {
 	if identity.AgeKeyFile != "" {
 		name = "keys.age"
 	}
+	b.reportProgress(fmt.Sprintf("restore: apertura file chiavi %s", name))
 	var r io.ReadCloser
 	var err error
 	if b.blobs != nil {
@@ -202,6 +203,11 @@ func (b *Backup) Unlock(ctx context.Context, identity crypt.Identity) error {
 	}
 	if err != nil {
 		return fmt.Errorf("opening %s: %w", name, err)
+	}
+	if len(identity.Passphrase) > 0 {
+		b.reportProgress("restore: derivazione chiave dalla passphrase con scrypt in corso")
+	} else {
+		b.reportProgress("restore: sblocco chiavi con identità age in corso")
 	}
 	km, err := crypt.UnwrapKeys(r, identity)
 	closeErr := r.Close()
@@ -221,6 +227,7 @@ func (b *Backup) Unlock(ctx context.Context, identity crypt.Identity) error {
 		b.key.Wipe()
 	}
 	b.key, b.opener = km, opener
+	b.reportProgress("restore: chiavi backup sbloccate")
 	return nil
 }
 

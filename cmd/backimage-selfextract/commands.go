@@ -61,10 +61,17 @@ func cmdInfo(_ context.Context, args []string) error {
 	return nil
 }
 
-func openBackup(ctx context.Context, common commonOptions, required bool) (*recovery.Backup, error) {
+func openBackup(ctx context.Context, common commonOptions, required bool, report func(string)) (*recovery.Backup, error) {
+	if report != nil {
+		report("restore: apertura backup e caricamento metadati")
+	}
 	b, err := recovery.OpenLocal(ctx, common.root)
 	if err != nil {
 		return nil, err
+	}
+	if report != nil {
+		b.SetProgress(report)
+		report("restore: metadati backup letti")
 	}
 	if err := common.unlock(ctx, b, required); err != nil {
 		b.Close()
@@ -85,7 +92,7 @@ func cmdList(ctx context.Context, args []string) error {
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
-	b, err := openBackup(ctx, common, true)
+	b, err := openBackup(ctx, common, true, nil)
 	if err != nil {
 		return err
 	}
@@ -117,7 +124,7 @@ func cmdTar(ctx context.Context, args []string) error {
 	if stdoutIsTerminal() {
 		return usageErrorf("tar scrive dati binari: reindirizza l'output, es. `docker run --rm -i IMAGE tar > backup.tar`")
 	}
-	b, err := openBackup(ctx, common, true)
+	b, err := openBackup(ctx, common, true, func(message string) { progress.WriteLine(stderr, message) })
 	if err != nil {
 		return err
 	}
@@ -168,7 +175,7 @@ func cmdExtract(ctx context.Context, args []string) error {
 			return err
 		}
 	}
-	b, err := openBackup(ctx, common, true)
+	b, err := openBackup(ctx, common, true, func(message string) { progress.WriteLine(stderr, message) })
 	if err != nil {
 		return err
 	}

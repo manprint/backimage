@@ -20,6 +20,15 @@ backimage restore ghcr.io/team/dumps:daily --extract -C ./restore \
   --passphrase-file /run/secrets/backup
 ```
 
+Durante l'avvio del restore i log su stderr mostrano anche le fasi che possono
+richiedere tempo prima dell'accesso ai dati: apertura della sorgente,
+caricamento di manifest e tabella dei chunk, apertura di `keys.pass.age`,
+derivazione della chiave con scrypt e sblocco delle chiavi del backup. La
+derivazione scrypt è volutamente CPU-intensive per proteggere la passphrase;
+non è decompressione dei dati e viene eseguita una sola volta per restore.
+Ogni riga contiene il timestamp iniziale, quindi un intervallo senza nuovi
+byte indica comunque quale fase è in corso.
+
 Una passphrase errata viene rilevata usando il solo layer dei metadati, prima
 di scaricare un layer dati. `--no-verify` è una modalità di emergenza e salta
 il digest plaintext; autenticazione e decompressione restano obbligatorie.

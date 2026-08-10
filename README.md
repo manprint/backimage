@@ -480,9 +480,13 @@ permette di distinguere il tempo passato in una fase anche quando non arrivano
 nuovi byte. Le fasi del backup comprendono scansione sorgenti, piano dei
 chunk/layer, archiviazione-compressione-cifratura, preparazione OCI, controllo
 e upload dei blob, pubblicazione dei manifest e completamento. Nel restore
-sono indicati apertura/sblocco, lettura-decrittazione-decompressione di ogni
-chunk, verifica digest, scrittura filesystem e finalizzazione dei metadati
-delle directory.
+sono indicati apertura della sorgente, caricamento di manifest e tabella dei
+chunk, apertura del file chiavi, derivazione della chiave passphrase con scrypt,
+sblocco, lettura-decrittazione-decompressione di ogni chunk, verifica digest,
+scrittura filesystem e finalizzazione dei metadati delle directory. La
+derivazione scrypt è volutamente CPU-intensive, non è decompressione e viene
+eseguita una sola volta per restore; i timestamp rendono visibile anche questa
+fase iniziale senza nuovi byte estratti.
 
 `restore --extract` stampa inoltre l'avanzamento in byte e percentuale; anche
 l'immagine auto-estraente mostra gli stessi eventi con `docker run`. Gli

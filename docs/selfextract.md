@@ -9,6 +9,12 @@ di lettura/decrittazione/decompressione dei chunk, verifica digest, scrittura
 dei file e finalizzazione dei metadati. Il riepilogo `estratti: ...` resta su
 stdout.
 
+Prima dell'estrazione vengono inoltre indicati apertura del backup, lettura di
+manifest e tabella dei chunk, apertura di `keys.pass.age`, derivazione della
+chiave passphrase con scrypt e sblocco delle chiavi. La derivazione scrypt è
+volutamente CPU-intensive, non legge né decomprime i layer dati e viene fatta
+una sola volta per restore.
+
 ```sh
 docker run --rm registry.example/team/backup:tag
 docker run --rm -it registry.example/team/backup:tag list
