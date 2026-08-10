@@ -21,8 +21,10 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/types"
 )
 
-// Progress reports the outcome of one blob transfer.
+// Progress reports a phase or outcome of one blob transfer. Event is one of
+// checking, uploading, completed, skipped, manifests or published.
 type Progress struct {
+	Event          string `json:"event,omitempty"`
 	Blob           string `json:"blob"`
 	Layer          int    `json:"layer,omitempty"`
 	Total          int64  `json:"total,omitempty"`
@@ -341,9 +343,11 @@ func (p *pusher) run() error {
 	if err := p.ctx.Err(); err != nil {
 		return err
 	}
+	p.reportPhase("manifests")
 	if err := p.publishManifests(); err != nil {
 		return err
 	}
+	p.reportPhase("published")
 	if p.opts.Checkpoint != nil && p.opts.ID != "" {
 		if derr := p.opts.Checkpoint.Delete(p.opts.ID); derr != nil {
 			_ = derr // failing to clean the checkpoint is not fatal
@@ -385,11 +389,29 @@ func (p *pusher) markDone(digest string) error {
 }
 
 func (p *pusher) report(t blobTask, skipped, fromCheckpoint bool) {
+	event := "completed"
+	if skipped {
+		event = "skipped"
+	}
+	p.reportEvent(t, event, skipped, fromCheckpoint)
+}
+
+func (p *pusher) reportEvent(t blobTask, event string, skipped, fromCheckpoint bool) {
 	if p.opts.Progress == nil {
 		return
 	}
 	select {
-	case p.opts.Progress <- Progress{Blob: t.digest, Layer: t.layer, Total: t.size, Skipped: skipped, FromCheckpoint: fromCheckpoint}:
+	case p.opts.Progress <- Progress{Event: event, Blob: t.digest, Layer: t.layer, Total: t.size, Skipped: skipped, FromCheckpoint: fromCheckpoint}:
+	case <-p.ctx.Done():
+	}
+}
+
+func (p *pusher) reportPhase(event string) {
+	if p.opts.Progress == nil {
+		return
+	}
+	select {
+	case p.opts.Progress <- Progress{Event: event}:
 	case <-p.ctx.Done():
 	}
 }
@@ -399,6 +421,7 @@ func (p *pusher) executeBlob(t blobTask) error {
 	if p.isDone(t.digest) {
 		return nil
 	}
+	p.reportEvent(t, "checking", false, false)
 	ok, err := p.blobExists(t.digest)
 	if err != nil {
 		return fmt.Errorf("checking blob %s: %w", t.digest, err)
@@ -410,6 +433,7 @@ func (p *pusher) executeBlob(t blobTask) error {
 		p.report(t, true, false)
 		return nil
 	}
+	p.reportEvent(t, "uploading", false, false)
 	if err := p.uploadWithRetries(t); err != nil {
 		return fmt.Errorf("blob %s: %w", t.digest, err)
 	}

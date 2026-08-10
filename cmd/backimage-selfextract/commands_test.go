@@ -255,6 +255,18 @@ func TestExtractPartialStripAndValidation(t *testing.T) {
 	if !strings.Contains(stderr, "estrazione:") {
 		t.Fatalf("extract progress = %q", stderr)
 	}
+	if !strings.Contains(stderr, "estrazione: 100%") || !strings.Contains(stderr, "finalizzazione filesystem completate") {
+		t.Fatalf("extract did not report final progress/finalization: %q", stderr)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(stderr), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		if _, err := time.Parse("2006-01-02T15:04:05.000Z07:00", fields[0]); err != nil {
+			t.Fatalf("extract log is not timestamped: %q", line)
+		}
+	}
 	got, err := os.ReadFile(filepath.Join(dst, "a.txt"))
 	if err != nil || string(got) != "hello from selfextract\n" {
 		t.Fatalf("restored = %q, %v", got, err)

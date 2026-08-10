@@ -4,8 +4,25 @@ package progress
 import (
 	"fmt"
 	"io"
+	"sync"
 	"time"
 )
+
+var lineMu sync.Mutex
+
+// TimestampLine prefixes a diagnostic line with a local timestamp. Progress
+// is written to stderr, so timestamps make pauses between expensive phases
+// visible even when the stream itself is silent.
+func TimestampLine(message string) string {
+	return time.Now().Format("2006-01-02T15:04:05.000Z07:00") + " " + message
+}
+
+// WriteLine writes one timestamped diagnostic line.
+func WriteLine(w io.Writer, message string) {
+	lineMu.Lock()
+	defer lineMu.Unlock()
+	fmt.Fprintln(w, TimestampLine(message))
+}
 
 // Reader wraps a stream and reports the number of bytes consumed. Reports are
 // throttled so a large extraction does not flood stderr.
@@ -54,6 +71,13 @@ func (r *Reader) Read(p []byte) (int, error) {
 		r.report(true)
 	}
 	return n, err
+}
+
+// Finish forces the final progress report. A tar.Reader can stop consuming
+// its underlying reader before it asks for io.EOF, so Read alone cannot always
+// observe the end of the logical stream.
+func (r *Reader) Finish() {
+	r.report(true)
 }
 
 func (r *Reader) report(force bool) {

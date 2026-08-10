@@ -189,6 +189,11 @@ func newRestoreCommand() *cobra.Command {
 
 func runRestore(cmd *cobra.Command, args []string) error {
 	started := time.Now()
+	log := func(message string) {
+		if !mustOptions(cmd).Quiet {
+			progress.WriteLine(cmd.ErrOrStderr(), message)
+		}
+	}
 	flags := readSourceFlags(cmd)
 	refText, err := resolveReference(args, flags.repo)
 	if err != nil {
@@ -203,6 +208,7 @@ func runRestore(cmd *cobra.Command, args []string) error {
 	}
 	defer restoreCPUs()
 	ctx := cmd.Context()
+	log("restore: apertura sorgente")
 	source, err := openSourceForCLI(ctx, refText, flags)
 	if err != nil {
 		return err
@@ -213,9 +219,12 @@ func runRestore(cmd *cobra.Command, args []string) error {
 		return err
 	}
 	defer b.Close()
+	b.SetProgress(log)
+	log("restore: metadati backup letti")
 	if err := unlockBackup(ctx, b, flags, true); err != nil {
 		return err
 	}
+	log("restore: backup sbloccato e pronto")
 
 	includes, excludes := getFlagStrings(cmd, "include"), getFlagStrings(cmd, "exclude")
 	var idx *index.Index
@@ -246,7 +255,11 @@ func runRestore(cmd *cobra.Command, args []string) error {
 		}
 		err = restoreExtract(cmd, stream, idx != nil, restoreProgress(cmd, total))
 	} else {
+		log("restore: ricostruzione tar in corso")
 		err = restoreTar(cmd, refText, stream)
+		if err == nil {
+			log("restore: ricostruzione tar completata")
+		}
 	}
 	if err != nil {
 		if errors.Is(err, crypt.ErrIntegrity) {
@@ -265,7 +278,7 @@ func runRestore(cmd *cobra.Command, args []string) error {
 	if mustOptions(cmd).JSON {
 		return printerResult(pr, map[string]any{"ok": true, "reference": refText, "extract": getFlagBool(cmd, "extract"), "remove_local_image": imageRemoved, "duration": time.Since(started).String()})
 	}
-	pr.Infof("restore completato in %s", time.Since(started).Round(time.Millisecond))
+	log(fmt.Sprintf("restore completato in %s", time.Since(started).Round(time.Millisecond)))
 	return nil
 }
 
@@ -333,6 +346,7 @@ func restoreExtract(cmd *cobra.Command, stream func(io.Writer) error, alreadyFil
 	if alreadyFiltered {
 		includes, excludes = nil, nil
 	}
+	restoreLog(cmd, "restore: estrazione filesystem in corso")
 	pr, pw := io.Pipe()
 	done := make(chan error, 1)
 	go func() { err := stream(pw); _ = pw.CloseWithError(err); done <- err }()
@@ -344,8 +358,13 @@ func restoreExtract(cmd *cobra.Command, stream func(io.Writer) error, alreadyFil
 		PreserveOwner: !getFlagBool(cmd, "no-preserve-owner"), PreserveXattrs: true,
 		Overwrite: getFlagBool(cmd, "overwrite"), Includes: includes, Excludes: excludes,
 		StripComponents: getFlagInt(cmd, "strip-components"), Strict: true,
+		Progress: func(message string) { restoreLog(cmd, message) },
 	})
 	_, extractErr := x.Extract(cmd.Context(), progressReader, dest)
+	if extractErr == nil {
+		progressReader.Finish()
+		restoreLog(cmd, "restore: verifica e finalizzazione filesystem completate")
+	}
 	if extractErr != nil {
 		_ = pr.CloseWithError(extractErr)
 	}
@@ -371,7 +390,13 @@ func restoreProgress(cmd *cobra.Command, total int64) func(int64) {
 		return nil
 	}
 	return func(done int64) {
-		fmt.Fprintln(cmd.ErrOrStderr(), progress.Message("restore", done, total))
+		progress.WriteLine(cmd.ErrOrStderr(), progress.Message("restore", done, total))
+	}
+}
+
+func restoreLog(cmd *cobra.Command, message string) {
+	if !mustOptions(cmd).Quiet {
+		progress.WriteLine(cmd.ErrOrStderr(), message)
 	}
 }
 

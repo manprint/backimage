@@ -3,6 +3,12 @@
 Ogni backup `backimage` eseguibile contiene `/backimage` e tutti i dati
 necessari sotto `/backup`. Non serve installare `backimage` sull'host:
 
+Le fasi di restore e l'avanzamento vengono stampati su stderr; ogni riga inizia
+con un timestamp `YYYY-MM-DDTHH:MM:SS.mmm±HH:MM`. Sono indicate anche le fasi
+di lettura/decrittazione/decompressione dei chunk, verifica digest, scrittura
+dei file e finalizzazione dei metadati. Il riepilogo `estratti: ...` resta su
+stdout.
+
 ```sh
 docker run --rm registry.example/team/backup:tag
 docker run --rm -it registry.example/team/backup:tag list

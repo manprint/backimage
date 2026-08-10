@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestBackupDryRunJSONHasNoSideEffects(t *testing.T) {
@@ -127,7 +128,7 @@ func TestBackupOCILayoutSuccessHumanAndJSON(t *testing.T) {
 		if asJSON {
 			args = append(args, "--json")
 		}
-		out, _, err := runRoot(t, args...)
+		out, stderr, err := runRoot(t, args...)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -136,6 +137,18 @@ func TestBackupOCILayoutSuccessHumanAndJSON(t *testing.T) {
 		}
 		if !asJSON && !strings.Contains(out, "backup completato") {
 			t.Fatalf("backup output = %q", out)
+		}
+		if !asJSON {
+			for _, line := range strings.Split(strings.TrimSpace(stderr), "\n") {
+				if fields := strings.Fields(line); len(fields) > 0 {
+					if len(fields) < 2 {
+						t.Fatalf("backup log is not timestamped: %q", line)
+					}
+					if _, err := time.Parse("2006-01-02T15:04:05.000Z07:00", fields[0]); err != nil {
+						t.Fatalf("backup log is not timestamped: %q", line)
+					}
+				}
+			}
 		}
 		if !asJSON {
 			for _, want := range []string{

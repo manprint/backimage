@@ -67,6 +67,17 @@ type Backup struct {
 	prefix   []int64
 	opener   crypt.Opener
 	key      *crypt.KeyMaterial
+	progress func(string)
+}
+
+// SetProgress installs an optional diagnostic callback used while rebuilding
+// the plaintext stream. The callback is never invoked when it is nil.
+func (b *Backup) SetProgress(fn func(string)) { b.progress = fn }
+
+func (b *Backup) reportProgress(message string) {
+	if b.progress != nil {
+		b.progress(message)
+	}
 }
 
 // Open reads and validates public metadata. Data blobs remain lazy.
@@ -342,6 +353,7 @@ func (b *Backup) StreamTar(ctx context.Context, dst io.Writer, verify bool) erro
 		if err := ctx.Err(); err != nil {
 			return err
 		}
+		b.reportProgress(fmt.Sprintf("restore: chunk %d/%d: lettura blob, decrittazione e preparazione decompressione", i+1, len(b.Chunks.Chunks)))
 		r, err := b.PlainChunk(ctx, i)
 		if err != nil {
 			return err
@@ -362,9 +374,11 @@ func (b *Backup) StreamTar(ctx context.Context, dst io.Writer, verify bool) erro
 		if n != c.Pb {
 			return fmt.Errorf("%w: chunk %d plaintext size %d, want %d", crypt.ErrIntegrity, i, n, c.Pb)
 		}
+		b.reportProgress(fmt.Sprintf("restore: chunk %d/%d: verifica digest", i+1, len(b.Chunks.Chunks)))
 		if verify && !digestMatches(c.Ps, h.Sum(nil)) {
 			return fmt.Errorf("%w: chunk %d plaintext digest mismatch", crypt.ErrIntegrity, i)
 		}
+		b.reportProgress(fmt.Sprintf("restore: chunk %d/%d: controllato e scritto", i+1, len(b.Chunks.Chunks)))
 	}
 	return nil
 }
@@ -433,6 +447,7 @@ func (b *Backup) StreamSelectedTar(ctx context.Context, idx *index.Index, select
 			return cache, nil
 		}
 		clear(cache)
+		b.reportProgress(fmt.Sprintf("restore: chunk %d/%d: lettura blob, decrittazione e preparazione decompressione", chunkIndex+1, len(b.Chunks.Chunks)))
 		r, err := b.PlainChunk(ctx, chunkIndex)
 		if err != nil {
 			return nil, err
@@ -452,12 +467,14 @@ func (b *Backup) StreamSelectedTar(ctx context.Context, idx *index.Index, select
 			return nil, fmt.Errorf("%w: chunk %d plaintext size mismatch", crypt.ErrIntegrity, chunkIndex)
 		}
 		if verify {
+			b.reportProgress(fmt.Sprintf("restore: chunk %d/%d: verifica digest", chunkIndex+1, len(b.Chunks.Chunks)))
 			h := sha256.Sum256(data)
 			if !digestMatches(c.Ps, h[:]) {
 				clear(data)
 				return nil, fmt.Errorf("%w: chunk %d plaintext digest mismatch", crypt.ErrIntegrity, chunkIndex)
 			}
 		}
+		b.reportProgress(fmt.Sprintf("restore: chunk %d/%d: controllato e pronto per la selezione", chunkIndex+1, len(b.Chunks.Chunks)))
 		cacheIndex, cache = chunkIndex, data
 		return cache, nil
 	}

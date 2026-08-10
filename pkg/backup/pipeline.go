@@ -249,12 +249,16 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	}
 
 	// 1) light estimate walk (no writes).
+	if cfg.Progress != nil {
+		cfg.Progress("backup: scansione sorgenti in corso")
+	}
 	est, err := estimate(ctx, cfg)
 	if err != nil {
 		return res, fmt.Errorf("stima: %w", err)
 	}
 	if cfg.Progress != nil {
 		cfg.Progress(fmt.Sprintf("sorgenti: %d file, %.1f MiB", est.Files, float64(est.Bytes)/(1<<20)))
+		cfg.Progress("backup: pianificazione chunk e layer in corso")
 	}
 
 	// 2) plan layers and chunks.
@@ -273,6 +277,9 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		if cfg.Progress != nil {
 			cfg.Progress(w)
 		}
+	}
+	if cfg.Progress != nil {
+		cfg.Progress(fmt.Sprintf("backup: piano pronto: %d layer, chunk target %.1f MiB", plan.LayerCount, float64(plan.ChunkBytes)/(1<<20)))
 	}
 
 	res = Result{
@@ -344,6 +351,9 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		}
 		return res, err
 	}
+	if cfg.Progress != nil {
+		cfg.Progress("backup: archiviazione/compressione/cifratura completata")
+	}
 	if err := bp.finalize(); err != nil {
 		return res, fmt.Errorf("metadati: %w", err)
 	}
@@ -357,17 +367,20 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 
 	// 5) images and multi-arch index.
 	if cfg.Progress != nil {
-		cfg.Progress("preparazione immagini OCI")
+		cfg.Progress("backup: preparazione immagini OCI in corso")
 	}
 	images, idx, err := bp.buildImages()
 	if err != nil {
 		return res, fmt.Errorf("build immagini: %w", err)
 	}
+	if cfg.Progress != nil {
+		cfg.Progress("backup: immagini OCI pronte")
+	}
 
 	// 6) publish.
 	if cfg.Remote != nil {
 		if cfg.Progress != nil {
-			cfg.Progress("upload remoto: in corso")
+			cfg.Progress("backup: upload remoto in corso")
 		}
 		payload, payloadErr := bp.remotePayload(images)
 		if payloadErr != nil {
@@ -387,16 +400,28 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		}
 		bp.digest = remoteResult.Digest
 		bp.skipped = int(remoteResult.BlobsSkipped)
+		if cfg.Progress != nil {
+			cfg.Progress("backup: upload remoto completato")
+		}
 	} else if cfg.Output == "" || cfg.Output == "registry" {
 		if cfg.Progress != nil {
-			cfg.Progress("upload registry: in corso")
+			cfg.Progress(fmt.Sprintf("backup: upload registry in corso (%d worker)", cfg.Jobs))
 		}
 		if err := bp.pushRegistry(ctx, idx, images); err != nil {
 			return res, fmt.Errorf("push: %w", err)
 		}
+		if cfg.Progress != nil {
+			cfg.Progress("backup: upload registry completato")
+		}
 	} else {
+		if cfg.Progress != nil {
+			cfg.Progress(fmt.Sprintf("backup: scrittura output %s in corso", cfg.Output))
+		}
 		if err := bp.pushLocal(ctx, idx, images); err != nil {
 			return res, fmt.Errorf("output %s: %w", cfg.Output, err)
+		}
+		if cfg.Progress != nil {
+			cfg.Progress("backup: scrittura output completata")
 		}
 	}
 
@@ -1297,17 +1322,43 @@ func (b *builder) pushRegistry(ctx context.Context, idx v1.ImageIndex, images ma
 			lastReport = now
 		}
 		for pr := range pch {
-			completedBlobs++
-			if pr.Skipped {
-				b.skipped++
-				b.skippedBytes += pr.Total
-			} else {
-				b.uploadedBytes += pr.Total
+			switch pr.Event {
+			case "checking":
+				if b.cfg.Progress != nil {
+					b.cfg.Progress(fmt.Sprintf("upload: verifica presenza blob %s (layer %d)", pr.Blob, pr.Layer))
+				}
+			case "uploading":
+				if b.cfg.Progress != nil {
+					b.cfg.Progress(fmt.Sprintf("upload: invio blob %s (layer %d, %.1f MiB)", pr.Blob, pr.Layer, float64(pr.Total)/(1<<20)))
+				}
+			case "manifests":
+				if b.cfg.Progress != nil {
+					b.cfg.Progress("upload: pubblicazione manifest e indice OCI")
+				}
+			case "published":
+				if b.cfg.Progress != nil {
+					b.cfg.Progress("upload: manifest e indice OCI pubblicati")
+				}
+			default:
+				completedBlobs++
+				if pr.Skipped || pr.Event == "skipped" {
+					b.skipped++
+					b.skippedBytes += pr.Total
+				} else {
+					b.uploadedBytes += pr.Total
+				}
+				completedBytes += pr.Total
+				if b.cfg.Progress != nil {
+					status := "completato"
+					if pr.Skipped || pr.Event == "skipped" {
+						status = "gia' presente, saltato"
+					}
+					b.cfg.Progress(fmt.Sprintf("upload: blob %s %s (%d completati)", pr.Blob, status, completedBlobs))
+				}
+				report(false)
 			}
-			completedBytes += pr.Total
-			report(false)
 			if pr.FromCheckpoint && !resumingReported && b.cfg.Progress != nil {
-				b.cfg.Progress("resuming from checkpoint")
+				b.cfg.Progress("upload: ripresa da checkpoint")
 				resumingReported = true
 			}
 		}

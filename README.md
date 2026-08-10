@@ -474,11 +474,21 @@ minimo uno. Il limite viene applicato anche quando l'archivio usa gzip, lz4 o
 un altro algoritmo: per decoder non paralleli non crea parallelismo aggiuntivo,
 ma limita comunque il runtime Go dell'operazione.
 
-Durante `restore --extract` la CLI stampa su stderr l'avanzamento in byte e
-percentuale; l'immagine auto-estraente stampa lo stesso avanzamento con
-`docker run`. Gli aggiornamenti sono periodici per non riempire il terminale,
-mentre il riepilogo finale resta su stdout. Con `--json`, il JSON non viene
-mescolato ai messaggi di progresso.
+Durante backup e restore, ogni riga diagnostica/progressiva su stderr inizia
+con un timestamp locale nel formato `YYYY-MM-DDTHH:MM:SS.mmm±HH:MM`. Questo
+permette di distinguere il tempo passato in una fase anche quando non arrivano
+nuovi byte. Le fasi del backup comprendono scansione sorgenti, piano dei
+chunk/layer, archiviazione-compressione-cifratura, preparazione OCI, controllo
+e upload dei blob, pubblicazione dei manifest e completamento. Nel restore
+sono indicati apertura/sblocco, lettura-decrittazione-decompressione di ogni
+chunk, verifica digest, scrittura filesystem e finalizzazione dei metadati
+delle directory.
+
+`restore --extract` stampa inoltre l'avanzamento in byte e percentuale; anche
+l'immagine auto-estraente mostra gli stessi eventi con `docker run`. Gli
+aggiornamenti byte sono periodici per non riempire il terminale e il 100% viene
+emesso al termine logico del tar. Il riepilogo finale resta su stdout. Con
+`--json`, il JSON non viene mescolato ai messaggi di progresso.
 
 Per vedere i dati senza estrarli, usare l'indice: `inspect --files` sblocca
 l'immagine e `ls`/`find` elencano i path. `inspect --layers` e `verify --quick`
@@ -690,7 +700,8 @@ stderr; `--json` lascia su stdout solo JSON strutturato.
 
 Durante un backup interattivo vengono mostrati su stderr la stima delle
 sorgenti, l'avanzamento di archiviazione/compressione/cifratura, la
-preparazione delle immagini OCI e l'avanzamento dell'upload dei blob. Con
+preparazione delle immagini OCI, le fasi di controllo/upload dei blob e la
+pubblicazione dei manifest. Ogni riga contiene il timestamp iniziale. Con
 `--quiet` questi messaggi vengono nascosti; con `--json` il risultato
 strutturato resta l'unico contenuto su stdout.
 

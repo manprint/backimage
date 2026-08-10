@@ -207,6 +207,18 @@ func TestRestoreTarExtractPartialAndJSON(t *testing.T) {
 	if !strings.Contains(stderr, "restore:") {
 		t.Fatalf("restore progress = %q", stderr)
 	}
+	if !strings.Contains(stderr, "restore: 100%") || !strings.Contains(stderr, "finalizzazione filesystem completate") {
+		t.Fatalf("restore did not report final progress/finalization: %q", stderr)
+	}
+	for _, line := range strings.Split(strings.TrimSpace(stderr), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		if _, err := time.Parse("2006-01-02T15:04:05.000Z07:00", fields[0]); err != nil {
+			t.Fatalf("restore log is not timestamped: %q", line)
+		}
+	}
 	content, err := os.ReadFile(filepath.Join(dst, "root", "file.txt"))
 	if err != nil || string(content) != "restore me\n" {
 		t.Fatalf("extracted = %q, %v", content, err)

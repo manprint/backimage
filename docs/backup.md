@@ -28,6 +28,14 @@ Prima di leggere i dati il comando valida i flag e i privilegi. Per un backup
 reale verifica anche credenziali e scope `pull,push` del repository. Il flusso
 successivo è archive → chunk → compressione → cifratura → layer OCI → push.
 
+Durante il backup vengono scritti su stderr log timestampati. Le fasi visibili
+sono: scansione delle sorgenti, pianificazione dei chunk/layer, archiviazione,
+compressione e cifratura, costruzione delle immagini OCI, controllo della
+presenza di ogni blob, upload parallelo, pubblicazione dei manifest e risultato
+finale. Il numero di upload paralleli è quello di `--jobs` (default 3). Il
+riepilogo di successo resta su stdout e non viene prefissato dal timestamp;
+con `--json` stdout contiene solo JSON.
+
 I layer sono appoggiati su disco e letti in streaming durante il push. Il
 preflight richiede spazio libero pari a circa:
 

@@ -46,6 +46,9 @@ func (x *extractor) Extract(ctx context.Context, r io.Reader, dest string) (Stat
 	if err := os.MkdirAll(dest, 0o755); err != nil {
 		return stats, fmt.Errorf("mkdir dest %q: %w", dest, err)
 	}
+	if x.opts.Progress != nil {
+		x.opts.Progress("restore: filesystem: scrittura file e directory")
+	}
 	type dirFix struct {
 		path string
 		hdr  *tar.Header
@@ -104,6 +107,9 @@ func (x *extractor) Extract(ctx context.Context, r io.Reader, dest string) (Stat
 		}
 	}
 	// Directories: deepest first.
+	if x.opts.Progress != nil {
+		x.opts.Progress("restore: filesystem: finalizzazione metadati directory")
+	}
 	sort.Slice(dirFixes, func(i, j int) bool {
 		return len(dirFixes[i].path) > len(dirFixes[j].path)
 	})
@@ -124,6 +130,9 @@ func (x *extractor) Extract(ctx context.Context, r io.Reader, dest string) (Stat
 				return stats, x.maybe(fmt.Errorf("utimes dir %q: %w", d.path, err))
 			}
 		}
+	}
+	if x.opts.Progress != nil {
+		x.opts.Progress("restore: filesystem: finalizzazione completata")
 	}
 	return stats, nil
 }

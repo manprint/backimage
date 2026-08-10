@@ -22,12 +22,18 @@ func extractorFor(opts ExtractOptions) Extractor { return &windowsExtractor{opts
 func (x *windowsExtractor) Extract(ctx context.Context, r io.Reader, dest string) (Stats, error) {
 	var stats Stats
 	tr := tar.NewReader(r)
+	if x.opts.Progress != nil {
+		x.opts.Progress("restore: filesystem: scrittura file e directory")
+	}
 	for {
 		if err := ctx.Err(); err != nil {
 			return stats, err
 		}
 		h, err := tr.Next()
 		if err == io.EOF {
+			if x.opts.Progress != nil {
+				x.opts.Progress("restore: filesystem: finalizzazione completata")
+			}
 			return stats, nil
 		}
 		if err != nil {

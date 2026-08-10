@@ -62,6 +62,7 @@ type ExtractOptions struct {
 	Overwrite       bool     // default false: existing files cause an error
 	Includes        []string // if non-empty, only matching paths are extracted
 	Excludes        []string
-	StripComponents int  // remove this many leading path components
-	Strict          bool // default true
+	StripComponents int          // remove this many leading path components
+	Strict          bool         // default true
+	Progress        func(string) // optional diagnostics for filesystem phases
 }

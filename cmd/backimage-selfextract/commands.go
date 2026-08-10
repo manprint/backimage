@@ -122,12 +122,15 @@ func cmdTar(ctx context.Context, args []string) error {
 		return err
 	}
 	defer b.Close()
+	b.SetProgress(func(message string) { progress.WriteLine(stderr, message) })
+	progress.WriteLine(stderr, "restore: ricostruzione tar in corso")
 	if err := b.StreamTar(ctx, stdout, !*noVerify); err != nil {
 		if exitCode(err) == exitPassphrase {
 			return err
 		}
 		return withCode(exitIntegrity, err)
 	}
+	progress.WriteLine(stderr, "restore: ricostruzione tar completata")
 	return nil
 }
 
@@ -170,6 +173,8 @@ func cmdExtract(ctx context.Context, args []string) error {
 		return err
 	}
 	defer b.Close()
+	b.SetProgress(func(message string) { progress.WriteLine(stderr, message) })
+	progress.WriteLine(stderr, "restore: backup sbloccato e pronto")
 	var idx *index.Index
 	var selected []index.FileEntry
 	if len(includes) > 0 || len(excludes) > 0 {
@@ -203,15 +208,20 @@ func cmdExtract(ctx context.Context, args []string) error {
 		total = selectedBytes(selected)
 	}
 	report := func(done int64) {
-		fmt.Fprintln(stderr, progress.Message("estrazione", done, total))
+		progress.WriteLine(stderr, progress.Message("estrazione", done, total))
 	}
 	report(0)
 	progressReader := progress.NewReader(pr, report)
 	x := archive.NewExtractor(archive.ExtractOptions{
 		PreserveOwner: !*noOwner, PreserveXattrs: true, Overwrite: *overwrite,
 		Includes: xIncludes, Excludes: xExcludes, StripComponents: *strip, Strict: true,
+		Progress: func(message string) { progress.WriteLine(stderr, message) },
 	})
 	stats, extractErr := x.Extract(ctx, progressReader, *out)
+	if extractErr == nil {
+		progressReader.Finish()
+		progress.WriteLine(stderr, "restore: verifica e finalizzazione filesystem completate")
+	}
 	if extractErr != nil {
 		_ = pr.CloseWithError(extractErr)
 	}

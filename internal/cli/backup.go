@@ -17,6 +17,7 @@ import (
 	"github.com/fpierri/backimage/pkg/backup"
 	"github.com/fpierri/backimage/pkg/chunk"
 	"github.com/fpierri/backimage/pkg/crypt"
+	"github.com/fpierri/backimage/pkg/progress"
 	"github.com/fpierri/backimage/pkg/registry"
 	backremote "github.com/fpierri/backimage/pkg/remote"
 )
@@ -274,7 +275,7 @@ func runBackup(cmd *cobra.Command, args []string) error {
 			return err
 		}
 		if getFlagBool(cmd, "server-side-compress") {
-			pr.Warnf("--server-side-compress requested: the server may see plaintext; protocol v1 still sends client-built layers")
+			progress.WriteLine(cmd.ErrOrStderr(), "warning: --server-side-compress requested: the server may see plaintext; protocol v1 still sends client-built layers")
 		}
 	} else if getFlagBool(cmd, "server-side-compress") {
 		return New(KindUsage, "", "--server-side-compress requires --remote")
@@ -340,7 +341,7 @@ func runBackup(cmd *cobra.Command, args []string) error {
 		if opts.Quiet {
 			return
 		}
-		pr.Infof("%s", msg)
+		progress.WriteLine(cmd.ErrOrStderr(), msg)
 	}
 	cfg.Progress = prog
 
