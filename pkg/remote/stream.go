@@ -140,7 +140,11 @@ func (c *Client) withRetries(ctx context.Context, fn func(context.Context) (Resu
 		if errors.As(last, &remoteErr) && remoteErr.Kind != 6 {
 			return result, last
 		}
-		if errors.Is(last, context.Canceled) || errors.Is(last, context.DeadlineExceeded) {
+		// Only the caller's cancellation stops the loop. A transport-internal
+		// deadline (a QUIC handshake against a TCP-only server, for instance)
+		// is exactly the failure the retry and the crossed-transport hint
+		// exist for.
+		if ctx.Err() != nil {
 			return result, last
 		}
 		if attempt == len(c.cfg.Backoffs) {

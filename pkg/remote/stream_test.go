@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"math/rand"
 	"strings"
@@ -15,6 +16,7 @@ import (
 
 	"github.com/fpierri/backimage/pkg/protocol"
 	"github.com/fpierri/backimage/pkg/server"
+	"github.com/fpierri/backimage/pkg/transport"
 )
 
 type streamingSink struct {
@@ -130,6 +132,45 @@ func TestClientUploadStreamRetriesAndRebuildsTheArchive(t *testing.T) {
 		// The first attempt fails at dial time, so the archive is produced once.
 		t.Fatalf("attempts = %d, source calls = %d", result.Attempts, sourceCalls.Load())
 	}
+}
+
+// TestClientUploadStreamHintsCrossedTransport locks the behaviour a crossed
+// QUIC/TCP deployment depends on: a handshake deadline is retried and the
+// final error names the transport to try instead.
+func TestClientUploadStreamHintsCrossedTransport(t *testing.T) {
+	for _, transportName := range []string{"quic", "tcp"} {
+		t.Run(transportName, func(t *testing.T) {
+			dialer := &deadlineDialer{name: transportName}
+			client, _ := New(Config{Dialer: dialer, Address: "pipe", Backoffs: []time.Duration{0, 0}})
+			_, err := client.UploadStream(context.Background(), StreamBackup{
+				Start:  streamStart(1 << 20),
+				Source: func(context.Context, io.Writer) error { return nil },
+			})
+			if err == nil {
+				t.Fatal("a handshake deadline must fail the backup")
+			}
+			want := map[string]string{"quic": "retry without --udp", "tcp": "retry adding --udp"}[transportName]
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("error = %v, want the %q hint", err, want)
+			}
+			if dialer.attempts.Load() != 3 {
+				t.Fatalf("attempts = %d, want the full retry budget", dialer.attempts.Load())
+			}
+		})
+	}
+}
+
+// deadlineDialer fails like a handshake against the wrong transport.
+type deadlineDialer struct {
+	name     string
+	attempts atomic.Int32
+}
+
+func (d *deadlineDialer) Name() string { return d.name }
+
+func (d *deadlineDialer) Dial(context.Context, string) (transport.Stream, error) {
+	d.attempts.Add(1)
+	return nil, fmt.Errorf("%s handshake: %w", d.name, context.DeadlineExceeded)
 }
 
 func TestClientUploadStreamSurfacesServerFailure(t *testing.T) {
