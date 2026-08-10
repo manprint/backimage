@@ -36,6 +36,19 @@ docker pull ghcr.io/manprint/backimage:latest
 docker run --rm ghcr.io/manprint/backimage:latest version
 ```
 
+È possibile creare un backup anche eseguendo la CLI nell'immagine Docker. In
+questo esempio viene prodotto un OCI layout locale:
+
+```console
+mkdir -p ./backup-layout
+docker run --rm \
+  -v "$PWD/data:/data:ro" \
+  -v "$PWD/backup-layout:/out" \
+  ghcr.io/manprint/backimage:latest \
+  backup /data --repo example.invalid/team/backup --tag daily \
+  --output oci-layout --output-path /out --password mypassword
+```
+
 ## Modello operativo
 
 Un backup è un riferimento OCI (`registry/immagine:tag`) composto da manifest,
@@ -58,8 +71,10 @@ Le modalità di output di `backup` sono:
 La pipeline è, in ordine, **archivio → chunk → compressione → cifratura →
 layer OCI**. La compressione riduce i dati prima della cifratura; cifrare prima
 renderebbe la compressione praticamente inefficace. Il default è `zstd` con il
-livello predefinito del codec (`--compression-level 0`), una buona scelta
-generale per velocità, dimensioni e interoperabilità.
+livello predefinito del codec (`--compression-level 0`), attualmente zstd l2,
+una buona scelta per velocità, dimensioni e interoperabilità. Il valore `0` è
+solo un sentinel dell'opzione: `info` riporta il livello effettivamente usato.
+Il livello 6 è il default di gzip, non di zstd; zstd supporta i livelli 1..4.
 
 | Dati sorgente | Esempio | Scelta consigliata |
 | --- | --- | --- |
@@ -109,6 +124,10 @@ backimage backup /srv/data --repo ghcr.io/acme/backup --tag daily \
 printf '%s\n' "$BACKUP_PASSPHRASE" | \
   backimage backup /srv/data --repo ghcr.io/acme/backup --tag ci \
     --passphrase-stdin
+
+# Diretto: semplice, ma la password resta nella history e nella lista processi.
+backimage backup /srv/data --repo ghcr.io/acme/backup --tag quick \
+  --password mypassword
 
 # Cifratura a chiave pubblica age; per il restore servirà la chiave privata.
 backimage backup /srv/data --repo ghcr.io/acme/backup --tag age \
@@ -431,6 +450,10 @@ backimage restore docker.io/demoarchiveuser/mindhunters:mindhunters-test \
 backimage restore --oci-layout ./oci-layout \
   --extract --destination ./restore-local \
   --passphrase-stdin < ./backup.pass
+
+# Diretto: semplice, ma la password resta nella history e nella lista processi.
+backimage restore docker.io/demoarchiveuser/mindhunters:mindhunters-test \
+  --extract --destination ./restore --password mypassword
 ```
 
 Tips:
@@ -486,6 +509,11 @@ docker run --rm \
   -v "$PWD/restore:/restore" \
   docker.io/demoarchiveuser/mindhunters:mindhunters-test \
   extract --out /restore
+
+# Diretto: semplice, ma la password resta nella history e nella lista processi.
+docker run --rm -v "$PWD/restore:/restore" \
+  docker.io/demoarchiveuser/mindhunters:mindhunters-test \
+  extract --out /restore --password mypassword
 ```
 
 Tips:
@@ -716,6 +744,7 @@ Flag:
 | `--encrypt` / `--no-encrypt` | encrypt | Abilita/disabilita cifratura |
 | `--passphrase-file FILE` | — | Passphrase da file |
 | `--passphrase-stdin` | `false` | Passphrase da stdin |
+| `--password PASSWORD` | — | Passphrase diretta; visibile in history e processi |
 | `--recipient KEY` | — | Chiave pubblica age; ripetibile |
 | `--age-identity FILE` | — | Identità age per riusare la chiave dedup |
 | `--dedup` | `false` | Deduplicazione content-defined (CDC) |
@@ -766,6 +795,7 @@ Flag sorgente comuni:
 | `--platform OS/ARCH` | Piattaforma sorgente (default `linux/amd64`) |
 | `--cache-size SIZE` | Cache layer LRU (default `2GiB`) |
 | `--passphrase-file FILE` / `--passphrase-stdin` | Sblocco cifratura |
+| `--password PASSWORD` | Passphrase diretta; visibile in history e processi |
 | `--identity FILE` | Chiave privata age |
 
 Flag restore:

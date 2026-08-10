@@ -148,6 +148,22 @@ func TestDispatchInfoAndUsage(t *testing.T) {
 	if err != nil || !strings.Contains(out, "backup backimage test") {
 		t.Fatalf("info = %q, %v", out, err)
 	}
+	manifestPath := filepath.Join(f.root, "manifest.json")
+	manifestFile, err := os.Open(manifestPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest, err := index.ReadManifest(manifestFile)
+	manifestFile.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifest.Sources = nil
+	writeCommandFile(t, manifestPath, func(w io.Writer) error { return index.WriteManifest(w, manifest) })
+	out, _, err = captureRun(t, "info", "--root", f.root)
+	if err != nil || strings.Contains(out, "origine") {
+		t.Fatalf("info without sources = %q, %v", out, err)
+	}
 	out, _, err = captureRun(t, "info", "--root", f.root, "--json")
 	var m index.Manifest
 	if err != nil || json.Unmarshal([]byte(out), &m) != nil || m.Tool.Version != "test" {
@@ -186,6 +202,23 @@ func TestListEncryptedAndFormats(t *testing.T) {
 	_, _, err = captureRun(t, "list", "--root", f.root)
 	if exitCode(err) != exitPassphrase {
 		t.Fatalf("wrong pass exit = %d, %v", exitCode(err), err)
+	}
+	os.Unsetenv("BACKIMAGE_PASSPHRASE")
+	out, _, err = captureRun(t, "list", "--root", f.root, "--password", commandTestPass)
+	if err != nil || !strings.Contains(out, "root/a.txt") {
+		t.Fatalf("password list = %q, %v", out, err)
+	}
+}
+
+func TestExtractEncryptedWithPassword(t *testing.T) {
+	f := newCommandFixture(t, true)
+	dst := filepath.Join(t.TempDir(), "restore")
+	out, _, err := captureRun(t, "extract", "--root", f.root, "--out", dst, "--no-preserve-owner", "--password", commandTestPass)
+	if err != nil || !strings.Contains(out, "estratti: 1 file") {
+		t.Fatalf("password extract = %q, %v", out, err)
+	}
+	if got, err := os.ReadFile(filepath.Join(dst, "root", "a.txt")); err != nil || string(got) != "hello from selfextract\n" {
+		t.Fatalf("password extracted = %q, %v", got, err)
 	}
 }
 

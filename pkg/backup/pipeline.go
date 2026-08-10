@@ -979,7 +979,7 @@ func (b *builder) finalize() error {
 		Archive: index.ArchiveInfo{
 			Format:           "tar",
 			Compression:      b.codec.Name(),
-			CompressionLevel: b.cfg.Level,
+			CompressionLevel: b.level,
 		},
 		Chunking: b.chunkingInfo(),
 		Layers:   b.layers,

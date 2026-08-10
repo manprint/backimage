@@ -14,6 +14,7 @@ type commonOptions struct {
 	root            string
 	passphraseFile  string
 	passphraseStdin bool
+	password        string
 	identity        string
 }
 
@@ -23,6 +24,7 @@ func newFlagSet(name string, common *commonOptions) *flag.FlagSet {
 	fs.StringVar(&common.root, "root", "/backup", "backup root")
 	fs.StringVar(&common.passphraseFile, "passphrase-file", "", "read passphrase from file")
 	fs.BoolVar(&common.passphraseStdin, "passphrase-stdin", false, "read passphrase from stdin")
+	fs.StringVar(&common.password, "password", "", "passphrase (visible in shell history and process listings)")
 	fs.StringVar(&common.identity, "identity", "", "age private key file")
 	return fs
 }
@@ -38,7 +40,7 @@ func parseFlags(fs *flag.FlagSet, args []string) error {
 }
 
 func (o commonOptions) hasCredential() bool {
-	if o.identity != "" || o.passphraseFile != "" || o.passphraseStdin {
+	if o.identity != "" || o.passphraseFile != "" || o.passphraseStdin || o.password != "" {
 		return true
 	}
 	_, ok := os.LookupEnv("BACKIMAGE_PASSPHRASE")
@@ -55,8 +57,12 @@ func (o commonOptions) unlock(ctx context.Context, b *recovery.Backup, required 
 	if !required && !o.hasCredential() {
 		return nil
 	}
+	var direct []byte
+	if o.password != "" {
+		direct = []byte(o.password)
+	}
 	pass, err := crypt.ReadPassphrase(crypt.PassphraseSource{
-		File: o.passphraseFile, Stdin: o.passphraseStdin,
+		Direct: direct, File: o.passphraseFile, Stdin: o.passphraseStdin,
 		EnvVar: "BACKIMAGE_PASSPHRASE", Prompt: required,
 	})
 	if err != nil {

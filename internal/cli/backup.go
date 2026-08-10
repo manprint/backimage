@@ -119,6 +119,7 @@ func newBackupCommand() *cobra.Command {
 	f.Bool("no-encrypt", false, "disable encryption (exclusive with --encrypt)")
 	f.String("passphrase-file", "", "read the passphrase from a file")
 	f.Bool("passphrase-stdin", false, "read the passphrase from stdin")
+	f.String("password", "", "passphrase (visible in shell history and process listings)")
 	f.StringSlice("recipient", nil, "age public key (repeatable)")
 	f.String("age-identity", "", "age identity file used to reuse a deduplication key")
 	f.Bool("dedup", false, "enable content-defined incremental deduplication (reveals chunk equality)")
@@ -208,9 +209,13 @@ func runBackup(cmd *cobra.Command, args []string) error {
 
 	passfile := getFlagString(cmd, "passphrase-file")
 	passStdin := getFlagBool(cmd, "passphrase-stdin")
+	password := getFlagString(cmd, "password")
 	recipients := getFlagStrings(cmd, "recipient")
 	ageIdentity := getFlagString(cmd, "age-identity")
-	if !encrypt && (passfile != "" || passStdin || len(recipients) > 0 || ageIdentity != "") {
+	if cmd.Flags().Changed("password") && password == "" {
+		return New(KindUsage, "", "--password non può essere vuota")
+	}
+	if !encrypt && (passfile != "" || passStdin || password != "" || len(recipients) > 0 || ageIdentity != "") {
 		return New(KindUsage, "", "passphrase/recipient given but encryption disabled")
 	}
 	if ageIdentity != "" && !dedup {
@@ -218,12 +223,17 @@ func runBackup(cmd *cobra.Command, args []string) error {
 	}
 
 	var passFn func() ([]byte, error)
-	if encrypt && (passfile != "" || passStdin) {
+	if encrypt && (passfile != "" || passStdin || password != "") {
+		var direct []byte
+		if password != "" {
+			direct = []byte(password)
+		}
 		src := crypt.PassphraseSource{
+			Direct:  direct,
 			File:    passfile,
 			Stdin:   passStdin,
-			Prompt:  true,
-			Confirm: true,
+			Prompt:  password == "",
+			Confirm: password == "",
 		}
 		passFn = func() ([]byte, error) {
 			p, err := crypt.ReadPassphrase(src)

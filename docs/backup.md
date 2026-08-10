@@ -46,11 +46,13 @@ La cifratura è attiva per default e richiede almeno uno dei seguenti:
 
 - `--passphrase-file FILE`;
 - `--passphrase-stdin`;
+- `--password PASSWORD` (semplice, ma visibile nella history e nei processi);
 - uno o più `--recipient AGE_PUBLIC_KEY`.
 
 `--no-encrypt` disabilita la cifratura. Non può essere combinato con chiavi o
-passphrase. `--password` di `login` è ammesso ma mostra un warning perché il
-segreto è visibile nella lista dei processi.
+passphrase. `--password` è una scorciatoia per la passphrase del backup, non è
+la password del registry e mostra il segreto nella history e nella lista dei
+processi; per automazioni preferire file, stdin o variabile d'ambiente.
 
 ## Ripresa
 
@@ -87,6 +89,7 @@ solo dopo la pubblicazione del manifest finale.
 | `--no-encrypt` | false | backup in chiaro |
 | `--passphrase-file` | — | legge la passphrase da file |
 | `--passphrase-stdin` | false | legge la passphrase da stdin |
+| `--password` | — | passphrase diretta; visibile in history e processi |
 | `--recipient` | — | destinatario age, ripetibile |
 | `--jobs` | 3 | upload paralleli |
 | `--platform` | amd64, arm64 | piattaforma, ripetibile |

@@ -254,6 +254,13 @@ func TestRestoreWrongPassphraseBeforeBlob(t *testing.T) {
 	if err != nil || s2.reads == 0 {
 		t.Fatalf("correct pass = reads %d, err %v", s2.reads, err)
 	}
+	s3, _ := newMockImageSource(t, true)
+	withMockSource(t, s3)
+	os.Unsetenv("BACKIMAGE_PASSPHRASE")
+	_, _, err = runRoot(t, "restore", "example.test/repo:tag", "-o", filepath.Join(t.TempDir(), "password.tar"), "--password", cliRestorePass)
+	if err != nil || s3.reads == 0 {
+		t.Fatalf("password pass = reads %d, err %v", s3.reads, err)
+	}
 }
 
 func TestRestoreUsageAndHelpers(t *testing.T) {

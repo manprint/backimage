@@ -75,6 +75,7 @@ backimage backup <PATH...> --repo IMAGE [flags]
       --output-path string        destination for oci-layout/tar
       --passphrase-file string    read the passphrase from a file
       --passphrase-stdin          read the passphrase from stdin
+      --password string           passphrase (visible in shell history and process listings)
       --platform strings          self-extract platforms (repeatable) (default [linux/amd64,linux/arm64])
       --recipient strings         age public key (repeatable)
       --remote string             send layers to a remote backimage server
@@ -156,6 +157,7 @@ backimage find IMAGE PATTERN [flags]
       --oci-layout string        read from a local OCI layout directory
       --passphrase-file string   read passphrase from a file
       --passphrase-stdin         read passphrase from stdin
+      --password string          passphrase (visible in shell history and process listings)
       --platform string          source platform (default "linux/amd64")
 ```
 
@@ -194,6 +196,7 @@ backimage inspect IMAGE [flags]
       --oci-layout string        read from a local OCI layout directory
       --passphrase-file string   read passphrase from a file
       --passphrase-stdin         read passphrase from stdin
+      --password string          passphrase (visible in shell history and process listings)
       --platform string          source platform (default "linux/amd64")
 ```
 
@@ -343,6 +346,7 @@ backimage ls IMAGE [PATH] [flags]
       --oci-layout string        read from a local OCI layout directory
       --passphrase-file string   read passphrase from a file
       --passphrase-stdin         read passphrase from stdin
+      --password string          passphrase (visible in shell history and process listings)
       --platform string          source platform (default "linux/amd64")
 ```
 
@@ -571,6 +575,7 @@ backimage restore [IMAGE] [flags]
       --overwrite                replace an existing output
       --passphrase-file string   read passphrase from a file
       --passphrase-stdin         read passphrase from stdin
+      --password string          passphrase (visible in shell history and process listings)
       --platform string          source platform (default "linux/amd64")
       --remove-local-image       remove the local Docker image after a successful restore
       --repo string              image reference (alias for positional IMAGE)
@@ -611,6 +616,7 @@ backimage verify IMAGE [flags]
       --oci-layout string        read from a local OCI layout directory
       --passphrase-file string   read passphrase from a file
       --passphrase-stdin         read passphrase from stdin
+      --password string          passphrase (visible in shell history and process listings)
       --platform string          source platform (default "linux/amd64")
       --quick                    validate public metadata without downloading data layers
 ```

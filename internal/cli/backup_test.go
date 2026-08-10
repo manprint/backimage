@@ -55,6 +55,7 @@ func TestBackupCLIValidation(t *testing.T) {
 		{"local output conflict", []string{"backup", tree, "--repo", "example.test/repo/x", "--local-repo", "--output", "registry"}},
 		{"encryption conflict", []string{"backup", tree, "--repo", "example.test/repo/x", "--encrypt", "--no-encrypt"}},
 		{"key while clear", []string{"backup", tree, "--repo", "example.test/repo/x", "--no-encrypt", "--passphrase-stdin"}},
+		{"password while clear", []string{"backup", tree, "--repo", "example.test/repo/x", "--no-encrypt", "--password", "secret"}},
 		{"age identity needs dedup", []string{"backup", tree, "--repo", "example.test/repo/x", "--age-identity", "id.txt"}},
 		{"bad CDC bounds", []string{"backup", tree, "--repo", "example.test/repo/x", "--dedup", "--dedup-chunk-min", "512KiB"}},
 	}
@@ -157,6 +158,18 @@ func TestBackupOCILayoutSuccessHumanAndJSON(t *testing.T) {
 		if _, err := os.Stat(filepath.Join(layout, "index.json")); err != nil {
 			t.Fatalf("OCI layout missing: %v", err)
 		}
+	}
+}
+
+func TestBackupPasswordToOCILayout(t *testing.T) {
+	tree := t.TempDir()
+	if err := os.WriteFile(filepath.Join(tree, "secret.txt"), []byte("secret payload"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	layout := filepath.Join(t.TempDir(), "layout")
+	out, _, err := runRoot(t, "backup", tree, "--repo", "example.test/team/password", "--tag", "t1", "--output", "oci-layout", "--output-path", layout, "--password", "backup-password", "--allow-degraded", "--platform", "linux/amd64")
+	if err != nil || !strings.Contains(out, "backup completato") {
+		t.Fatalf("password backup = %q, %v", out, err)
 	}
 }
 

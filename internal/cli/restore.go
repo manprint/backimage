@@ -33,6 +33,8 @@ type sourceFlags struct {
 	cacheSize       string
 	passphraseFile  string
 	passphraseStdin bool
+	password        string
+	passwordSet     bool
 	identity        string
 }
 
@@ -54,6 +56,7 @@ func addSourceFlags(f *cobra.Command, repoAlias bool) {
 	flags.String("cache-size", "2GiB", "maximum downloaded-layer cache size")
 	flags.String("passphrase-file", "", "read passphrase from a file")
 	flags.Bool("passphrase-stdin", false, "read passphrase from stdin")
+	flags.String("password", "", "passphrase (visible in shell history and process listings)")
 	flags.String("identity", "", "age private key file")
 }
 
@@ -62,6 +65,7 @@ func readSourceFlags(cmd *cobra.Command) sourceFlags {
 		localRepo: getFlagBool(cmd, "local-repo"), ociLayout: getFlagString(cmd, "oci-layout"),
 		platform: getFlagString(cmd, "platform"), cacheSize: getFlagString(cmd, "cache-size"),
 		passphraseFile: getFlagString(cmd, "passphrase-file"), passphraseStdin: getFlagBool(cmd, "passphrase-stdin"),
+		password: getFlagString(cmd, "password"), passwordSet: cmd.Flags().Changed("password"),
 		identity: getFlagString(cmd, "identity"),
 	}
 	if cmd.Flags().Lookup("repo") != nil {
@@ -130,15 +134,22 @@ func unlockBackup(ctx context.Context, b *recovery.Backup, flags sourceFlags, re
 		}
 		return nil
 	}
+	if flags.passwordSet && flags.password == "" {
+		return &Error{Kind: KindUsage, Msg: "--password non può essere vuota"}
+	}
 	hasEnv := false
 	if _, ok := os.LookupEnv("BACKIMAGE_PASSPHRASE"); ok {
 		hasEnv = true
 	}
-	if !required && flags.passphraseFile == "" && !flags.passphraseStdin && !hasEnv {
+	if !required && flags.password == "" && flags.passphraseFile == "" && !flags.passphraseStdin && !hasEnv {
 		return nil
 	}
+	var direct []byte
+	if flags.password != "" {
+		direct = []byte(flags.password)
+	}
 	pass, err := crypt.ReadPassphrase(crypt.PassphraseSource{
-		File: flags.passphraseFile, Stdin: flags.passphraseStdin,
+		Direct: direct, File: flags.passphraseFile, Stdin: flags.passphraseStdin,
 		EnvVar: "BACKIMAGE_PASSPHRASE", Prompt: required,
 	})
 	if err != nil {

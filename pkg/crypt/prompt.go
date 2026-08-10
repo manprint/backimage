@@ -16,7 +16,7 @@ var ErrNoPassphrase = errors.New("no passphrase available")
 
 // PassphraseSource describes where a passphrase may come from, in priority order.
 type PassphraseSource struct {
-	Direct  []byte // already provided by the caller (tests only)
+	Direct  []byte // already provided by the caller (for example --password)
 	File    string // --passphrase-file
 	Stdin   bool   // --passphrase-stdin (reads one line)
 	EnvVar  string // default "BACKIMAGE_PASSPHRASE"

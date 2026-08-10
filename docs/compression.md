@@ -16,6 +16,11 @@ Formato celle: **compressione / decompressione, in MB/s / rapporto**
 
 ## zstd — livelli 1 / 2 (default) / 4
 
+`--compression-level 0` significa "default del codec". Il manifest registra
+il livello effettivamente applicato, quindi un backup zstd creato senza un
+livello esplicito viene mostrato come livello 2, non come livello 0. Il livello
+6 appartiene al default di gzip; zstd in backimage usa il range 1..4.
+
 | livello | l1 | l2 | l4 |
 |---|---|---|---|
 | testo | 3987 / 4392 / 4565× | 4327 / 2880 / 8919× | 540 / 1981 / 10312× |

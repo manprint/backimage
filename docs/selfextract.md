@@ -40,9 +40,21 @@ sempre il flusso binario.
 
 ## Passphrase e identità age
 
-In ordine, si può usare `--passphrase-file FILE`, `--passphrase-stdin`, la
-variabile `BACKIMAGE_PASSPHRASE`, oppure il prompt sul terminale. Una chiave
-age privata si passa con `--identity FILE`.
+In ordine, si può usare `--password PASSWORD`, `--passphrase-file FILE`,
+`--passphrase-stdin`, la variabile `BACKIMAGE_PASSPHRASE`, oppure il prompt sul
+terminale. Una chiave age privata si passa con `--identity FILE`.
+
+Esempio Docker diretto:
+
+```sh
+docker run --rm -v "$PWD/restore:/restore" \
+  registry.example/team/backup:tag \
+  extract --out /restore --password mypassword
+```
+
+`--password` è comodo ma lascia il segreto nella history della shell e nella
+lista dei processi; per uso operativo preferire `BACKIMAGE_PASSPHRASE` o
+`--passphrase-file`.
 
 La variabile d'ambiente è comoda ma può essere visibile nei metadati del
 processo o nell'orchestratore. Per automazioni reali è preferibile montare un

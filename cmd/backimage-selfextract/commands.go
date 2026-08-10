@@ -52,7 +52,9 @@ func cmdInfo(_ context.Context, args []string) error {
 	}
 	fmt.Fprintf(stdout, "backup backimage %s\n", m.Tool.Version)
 	fmt.Fprintf(stdout, "  creato        %s\n", m.CreatedAt.Format(time.RFC3339))
-	fmt.Fprintf(stdout, "  origine       %v\n", m.Sources)
+	if len(m.Sources) > 0 {
+		fmt.Fprintf(stdout, "  origine       %v\n", m.Sources)
+	}
 	fmt.Fprintf(stdout, "  contenuto     %d file, %d directory, %d byte\n", m.Totals.Files, m.Totals.Dirs, m.Totals.BytesRaw)
 	fmt.Fprintf(stdout, "  archivio      %s, %s livello %d -> %d byte\n", m.Archive.Format, m.Archive.Compression, m.Archive.CompressionLevel, m.Totals.BytesStored)
 	fmt.Fprintf(stdout, "  cifratura     %s\n", encryption)

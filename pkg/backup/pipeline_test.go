@@ -141,7 +141,7 @@ func TestPipelineToOCILayout(t *testing.T) {
 		RootPaths:     []string{tree},
 		Ref:           "example.com/t/backup:tag1",
 		Compression:   "zstd",
-		Level:         1,
+		Level:         0,
 		Jobs:          2,
 		MaxLayerSize:  1 << 20,
 		AllowDegraded: true,
@@ -223,6 +223,9 @@ func TestPipelineToOCILayout(t *testing.T) {
 	m, err := index.ReadManifest(strings.NewReader(string(filesIn["/backup/manifest.json"])))
 	if err != nil {
 		t.Fatalf("manifest: %v", err)
+	}
+	if m.Archive.Compression != "zstd" || m.Archive.CompressionLevel != 2 {
+		t.Fatalf("archive compression = %s level %d, want zstd level 2", m.Archive.Compression, m.Archive.CompressionLevel)
 	}
 	var ctable index.ChunkTable
 	if err := json.Unmarshal(filesIn["/backup/chunks.json"], &ctable); err != nil {
