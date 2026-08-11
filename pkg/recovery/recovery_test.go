@@ -279,8 +279,14 @@ func TestPrivateMetadataHidesContentUntilUnlock(t *testing.T) {
 			}
 		}
 		for _, entry := range f.entries {
-			if base := filepath.Base(entry.Path); base != "." && bytes.Contains(data, []byte(base)) {
-				t.Fatalf("%s leaks the archived name %q", name, base)
+			// Check the archived path as the index stores it. A bare root
+			// component is a short temp-dir name ("001") which can appear inside
+			// a random hex digest by chance, so it proves nothing either way.
+			if !strings.Contains(entry.Path, "/") {
+				continue
+			}
+			if bytes.Contains(data, []byte(entry.Path)) {
+				t.Fatalf("%s leaks the archived path %q", name, entry.Path)
 			}
 		}
 	}
