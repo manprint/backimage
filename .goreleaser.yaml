@@ -50,6 +50,11 @@ checksum:
   name_template: checksums.txt
   algorithm: sha256
 
+release:
+  # A tag with a prerelease part (v0.2.3-dev.1) is published as a pre-release,
+  # so it never presents itself as the current stable version.
+  prerelease: auto
+
 changelog:
   sort: asc
   filters:

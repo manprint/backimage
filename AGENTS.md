@@ -475,8 +475,10 @@ la dipendenza è necessaria, autorizzata e compatibile con il self-extract.
 
 `.github/workflows/release.yml` e `.goreleaser.yaml` gestiscono verifica,
 archivi, checksum SHA-256, firme Cosign keyless e immagine GHCR multi-arch. I
-tag release hanno forma `vX.Y.Z`. Non creare tag, release, push o pubblicazioni
-senza richiesta esplicita.
+tag release hanno forma `vX.Y.Z`, oppure `vX.Y.Z-<suffisso>` per una prerelease
+pubblicata da un branch in prova (per esempio `v0.2.3-dev.1`): GoReleaser la
+marca come pre-release e il tag GHCR `latest` non viene spostato. Non creare
+tag, release, push o pubblicazioni senza richiesta esplicita.
 
 Baseline verificata il 2026-08-11: `make check` verde, incluso race completo;
 immagine Docker avviata come `nonroot:nonroot` con nuovo named volume, coppia

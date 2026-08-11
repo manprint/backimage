@@ -2,7 +2,9 @@ name: Release
 
 on:
   push:
-    tags: ['v[0-9]+.[0-9]+.[0-9]+']
+    # Stable tags plus prerelease tags such as v0.2.3-dev.1, published from a
+    # branch under test. GoReleaser marks the latter as pre-release.
+    tags: ['v[0-9]+.[0-9]+.[0-9]+', 'v[0-9]+.[0-9]+.[0-9]+-*']
   workflow_dispatch:
     inputs:
       tag:
@@ -130,9 +132,11 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ghcr.io/${{ github.repository }}
+          # A prerelease tag (v0.2.3-dev.1) publishes only its own image tag:
+          # moving `latest` would hand a branch build to every plain docker pull.
           tags: |
             type=raw,value=${{ inputs.tag || github.ref_name }}
-            type=raw,value=latest
+            type=raw,value=latest,enable=${{ !contains(inputs.tag || github.ref_name, '-') }}
       - name: Build and push image
         uses: docker/build-push-action@v6
         with:

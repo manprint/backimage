@@ -33,6 +33,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   entrambi, quindi i backup esistenti si restaurano senza modifiche; un
   backimage precedente rifiuta un'immagine nuova con «backup creato da un
   backimage più recente».
+- CI/release: i workflow accettano anche tag di prerelease `vX.Y.Z-<suffisso>`
+  (es. `v0.2.3-dev.1`), pubblicati come pre-release GitHub; per questi il tag
+  GHCR `latest` non viene spostato.
 - `inspect` mostra sorgenti e totali di un backup cifrato solo quando riceve una
   credenziale (passphrase, `--passphrase-file`, `BACKIMAGE_PASSPHRASE` o
   `--age-identity`); `docker run IMAGE info` fa lo stesso e non chiede mai nulla
