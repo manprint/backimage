@@ -36,6 +36,7 @@ type BlobSource interface {
 	ChunkTable(context.Context) (*index.ChunkTable, error)
 	KeyFile(context.Context, string) ([]byte, error)
 	IndexBlob(context.Context) ([]byte, error)
+	PrivateBlob(context.Context) ([]byte, error)
 	Blob(context.Context, int) ([]byte, error)
 	Close() error
 }
@@ -143,16 +144,8 @@ func newBackup(source Source, blobs BlobSource, m *index.Manifest, t *index.Chun
 	if m.Chunking.Count != len(t.Chunks) {
 		return nil, fmt.Errorf("%w: manifest has %d chunks, table has %d", index.ErrBadSchema, m.Chunking.Count, len(t.Chunks))
 	}
-	b := &Backup{
-		source: source, blobs: blobs, Manifest: m, Chunks: t,
-		offsets: make([]int64, len(t.Chunks)), prefix: make([]int64, len(t.Chunks)+1),
-	}
-	byPath := make(map[string]int64)
-	for i, c := range t.Chunks {
-		b.offsets[i] = byPath[c.P]
-		byPath[c.P] += c.Sb
-		b.prefix[i+1] = b.prefix[i] + c.Pb
-	}
+	b := &Backup{source: source, blobs: blobs, Manifest: m, Chunks: t}
+	b.computeLayout()
 	if !m.Encryption.Enabled {
 		var err error
 		b.opener, err = crypt.NewOpener(nil)
@@ -161,6 +154,62 @@ func newBackup(source Source, blobs BlobSource, m *index.Manifest, t *index.Chun
 		}
 	}
 	return b, nil
+}
+
+// computeLayout derives the per-chunk offsets inside each shared layer blob
+// (from the public stored sizes) and the plaintext prefix sums (from the plain
+// sizes). In an encrypted backup the plain sizes are confidential, so the
+// prefix table is meaningful only once loadPrivate has filled them in; every
+// caller of prefix already requires an unlocked backup.
+func (b *Backup) computeLayout() {
+	chunks := b.Chunks.Chunks
+	b.offsets = make([]int64, len(chunks))
+	b.prefix = make([]int64, len(chunks)+1)
+	byPath := make(map[string]int64)
+	for i, c := range chunks {
+		b.offsets[i] = byPath[c.P]
+		byPath[c.P] += c.Sb
+		b.prefix[i+1] = b.prefix[i] + c.Pb
+	}
+}
+
+// loadPrivate opens the encrypted metadata blob and merges it back into the
+// in-memory manifest and chunk table, so the rest of the package sees the same
+// shape it has always seen. It is a no-op for a backup without one: an
+// unencrypted backup, or one written by an older schema 1 backimage.
+func (b *Backup) loadPrivate(ctx context.Context) error {
+	ref := b.Manifest.Private
+	if ref == nil || b.opener == nil {
+		return nil
+	}
+	b.reportProgress("restore: lettura metadati privati cifrati")
+	var data []byte
+	var err error
+	if b.blobs != nil {
+		data, err = b.blobs.PrivateBlob(ctx)
+	} else {
+		var r io.ReadCloser
+		r, err = b.source.Open(ctx, ref.Path)
+		if err == nil {
+			data, err = io.ReadAll(r)
+			closeErr := r.Close()
+			if err == nil {
+				err = closeErr
+			}
+		}
+	}
+	if err != nil {
+		return fmt.Errorf("opening %s: %w", ref.Path, err)
+	}
+	private, err := index.ReadPrivate(bytes.NewReader(data), b.opener)
+	if err != nil {
+		return err
+	}
+	if err := index.MergePrivate(b.Manifest, b.Chunks, private); err != nil {
+		return err
+	}
+	b.computeLayout()
+	return nil
 }
 
 // OpenLocal opens a backup directory such as /backup.
@@ -228,6 +277,9 @@ func (b *Backup) Unlock(ctx context.Context, identity crypt.Identity) error {
 	}
 	b.key, b.opener = km, opener
 	b.reportProgress("restore: chiavi backup sbloccate")
+	if err := b.loadPrivate(ctx); err != nil {
+		return err
+	}
 	return nil
 }
 

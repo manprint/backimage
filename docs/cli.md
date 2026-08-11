@@ -233,9 +233,11 @@ show the public metadata of a backup image
 show the public metadata of a backup image.
 
 IMAGE is a reference such as ghcr.io/me/dumps:nightly-20260810T031500Z,
-or a local source when --local-repo/--oci-layout is used. Public
-metadata (sizes, counts, compression, encryption) needs no passphrase;
---files reads the encrypted index and therefore does.
+or a local source when --local-repo/--oci-layout is used. Layout,
+compression and encryption settings need no passphrase. An encrypted
+backup keeps source paths, host and totals inside its encrypted
+metadata, so those (and --files) appear only when a passphrase or an
+age identity is supplied.
 
   backimage inspect ghcr.io/me/dumps:daily
   backimage inspect ghcr.io/me/dumps:daily --files --passphrase-file ./pass
@@ -774,7 +776,7 @@ backimage restore [IMAGE] [flags]
 
 ```
       --cache-size string        maximum size of the downloaded-layer cache, e.g. 512MiB, 4GiB (0 disables it) (default "2GiB")
-      --cpus int                 maximum CPUs used for decompression and decryption (default: half the available CPUs) (default 8)
+      --cpus int                 maximum CPUs used for decompression and decryption (default: half the available CPUs) (default 4)
   -C, --destination string       directory the files are extracted into (with -x) (default ".")
       --exclude strings          skip paths matching this glob (repeatable)
   -x, --extract                  extract the files into --destination instead of writing a tar

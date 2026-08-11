@@ -20,9 +20,11 @@ func newInspectCommand() *cobra.Command {
 		Short: "show the public metadata of a backup image",
 		Long: "show the public metadata of a backup image.\n\n" +
 			"IMAGE is a reference such as ghcr.io/me/dumps:nightly-20260810T031500Z,\n" +
-			"or a local source when --local-repo/--oci-layout is used. Public\n" +
-			"metadata (sizes, counts, compression, encryption) needs no passphrase;\n" +
-			"--files reads the encrypted index and therefore does.\n\n" +
+			"or a local source when --local-repo/--oci-layout is used. Layout,\n" +
+			"compression and encryption settings need no passphrase. An encrypted\n" +
+			"backup keeps source paths, host and totals inside its encrypted\n" +
+			"metadata, so those (and --files) appear only when a passphrase or an\n" +
+			"age identity is supplied.\n\n" +
 			"  backimage inspect ghcr.io/me/dumps:daily\n" +
 			"  backimage inspect ghcr.io/me/dumps:daily --files --passphrase-file ./pass",
 		Args: cobra.ExactArgs(1),
@@ -57,6 +59,14 @@ func runInspect(cmd *cobra.Command, args []string) error {
 	if getFlagBool(cmd, "layers") {
 		res.Layers = b.Manifest.Layers
 	}
+	// Source paths, host and totals of an encrypted backup live in its encrypted
+	// metadata. Unlock whenever a credential is available so the report stays
+	// complete, without ever prompting for one here.
+	if b.Manifest.Private != nil && !getFlagBool(cmd, "files") {
+		if err := unlockBackup(cmd.Context(), b, flags, false); err != nil {
+			return err
+		}
+	}
 	if getFlagBool(cmd, "files") {
 		if err := unlockBackup(cmd.Context(), b, flags, true); err != nil {
 			return err
@@ -73,8 +83,13 @@ func runInspect(cmd *cobra.Command, args []string) error {
 	m := b.Manifest
 	fmt.Fprintf(cmd.OutOrStdout(), "riferimento   %s\n", args[0])
 	fmt.Fprintf(cmd.OutOrStdout(), "creato        %s\n", m.CreatedAt.Format("2006-01-02 15:04:05 MST"))
-	fmt.Fprintf(cmd.OutOrStdout(), "sorgenti      %s\n", strings.Join(m.Sources, ", "))
-	fmt.Fprintf(cmd.OutOrStdout(), "contenuto     %d file, %d byte -> %d byte (%s:%d)\n", m.Totals.Files, m.Totals.BytesRaw, m.Totals.BytesStored, m.Archive.Compression, m.Archive.CompressionLevel)
+	if m.Private != nil && !b.IsUnlocked() {
+		fmt.Fprintf(cmd.OutOrStdout(), "sorgenti      cifrate: servono passphrase o identità age\n")
+		fmt.Fprintf(cmd.OutOrStdout(), "contenuto     cifrato (%s:%d)\n", m.Archive.Compression, m.Archive.CompressionLevel)
+	} else {
+		fmt.Fprintf(cmd.OutOrStdout(), "sorgenti      %s\n", strings.Join(m.Sources, ", "))
+		fmt.Fprintf(cmd.OutOrStdout(), "contenuto     %d file, %d byte -> %d byte (%s:%d)\n", m.Totals.Files, m.Totals.BytesRaw, m.Totals.BytesStored, m.Archive.Compression, m.Archive.CompressionLevel)
+	}
 	fmt.Fprintf(cmd.OutOrStdout(), "cifratura     %t (%s)\n", m.Encryption.Enabled, m.Encryption.AEAD)
 	fmt.Fprintf(cmd.OutOrStdout(), "layer         %d dati + 1 metadati + 1 binario\n", len(m.Layers))
 	if getFlagBool(cmd, "layers") {

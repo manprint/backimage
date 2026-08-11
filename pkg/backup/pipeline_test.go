@@ -2,6 +2,7 @@ package backup
 
 import (
 	"archive/tar"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -17,7 +18,9 @@ import (
 
 	"github.com/manprint/backimage/pkg/crypt"
 	"github.com/manprint/backimage/pkg/index"
+	"github.com/manprint/backimage/pkg/recovery"
 	"github.com/manprint/backimage/pkg/registry"
+	"github.com/manprint/backimage/pkg/restore"
 )
 
 func stubSelf(goarch string) ([]byte, error) { return []byte("ELF-STUB-" + goarch), nil }
@@ -337,5 +340,98 @@ func TestPipelineEncrypted(t *testing.T) {
 			}
 		}
 		rc.Close()
+	}
+}
+
+// TestPipelineEncryptedPublishesNoContentMetadata is the pipeline-level
+// regression test: an encrypted image must describe nothing of its content in
+// the files a reader can open without the passphrase, and must still restore
+// completely with it.
+func TestPipelineEncryptedPublishesNoContentMetadata(t *testing.T) {
+	tree := t.TempDir()
+	secretName := "payroll-2026.csv"
+	if err := os.WriteFile(filepath.Join(tree, secretName), []byte("secret data here"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	outPath := filepath.Join(t.TempDir(), "enc")
+	const passphrase = "pw$"
+	if _, err := Run(context.Background(), Config{
+		RootPaths:     []string{tree},
+		Ref:           "example.com/r/m:enc",
+		Compression:   "zstd",
+		Encrypt:       true,
+		Passphrase:    func() ([]byte, error) { return []byte(passphrase), nil },
+		SelfExtract:   stubSelf,
+		AllowDegraded: true,
+		Platforms:     []string{"linux/amd64"},
+		Output:        "oci-layout",
+		OutputPath:    outPath,
+	}); err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	source, err := restore.FromOCILayout(outPath, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer source.Close()
+	ctx := context.Background()
+	published, err := source.Manifest(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if published.SchemaVersion != index.SchemaVersionPrivate || published.Private == nil {
+		t.Fatalf("manifest = schema %d, private %+v", published.SchemaVersion, published.Private)
+	}
+	if published.Sources != nil || published.Totals != (index.Totals{}) || published.Host != (index.HostInfo{}) {
+		t.Fatalf("published manifest describes the content: %+v", published)
+	}
+	table, err := source.ChunkTable(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i, c := range table.Chunks {
+		if c.Ps != "" || c.Pb != 0 {
+			t.Fatalf("published chunk %d describes the plaintext: %+v", i, c)
+		}
+		if c.Ss == "" || c.Sb == 0 {
+			t.Fatalf("published chunk %d cannot be verified without the key: %+v", i, c)
+		}
+	}
+	privateBlob, err := source.PrivateBlob(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !crypt.IsEnvelope(privateBlob) {
+		t.Fatal("private metadata is not sealed")
+	}
+	if bytes.Contains(privateBlob, []byte(secretName)) || bytes.Contains(privateBlob, []byte(tree)) {
+		t.Fatal("private blob is readable in the clear")
+	}
+
+	backupImage, err := recovery.OpenBlobSource(ctx, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer backupImage.Close()
+	if err := backupImage.Unlock(ctx, crypt.Identity{Passphrase: []byte(passphrase)}); err != nil {
+		t.Fatalf("unlock: %v", err)
+	}
+	if len(backupImage.Manifest.Sources) != 1 || backupImage.Manifest.Sources[0] != tree {
+		t.Fatalf("sources after unlock = %v", backupImage.Manifest.Sources)
+	}
+	if backupImage.Manifest.Totals.Files != 1 {
+		t.Fatalf("totals after unlock = %+v", backupImage.Manifest.Totals)
+	}
+	res, err := backupImage.Verify(ctx, true, false)
+	if err != nil || !res.OK {
+		t.Fatalf("verify after unlock = %+v, %v", res, err)
+	}
+	var restored bytes.Buffer
+	if err := backupImage.StreamTar(ctx, &restored, true); err != nil {
+		t.Fatalf("stream tar: %v", err)
+	}
+	if !bytes.Contains(restored.Bytes(), []byte(secretName)) {
+		t.Fatal("restored tar does not contain the archived file")
 	}
 }

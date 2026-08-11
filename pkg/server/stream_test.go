@@ -192,8 +192,30 @@ func TestIngestBuildsLayersManifestAndIndex(t *testing.T) {
 			if commit.Manifest.Encryption.Enabled != encrypt {
 				t.Fatalf("manifest encryption = %+v", commit.Manifest.Encryption)
 			}
-			if commit.Manifest.Totals.Files != 2 || commit.Manifest.Totals.BytesRaw < int64(rawPayload) {
-				t.Fatalf("manifest totals = %+v", commit.Manifest.Totals)
+			totals := commit.Manifest.Totals
+			if encrypt {
+				// The public manifest of an encrypted backup describes nothing:
+				// the totals live in the sealed private blob.
+				if totals != (index.Totals{}) || commit.Manifest.Sources != nil {
+					t.Fatalf("public manifest leaks content: %+v / %v", totals, commit.Manifest.Sources)
+				}
+				opener, err := crypt.NewOpener(km)
+				if err != nil {
+					t.Fatal(err)
+				}
+				private, err := index.ReadPrivate(bytes.NewReader(commit.PrivateBlob), opener)
+				if err != nil {
+					t.Fatalf("private metadata: %v", err)
+				}
+				if len(private.Chunks) != len(commit.ChunkTable.Chunks) {
+					t.Fatalf("private chunks = %d, table = %d", len(private.Chunks), len(commit.ChunkTable.Chunks))
+				}
+				totals = private.Totals
+			} else if len(commit.PrivateBlob) != 0 {
+				t.Fatal("an unencrypted backup must not carry a private blob")
+			}
+			if totals.Files != 2 || totals.BytesRaw < int64(rawPayload) {
+				t.Fatalf("manifest totals = %+v", totals)
 			}
 			// Chunk rows must cover every layer contiguously and name the
 			// content-addressed blob they live in.

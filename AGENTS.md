@@ -161,7 +161,9 @@ senza rete e senza backimage installato sull'host di destinazione.
 
 ### Formato e riproducibilità
 
-- Lo schema immagine corrente è `schemaVersion: 1`; consultare
+- Lo schema immagine corrente è `schemaVersion: 1` per i backup non cifrati e
+  `schemaVersion: 2` per quelli cifrati (metadati riservati nel blob
+  `private.json.zst`). Entrambi devono restare leggibili; consultare
   `docs/image-format.md` prima di cambiare JSON, label, annotation o path.
 - Ordine layer runnable: `/backimage`, metadata `/backup`, poi layer dati.
 - I layer dati sono condivisi tra piattaforme; cambia il self-extract.
@@ -173,6 +175,18 @@ senza rete e senza backimage installato sull'host di destinazione.
 ### Cifratura e segreti
 
 - La cifratura è attiva per default; `--no-encrypt` deve restare esplicito.
+- Un backup cifrato non deve descrivere il proprio contenuto in nessun dato
+  leggibile senza chiave: né in `manifest.json`/`chunks.json`, né nelle label o
+  annotazioni OCI. Ciò che resta pubblico è solo quanto serve a scaricare e
+  verificare i blob cifrati (`p`, `ss`, `sb`, layer, codec, `nonceMode`).
+  Aggiungere un campo pubblico che parli del plaintext è una regressione:
+  metterlo in `index.Private` (`pkg/index/private.go`). Test di riferimento:
+  `pkg/index/private_test.go`, `TestPrivateMetadataHidesContentUntilUnlock`
+  (`pkg/recovery`), `TestPipelineEncryptedPublishesNoContentMetadata`
+  (`pkg/backup`) e la sezione «encrypted metadata» in `test/e2e/phase_06.sh`.
+- I blob di metadati vanno sigillati con un `plainSHA` derivato dal contenuto:
+  una costante riuserebbe il nonce GCM tra backup che condividono la chiave
+  convergente.
 - La passphrase del backup non è una credenziale del registry.
 - Non loggare password, token, DEK, passphrase o chiavi private.
 - Preferire file o stdin ai segreti sulla command line.

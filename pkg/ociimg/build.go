@@ -36,7 +36,10 @@ type BuildOptions struct {
 	Runnable    bool   // false = pull-only image; gates the D02 guard
 	Manifest    *index.Manifest
 	ChunkTable  *index.ChunkTable
-	IndexBlob   []byte            // index blob; already compressed (.zst) and possibly encrypted
+	IndexBlob   []byte // index blob; already compressed (.zst) and possibly encrypted
+	// PrivateBlob is the sealed confidential metadata of an encrypted backup
+	// (index.PrivatePath). It is empty when encryption is disabled.
+	PrivateBlob []byte
 	KeyFiles    map[string][]byte // relative paths under /backup -> content ("keys.age", ...)
 	DataLayers  []v1.Layer        // data layers; must be identical across platforms
 	Codec       compress.Codec
@@ -69,12 +72,17 @@ const (
 // imageLabels assembles the stable label set attached both to the config and
 // to the manifest annotations. Sources are omitted (--no-metadata) when
 // m.Sources is nil.
+//
+// An encrypted backup publishes no label describing its content: source paths,
+// file count and raw size are readable from the registry without pulling the
+// image, so they would defeat the confidentiality of the backup. They live in
+// the encrypted private blob instead.
 func imageLabels(m *index.Manifest, created, codecName string) map[string]string {
 	l := map[string]string{
 		labelCreated:       created,
 		labelTitle:         defaultTitle,
 		labelDescription:   defaultDescription,
-		labelSchemaVersion: "1",
+		labelSchemaVersion: strconv.Itoa(index.SchemaVersion),
 		labelToolVersion:   "dev",
 		labelEncrypted:     "false",
 		labelCompression:   codecName,
@@ -85,17 +93,23 @@ func imageLabels(m *index.Manifest, created, codecName string) map[string]string
 	if m == nil {
 		return l
 	}
+	if m.SchemaVersion > 0 {
+		l[labelSchemaVersion] = strconv.Itoa(m.SchemaVersion)
+	}
 	if m.Tool.Version != "" {
 		l[labelToolVersion] = m.Tool.Version
 	}
-	if m.Encryption.Enabled {
-		l[labelEncrypted] = "true"
-	}
-	l[labelFiles] = strconv.FormatInt(m.Totals.Files, 10)
-	l[labelBytesRaw] = strconv.FormatInt(m.Totals.BytesRaw, 10)
 	if m.Chunking.Count > 0 {
 		l[labelChunks] = strconv.Itoa(m.Chunking.Count)
 	}
+	if m.Encryption.Enabled {
+		l[labelEncrypted] = "true"
+		delete(l, labelFiles)
+		delete(l, labelBytesRaw)
+		return l
+	}
+	l[labelFiles] = strconv.FormatInt(m.Totals.Files, 10)
+	l[labelBytesRaw] = strconv.FormatInt(m.Totals.BytesRaw, 10)
 	if m.Sources != nil {
 		l[labelSources] = strings.Join(m.Sources, ";")
 	}
@@ -306,6 +320,9 @@ func buildMetaLayer(opts BuildOptions) (v1.Layer, error) {
 	}
 	if len(opts.IndexBlob) > 0 {
 		app(indexName, opts.IndexBlob)
+	}
+	if len(opts.PrivateBlob) > 0 {
+		app(index.PrivatePath, opts.PrivateBlob)
 	}
 	names := make([]string, 0, len(opts.KeyFiles))
 	for k := range opts.KeyFiles {

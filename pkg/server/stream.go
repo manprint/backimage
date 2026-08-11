@@ -37,10 +37,13 @@ type StreamCommit struct {
 	Manifest   *index.Manifest
 	ChunkTable *index.ChunkTable
 	IndexBlob  []byte
-	KeyFiles   map[string][]byte
-	Layers     []Layer
-	Codec      compress.Codec
-	Level      int
+	// PrivateBlob is the sealed confidential metadata of an encrypted backup.
+	// It is empty when the session runs without encryption.
+	PrivateBlob []byte
+	KeyFiles    map[string][]byte
+	Layers      []Layer
+	Codec       compress.Codec
+	Level       int
 }
 
 // StreamCommitter publishes the image built entirely on the server. A Sink
@@ -589,9 +592,22 @@ func (b *streamBuilder) applyBoundaryFallback() {
 
 func (b *streamBuilder) publish(ctx context.Context, outcome scanOutcome) (string, error) {
 	manifest := b.manifest(outcome.stats)
+	chunkTable := &index.ChunkTable{SchemaVersion: index.SchemaVersion, Chunks: b.rows}
+	// Mirror the local pipeline: an encrypted backup keeps everything which
+	// describes its plaintext inside the sealed private blob.
+	var privateBlob []byte
+	if private := index.SplitPrivate(manifest, chunkTable); private != nil {
+		var buf bytes.Buffer
+		if err := index.WritePrivate(&buf, private, b.sealer); err != nil {
+			return "", err
+		}
+		privateBlob = buf.Bytes()
+		sum := sha256.Sum256(privateBlob)
+		manifest.Private.StoredSha256 = "sha256:" + hex.EncodeToString(sum[:])
+	}
 	var indexBlob bytes.Buffer
 	if err := index.WriteIndex(&indexBlob, &index.Index{
-		SchemaVersion: index.SchemaVersion, Entries: outcome.entries,
+		SchemaVersion: manifest.SchemaVersion, Entries: outcome.entries,
 	}, b.sealer); err != nil {
 		return "", err
 	}
@@ -600,16 +616,17 @@ func (b *streamBuilder) publish(ctx context.Context, outcome scanOutcome) (strin
 		return "", errors.New("this server cannot publish streamed backups")
 	}
 	return committer.CommitStream(ctx, StreamCommit{
-		SessionID:  b.cfg.SessionID,
-		Reference:  b.cfg.Reference,
-		Start:      b.cfg.Start,
-		Manifest:   manifest,
-		ChunkTable: &index.ChunkTable{SchemaVersion: index.SchemaVersion, Chunks: b.rows},
-		IndexBlob:  indexBlob.Bytes(),
-		KeyFiles:   b.cfg.Start.GetEncryption().GetKeyFiles(),
-		Layers:     b.layers,
-		Codec:      b.codec,
-		Level:      b.level,
+		SessionID:   b.cfg.SessionID,
+		Reference:   b.cfg.Reference,
+		Start:       b.cfg.Start,
+		Manifest:    manifest,
+		ChunkTable:  chunkTable,
+		IndexBlob:   indexBlob.Bytes(),
+		PrivateBlob: privateBlob,
+		KeyFiles:    b.cfg.Start.GetEncryption().GetKeyFiles(),
+		Layers:      b.layers,
+		Codec:       b.codec,
+		Level:       b.level,
 	})
 }
 

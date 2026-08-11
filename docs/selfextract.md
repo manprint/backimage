@@ -34,7 +34,11 @@ docker run --rm \
 
 ## Comandi
 
-- `info [--json]` legge solo il manifesto pubblico e non richiede segreti.
+- `info [--json]` legge il manifesto pubblico e non richiede segreti; per un
+  backup cifrato sorgenti e totali stanno nei metadati cifrati, quindi compaiono
+  solo se il comando riceve una credenziale (per esempio
+  `docker run -e BACKIMAGE_PASSPHRASE ... info`). Non chiede mai nulla in modo
+  interattivo.
 - `list [-l] [--include GLOB] [--exclude GLOB] [--json]` elenca l'indice.
 - `tar [--cpus N] [--no-verify]` scrive esclusivamente il tar in chiaro su stdout.
 - `extract --out DIR` ripristina direttamente; supporta `--include`,

@@ -16,6 +16,7 @@ import (
 	"github.com/google/go-containerregistry/pkg/name"
 
 	"github.com/manprint/backimage/pkg/crypt"
+	"github.com/manprint/backimage/pkg/index"
 	"github.com/manprint/backimage/pkg/recovery"
 	"github.com/manprint/backimage/pkg/registry"
 	backremote "github.com/manprint/backimage/pkg/remote"
@@ -123,11 +124,16 @@ func TestRemoteStreamBackupRoundTrip(t *testing.T) {
 	if !manifest.Encryption.Enabled || manifest.Encryption.NonceMode != "random" {
 		t.Fatalf("manifest encryption = %+v", manifest.Encryption)
 	}
-	if manifest.Totals.Files != 2 || manifest.Archive.Compression != "zstd" {
-		t.Fatalf("manifest = %+v / %+v", manifest.Totals, manifest.Archive)
+	if manifest.Archive.Compression != "zstd" {
+		t.Fatalf("manifest archive = %+v", manifest.Archive)
 	}
-	if len(manifest.Sources) != 1 || manifest.Sources[0] != tree {
-		t.Fatalf("manifest sources = %v", manifest.Sources)
+	// The server-built image must hide the same fields the local pipeline hides:
+	// nothing describing the plaintext is readable before the unlock below.
+	if manifest.Totals != (index.Totals{}) || manifest.Sources != nil {
+		t.Fatalf("public manifest leaks content: %+v / %v", manifest.Totals, manifest.Sources)
+	}
+	if manifest.Private == nil || manifest.SchemaVersion != index.SchemaVersionPrivate {
+		t.Fatalf("encrypted manifest without private metadata: schema %d, private %+v", manifest.SchemaVersion, manifest.Private)
 	}
 
 	backupImage, err := recovery.OpenBlobSource(context.Background(), source)
@@ -137,6 +143,19 @@ func TestRemoteStreamBackupRoundTrip(t *testing.T) {
 	defer backupImage.Close()
 	if err := backupImage.Unlock(context.Background(), crypt.Identity{Passphrase: []byte("stream passphrase")}); err != nil {
 		t.Fatalf("unlock: %v", err)
+	}
+	// After the unlock the private metadata is merged back, so readers keep
+	// seeing the shape they always saw.
+	if backupImage.Manifest.Totals.Files != 2 {
+		t.Fatalf("totals after unlock = %+v", backupImage.Manifest.Totals)
+	}
+	if len(backupImage.Manifest.Sources) != 1 || backupImage.Manifest.Sources[0] != tree {
+		t.Fatalf("sources after unlock = %v", backupImage.Manifest.Sources)
+	}
+	for i, c := range backupImage.Chunks.Chunks {
+		if c.Ps == "" || c.Pb == 0 {
+			t.Fatalf("chunk %d has no plaintext metadata after unlock: %+v", i, c)
+		}
 	}
 	var restored bytes.Buffer
 	if err := backupImage.StreamTar(context.Background(), &restored, true); err != nil {

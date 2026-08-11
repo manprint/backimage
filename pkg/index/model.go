@@ -1,12 +1,18 @@
-// Package index defines the three metadata contracts of a backimage backup:
+// Package index defines the metadata contracts of a backimage backup:
 //
 //	/backup/manifest.json            public, small, no chunk list
 //	/backup/chunks.json              public, may be large
 //	/backup/index.json.zst[.age]     per-file table, encrypted when enabled
+//	/backup/private.json.zst         confidential metadata, always encrypted
 //
-// The JSON tags are part of the wire contract (overview.md §4.1–4.3) and
-// must not be renamed. schemaVersion 1 is the only supported version: every
-// reader rejects newer schemas with the prescribed error.
+// The JSON tags are part of the wire contract (overview.md §4.1–4.3) and must
+// not be renamed. schemaVersion 1 describes an unencrypted backup, whose
+// metadata is public by definition. schemaVersion 2 is written for an encrypted
+// backup: everything which describes the plaintext (source paths, host, totals,
+// per-chunk plaintext digests and sizes) lives in the encrypted private blob,
+// and manifest.json/chunks.json keep only what is needed to fetch and verify
+// stored blobs without the key. Both versions are readable; a newer schema is
+// rejected with the prescribed error.
 package index
 
 import (
@@ -20,12 +26,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/manprint/backimage/pkg/compress"
 	"github.com/manprint/backimage/pkg/crypt"
 )
 
-// SchemaVersion is the version written into every metadata file.
+// SchemaVersion is the version written into the metadata files of a backup
+// whose confidential fields are public because encryption is disabled.
 const SchemaVersion = 1
+
+// SchemaVersionPrivate is the version written when the confidential metadata
+// lives in the encrypted private blob instead of manifest.json/chunks.json.
+const SchemaVersionPrivate = 2
 
 // ErrBadSchema wraps validation failures of every metadata file.
 var ErrBadSchema = errors.New("invalid backup metadata")
@@ -131,6 +141,9 @@ type Manifest struct {
 	Chunking      ChunkingInfo   `json:"chunking"`
 	Layers        []LayerInfo    `json:"layers"`
 	Index         Ref            `json:"index"`
+	// Private locates the encrypted metadata blob of an encrypted backup
+	// (schema 2). It is absent when encryption is disabled.
+	Private *Ref `json:"private,omitempty"`
 }
 
 // WriteManifest serialises m as indented JSON.
@@ -170,6 +183,13 @@ func ReadManifest(r io.Reader) (*Manifest, error) {
 	if m.Index.Path == "" {
 		return nil, fmt.Errorf("%w: index.path missing", ErrBadSchema)
 	}
+	if m.Private != nil && m.Private.Path == "" {
+		return nil, fmt.Errorf("%w: private.path missing", ErrBadSchema)
+	}
+	if m.SchemaVersion == SchemaVersionPrivate && m.Private == nil {
+		return nil, fmt.Errorf("%w: schema %d without a private metadata reference",
+			ErrBadSchema, SchemaVersionPrivate)
+	}
 	for i, l := range m.Layers {
 		if l.Digest == "" || l.ChunkFrom < 0 || l.ChunkTo < l.ChunkFrom {
 			return nil, fmt.Errorf("%w: malformed layer %d", ErrBadSchema, i)
@@ -178,14 +198,16 @@ func ReadManifest(r io.Reader) (*Manifest, error) {
 	return m, nil
 }
 
-// Chunk maps one chunk index to its stored blob.
+// Chunk maps one chunk index to its stored blob. Ps and Pb describe the
+// plaintext: in an encrypted backup they are empty here and live in the
+// encrypted private blob, and are filled in memory only after an unlock.
 type Chunk struct {
 	I  int    `json:"i"`
-	P  string `json:"p"`  // blob path inside the image, e.g. backup/data/000000.blob
-	Ps string `json:"ps"` // sha256 of the plaintext chunk (dedup, phase 10)
-	Ss string `json:"ss"` // sha256 of the stored blob
-	Pb int64  `json:"pb"` // plain bytes
-	Sb int64  `json:"sb"` // stored bytes
+	P  string `json:"p"`            // blob path inside the image, e.g. backup/data/000000.blob
+	Ps string `json:"ps,omitempty"` // sha256 of the plaintext chunk (dedup, phase 10)
+	Ss string `json:"ss"`           // sha256 of the stored blob
+	Pb int64  `json:"pb,omitempty"` // plain bytes
+	Sb int64  `json:"sb"`           // stored bytes
 }
 
 // ChunkTable maps chunks to blobs. It can be large and is written separately.
@@ -221,8 +243,13 @@ func ReadChunkTable(r io.Reader) (*ChunkTable, error) {
 		if c.Pb < 0 || c.Sb < 0 {
 			return nil, fmt.Errorf("%w: chunk[%d] negative sizes", ErrBadSchema, i)
 		}
-		if !validDigest(c.Ps) || !validDigest(c.Ss) {
+		if !validDigest(c.Ss) {
 			return nil, fmt.Errorf("%w: chunk[%d] bad sha256 digest", ErrBadSchema, i)
+		}
+		// Ps is absent in an encrypted backup: it is confidential and comes
+		// from the private blob after an unlock (see MergePrivate).
+		if c.Ps != "" && !validDigest(c.Ps) {
+			return nil, fmt.Errorf("%w: chunk[%d] bad plaintext sha256 digest", ErrBadSchema, i)
 		}
 	}
 	return t, nil
@@ -302,11 +329,7 @@ func WriteIndex(w io.Writer, idx *Index, sealer crypt.Sealer) error {
 	if err := writeIndexCompressed(&z, idx); err != nil {
 		return err
 	}
-	codec, err := compress.ByID(compress.Zstd)
-	if err != nil {
-		return err
-	}
-	out, err := sealer.Seal(nil, 0, codec, z.Bytes(), [32]byte{})
+	out, err := sealMetadata(z.Bytes(), sealer)
 	if err != nil {
 		return fmt.Errorf("sealing index: %w", err)
 	}
@@ -316,18 +339,37 @@ func WriteIndex(w io.Writer, idx *Index, sealer crypt.Sealer) error {
 
 // writeIndexCompressed encodes idx as compact JSON compressed with zstd.
 func writeIndexCompressed(dst io.Writer, idx *Index) error {
+	return writeZstdJSON(dst, idx)
+}
+
+// writeZstdJSON encodes v as compact JSON compressed with zstd. The frame is
+// produced with a single worker: equal inputs yield equal bytes.
+func writeZstdJSON(dst io.Writer, v any) error {
 	zw, err := zstd.NewWriter(dst,
 		zstd.WithEncoderConcurrency(1), // deterministic single-worker frame
 	)
 	if err != nil {
 		return fmt.Errorf("zstd init: %w", err)
 	}
-	encodeErr := json.NewEncoder(zw).Encode(idx)
+	encodeErr := json.NewEncoder(zw).Encode(v)
 	closeErr := zw.Close()
 	if encodeErr != nil {
 		return encodeErr
 	}
 	return closeErr
+}
+
+// newZstdReader opens a single-worker zstd stream over r.
+func newZstdReader(r io.Reader) (*zstd.Decoder, error) {
+	zr, err := zstd.NewReader(nil, zstd.WithDecoderConcurrency(1))
+	if err != nil {
+		return nil, fmt.Errorf("zstd init: %w", err)
+	}
+	if err := zr.Reset(r); err != nil {
+		zr.Close()
+		return nil, fmt.Errorf("zstd reset: %w", err)
+	}
+	return zr, nil
 }
 
 // ReadIndex reverses WriteIndex. opener may be nil when the index is known
@@ -472,9 +514,9 @@ func validHex64(s string) bool {
 }
 
 func checkSchema(got int) error {
-	if got != SchemaVersion {
-		return fmt.Errorf("%w: update backimage (schema %d, supported %d)",
-			ErrFutureSchema, got, SchemaVersion)
+	if got != SchemaVersion && got != SchemaVersionPrivate {
+		return fmt.Errorf("%w: update backimage (schema %d, supported %d-%d)",
+			ErrFutureSchema, got, SchemaVersion, SchemaVersionPrivate)
 	}
 	return nil
 }

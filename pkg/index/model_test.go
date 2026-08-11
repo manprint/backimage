@@ -150,7 +150,7 @@ func TestManifestFutureSchema(t *testing.T) {
 	if err == nil {
 		t.Fatal("schema 99 must be rejected")
 	}
-	want := "backup created by a more recent backimage: update backimage (schema 99, supported 1)"
+	want := "backup created by a more recent backimage: update backimage (schema 99, supported 1-2)"
 	if err.Error() != want {
 		t.Fatalf("error text:\n got %q\nwant %q", err.Error(), want)
 	}

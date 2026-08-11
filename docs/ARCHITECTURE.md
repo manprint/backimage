@@ -113,6 +113,15 @@ Destinatari: `scrypt` (passphrase) e/o `age1…` X25519.
 Se la cifratura è attiva, senza passphrase o chiave privata il backup è
 **irrecuperabile**.
 
+### private.json.zst
+
+Solo per backup cifrati (`schemaVersion: 2`): blob nell'envelope crypt con i
+metadati che descrivono il contenuto — `sources`, `host`, `totals`, impronta e
+recipient della chiave, e per ogni chunk digest e byte del plaintext. Il
+manifest pubblico lo referenzia in `private` e non contiene quei campi; dopo lo
+sblocco `pkg/recovery` li rifonde in memoria. Dettagli in
+[image-format.md](image-format.md) e [security.md](security.md).
+
 ## Pianificazione dei layer (overlayfs 127)
 
 Limite overlayfs: 127 layer → massimo **118 layer di dati** (1 binario + 1

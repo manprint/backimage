@@ -14,7 +14,7 @@ Ogni manifest di piattaforma ha **2 + N** layer:
 | Layer | Path | Note |
 |-------|------|------|
 | 0 | `/backimage` | eseguibile self-extract, mode 0755, codec `store` (tar raw deterministico) |
-| 1 | `/backup/...` | metadati, mode 0644, codec `store`: `manifest.json`, `chunks.json`, `index.json.zst`, chiavi `keys*.age` (se cifrato) |
+| 1 | `/backup/...` | metadati, mode 0644, codec `store`: `manifest.json`, `chunks.json`, `index.json.zst`, `private.json.zst` e chiavi `keys*.age` (se cifrato) |
 | 2..N | `/backup/data/...` | blob dati, condivisi tra piattaforme, codec da `--compression` |
 
 L'ordine e i path sono **contratto**, garantito da `TestBuildImageLayerLayout` in `pkg/ociimg/build_test.go`.
@@ -42,24 +42,46 @@ L'ordine e i path sono **contratto**, garantito da `TestBuildImageLayerLayout` i
 | `org.opencontainers.image.created` | RFC3339 UTC | riproducibile se passata, altrimenti wall clock |
 | `org.opencontainers.image.title` | `backimage backup` | |
 | `org.opencontainers.image.description` | `run this image to restore the backup` | |
-| `dev.backimage.schema-version` | `1` | |
+| `dev.backimage.schema-version` | `1` (non cifrato) o `2` (cifrato) | |
 | `dev.backimage.tool-version` | versione binario | |
 | `dev.backimage.encrypted` | `true` / `false` | |
 | `dev.backimage.compression` | `store`, `gzip`, `zstd`, `xz`, `lz4` | |
-| `dev.backimage.files` | `manifest.totals.files` | |
-| `dev.backimage.bytes-raw` | `manifest.totals.bytesRaw` | |
 | `dev.backimage.chunks` | `manifest.chunking.count` | |
-| `dev.backimage.sources` | sorgenti originale `;`-separate | **omessa** con `--no-metadata` (Sources nil) |
+| `dev.backimage.files` | `manifest.totals.files` | **omessa** se il backup è cifrato |
+| `dev.backimage.bytes-raw` | `manifest.totals.bytesRaw` | **omessa** se il backup è cifrato |
+| `dev.backimage.sources` | sorgenti originale `;`-separate | **omessa** se il backup è cifrato o con `--no-metadata` |
+
+Le label sono leggibili dal registry senza scaricare l'immagine: un backup
+cifrato non ne pubblica nessuna che descriva il contenuto.
 
 ### Meta-dati in `/backup`
 
-- `manifest.json`: `index.Manifest` (schema 1) — mai cifrato, contiene
-  `layers[]` (digest, intervallo chunk) e `index` (ref al blob indice).
-- `chunks.json`: `index.ChunkTable` (schema 1) — chunk→blob: `i`, path,
-  sha plaintext/stored, byte plain/stored.
-- `index.json.zst`: blob indice, **già compresso** (zstd) e, se cifrato,
-  **avvolto nell'envelope crypt** (vedi `docs/security.md`).
+Lo `schemaVersion` dei metadati vale **1** per un backup non cifrato (dove
+tutto è pubblico per definizione) e **2** per un backup cifrato, dove i campi
+riservati stanno nel blob privato:
+
+- `manifest.json`: `index.Manifest` — mai cifrato, contiene `layers[]`
+  (digest, intervallo chunk), `index` (ref al blob indice), formato, codec e
+  le impostazioni di cifratura necessarie prima dello sblocco (`aead`,
+  `nonceMode`). In schema 2 contiene anche `private` (ref al blob privato) e
+  **non** contiene `sources`, `host`, `totals`, `encryption.keyFingerprint` né
+  `encryption.recipients`.
+- `chunks.json`: `index.ChunkTable` — chunk→blob: `i`, path, sha e byte del
+  blob **memorizzato** (`ss`, `sb`), che servono a localizzare e verificare i
+  chunk senza chiave. In schema 2 `ps` e `pb` (sha e byte del **plaintext**)
+  sono assenti: stanno nel blob privato.
+- `index.json.zst`: blob indice (elenco file), **già compresso** (zstd) e, se
+  cifrato, **avvolto nell'envelope crypt** (vedi `docs/security.md`).
+- `private.json.zst`: solo per backup cifrati — JSON zstd **sempre**
+  nell'envelope crypt, con `sources`, `host`, `totals`, impronta e recipient
+  della chiave e la coppia `ps`/`pb` di ogni chunk. Dopo lo sblocco
+  `pkg/recovery` lo fonde in memoria nel manifest e nella chunk table, così i
+  lettori a valle vedono la forma di sempre.
 - `keys.age` etc.: file chiavi (solo se cifrato).
+
+Un backimage che legge un'immagine di schema 1 la restaura come prima; un
+backimage precedente allo schema 2 rifiuta un'immagine nuova con
+`backup creato da un backimage più recente`.
 
 ## Media type dei layer
 

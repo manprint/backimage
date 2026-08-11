@@ -5,6 +5,47 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Metadati riservati cifrati: un backup cifrato scrive `/backup/private.json.zst`,
+  sigillato con la chiave del backup, che contiene percorsi sorgente, host,
+  totali, impronta e recipient della chiave e, per ogni chunk, digest e byte del
+  plaintext. `manifest.json` e `chunks.json` conservano solo ciò che serve a
+  scaricare e verificare i blob senza chiave. Dopo lo sblocco i campi vengono
+  rifusi in memoria, quindi restore, `ls`, `find`, `verify` e il self-extract si
+  comportano come prima.
+
+### Changed
+
+- **Sicurezza**: senza passphrase (o identità age) un'immagine cifrata non
+  rivela più nulla del proprio contenuto. In particolare non è più pubblico il
+  digest SHA-256 del plaintext di ogni chunk, che permetteva a chi possedeva
+  l'immagine di confermare offline la presenza di un file noto senza attaccare
+  la crittografia.
+- **Sicurezza**: le label/annotazioni OCI `dev.backimage.sources`,
+  `dev.backimage.files` e `dev.backimage.bytes-raw` non vengono più pubblicate
+  per un backup cifrato: erano leggibili dal registry senza nemmeno scaricare
+  l'immagine.
+- **Formato**: i metadati di un backup cifrato usano `schemaVersion: 2`; i
+  backup non cifrati restano a `schemaVersion: 1`. Questa versione legge
+  entrambi, quindi i backup esistenti si restaurano senza modifiche; un
+  backimage precedente rifiuta un'immagine nuova con «backup creato da un
+  backimage più recente».
+- `inspect` mostra sorgenti e totali di un backup cifrato solo quando riceve una
+  credenziale (passphrase, `--passphrase-file`, `BACKIMAGE_PASSPHRASE` o
+  `--age-identity`); `docker run IMAGE info` fa lo stesso e non chiede mai nulla
+  in modo interattivo.
+
+### Fixed
+
+- **Cifratura**: i blob di metadati (`index.json.zst`, `private.json.zst`)
+  venivano sigillati con un digest costante, quindi in modalità convergente
+  (`--dedup`) due backup che condividono la chiave di repository riusavano lo
+  stesso nonce AES-GCM su metadati diversi. Il nonce ora deriva dal contenuto del
+  blob, restando deterministico per la deduplica.
+
 ## [0.2.1] - 2026-08-11
 
 ### Added

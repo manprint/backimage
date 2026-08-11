@@ -297,7 +297,10 @@ func TestPipelineEncryptedDedupReusesConvergentKey(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if m.Encryption.NonceMode != "convergent" || m.Encryption.KeyFingerprint == "" {
+		// The nonce mode stays public: dedup must pick the previous key before
+		// anything is unlocked. The key fingerprint does not: it links backups
+		// to each other, so it travels inside the sealed private blob.
+		if m.Encryption.NonceMode != "convergent" || m.Encryption.KeyFingerprint != "" {
 			t.Fatalf("dedup encryption metadata = %+v", m.Encryption)
 		}
 		keyFile, err := src.KeyFile(context.Background(), "keys.pass.age")
@@ -308,7 +311,22 @@ func TestPipelineEncryptedDedupReusesConvergentKey(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return km, m.Encryption.KeyFingerprint
+		opener, err := crypt.NewOpener(km)
+		if err != nil {
+			t.Fatal(err)
+		}
+		privateBlob, err := src.PrivateBlob(context.Background())
+		if err != nil {
+			t.Fatal(err)
+		}
+		private, err := index.ReadPrivate(bytes.NewReader(privateBlob), opener)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if private.Encryption.KeyFingerprint == "" {
+			t.Fatalf("private metadata without a key fingerprint: %+v", private.Encryption)
+		}
+		return km, private.Encryption.KeyFingerprint
 	}
 	key1, fingerprint1 := load("t1", "dedup passphrase")
 	defer key1.Wipe()

@@ -612,6 +612,14 @@ l'immagine e `ls`/`find` elencano i path. `inspect --layers` e `verify --quick`
 invece leggono solo i metadati pubblici e non richiedono la passphrase;
 `verify` completo è preferibile prima di un restore.
 
+In un backup cifrato i metadati pubblici non descrivono il contenuto: percorsi
+sorgente, host, numero di file e byte totali stanno nel blob cifrato
+`private.json.zst`, insieme all'indice dei file. `inspect` li mostra solo se
+riceve la passphrase o l'identità age (le stesse opzioni di `--files`), e le
+label OCI dell'immagine non li pubblicano affatto. Vedi
+[docs/security.md](docs/security.md) per l'elenco completo di cosa resta
+visibile senza chiave.
+
 ```console
 backimage inspect docker.io/demoarchiveuser/mindhunters:mindhunters-test --files \
   --passphrase-file ./backup.pass
@@ -966,7 +974,9 @@ backimage verify IMAGE [--quick] [--continue] [source flags]
 ```
 
 `inspect` mostra metadati pubblici; `--layers` aggiunge digest e intervalli dei
-layer; `--files` sblocca l’immagine e include l’indice dei file. `ls` elenca
+layer; `--files` sblocca l’immagine e include l’indice dei file. Per un backup
+cifrato sorgenti e totali arrivano dai metadati cifrati: compaiono solo se si
+passa una passphrase o un’identità age. `ls` elenca
 path (con `-l` dettagli); `find` applica un glob. `verify --quick` controlla
 solo i metadati pubblici, mentre la modalità normale verifica anche i layer;
 `--continue` raccoglie tutti gli errori di integrità.

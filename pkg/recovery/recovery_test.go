@@ -23,14 +23,31 @@ import (
 const fixturePassphrase = "correct horse battery staple"
 
 type fixture struct {
-	root       string
-	tarBytes   []byte
-	entries    []index.FileEntry
-	chunkPath  string
-	chunkCount int
+	root         string
+	sourcePath   string
+	tarBytes     []byte
+	entries      []index.FileEntry
+	plainDigests []string
+	chunkPath    string
+	chunkCount   int
 }
 
+// makeFixture writes a schema 1 backup: an encrypted one keeps its
+// confidential metadata in the clear, exactly like images produced before the
+// private blob existed.
 func makeFixture(t *testing.T, encrypted bool, chunkBytes int) fixture {
+	t.Helper()
+	return buildFixture(t, encrypted, chunkBytes, false)
+}
+
+// makePrivateFixture writes the current layout: an encrypted backup whose
+// confidential metadata lives in the sealed private blob (schema 2).
+func makePrivateFixture(t *testing.T, chunkBytes int) fixture {
+	t.Helper()
+	return buildFixture(t, true, chunkBytes, true)
+}
+
+func buildFixture(t *testing.T, encrypted bool, chunkBytes int, privateMeta bool) fixture {
 	t.Helper()
 	ctx := context.Background()
 	src := t.TempDir()
@@ -101,6 +118,11 @@ func makeFixture(t *testing.T, encrypted bool, chunkBytes int) fixture {
 	if err := os.WriteFile(filepath.Join(root, "data", "000000.blob"), stored.Bytes(), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// Capture the plaintext digests before SplitPrivate strips them from rows.
+	plainDigests := make([]string, len(rows))
+	for i, row := range rows {
+		plainDigests[i] = row.Ps
+	}
 
 	entries := make([]index.FileEntry, 0, len(aw.Entries()))
 	for _, e := range aw.Entries() {
@@ -122,17 +144,30 @@ func makeFixture(t *testing.T, encrypted bool, chunkBytes int) fixture {
 	if encrypted {
 		m.Encryption = index.EncryptionInfo{Enabled: true, AEAD: "aes256-gcm", KDF: "scrypt-age", NonceMode: "random"}
 	}
-	writeFile(t, filepath.Join(root, "manifest.json"), func(w io.Writer) error { return index.WriteManifest(w, m) })
 	table := &index.ChunkTable{SchemaVersion: 1, Chunks: rows}
+	if privateMeta {
+		private := index.SplitPrivate(m, table)
+		if private == nil {
+			t.Fatal("SplitPrivate returned nothing for an encrypted fixture")
+		}
+		writeFile(t, filepath.Join(root, index.PrivatePath), func(w io.Writer) error {
+			return index.WritePrivate(w, private, sealer)
+		})
+	}
+	writeFile(t, filepath.Join(root, "manifest.json"), func(w io.Writer) error { return index.WriteManifest(w, m) })
 	writeFile(t, filepath.Join(root, "chunks.json"), func(w io.Writer) error { return index.WriteChunkTable(w, table) })
-	idx := &index.Index{SchemaVersion: 1, Entries: entries}
+	idx := &index.Index{SchemaVersion: m.SchemaVersion, Entries: entries}
 	writeFile(t, filepath.Join(root, "index.json.zst"), func(w io.Writer) error { return index.WriteIndex(w, idx, sealer) })
 	if encrypted {
 		writeFile(t, filepath.Join(root, "keys.pass.age"), func(w io.Writer) error {
 			return crypt.WrapKeys(w, km, crypt.Recipients{Passphrase: []byte(fixturePassphrase)})
 		})
 	}
-	return fixture{root: root, tarBytes: append([]byte(nil), plain.Bytes()...), entries: entries, chunkPath: filepath.Join(root, "data", "000000.blob"), chunkCount: len(rows)}
+	return fixture{
+		root: root, sourcePath: src, tarBytes: append([]byte(nil), plain.Bytes()...),
+		entries: entries, plainDigests: plainDigests,
+		chunkPath: filepath.Join(root, "data", "000000.blob"), chunkCount: len(rows),
+	}
 }
 
 func writeFile(t *testing.T, path string, write func(io.Writer) error) {
@@ -219,6 +254,114 @@ func TestEncryptedUnlockAndPartialVerify(t *testing.T) {
 	full, err := b.Verify(context.Background(), true, false)
 	if err != nil || !full.OK || full.Entries == 0 {
 		t.Fatalf("full verify = %+v, %v", full, err)
+	}
+}
+
+// TestPrivateMetadataHidesContentUntilUnlock is the regression test for the
+// confidentiality of the metadata: with the image but not the passphrase,
+// nothing describing the plaintext is readable, and everything comes back once
+// the backup is unlocked.
+func TestPrivateMetadataHidesContentUntilUnlock(t *testing.T) {
+	f := makePrivateFixture(t, 1536)
+	ctx := context.Background()
+
+	for _, name := range []string{"manifest.json", "chunks.json"} {
+		data, err := os.ReadFile(filepath.Join(f.root, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if bytes.Contains(data, []byte(f.sourcePath)) {
+			t.Fatalf("%s leaks the source path %q", name, f.sourcePath)
+		}
+		for _, digest := range f.plainDigests {
+			if bytes.Contains(data, []byte(digest)) {
+				t.Fatalf("%s leaks the plaintext digest %s", name, digest)
+			}
+		}
+		for _, entry := range f.entries {
+			if base := filepath.Base(entry.Path); base != "." && bytes.Contains(data, []byte(base)) {
+				t.Fatalf("%s leaks the archived name %q", name, base)
+			}
+		}
+	}
+
+	b, err := OpenLocal(ctx, f.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	if b.Manifest.SchemaVersion != index.SchemaVersionPrivate || b.Manifest.Private == nil {
+		t.Fatalf("manifest = schema %d, private %+v", b.Manifest.SchemaVersion, b.Manifest.Private)
+	}
+	if b.Manifest.Sources != nil || b.Manifest.Totals != (index.Totals{}) || b.Manifest.Host != (index.HostInfo{}) {
+		t.Fatalf("locked manifest describes the content: %+v", b.Manifest)
+	}
+	for i, c := range b.Chunks.Chunks {
+		if c.Ps != "" || c.Pb != 0 {
+			t.Fatalf("locked chunk %d describes the plaintext: %+v", i, c)
+		}
+	}
+	// What stays public must keep the no-passphrase integrity check working.
+	partial, err := b.Verify(ctx, false, false)
+	if err != nil || !partial.OK || partial.Full {
+		t.Fatalf("partial verify = %+v, %v", partial, err)
+	}
+
+	if err := b.Unlock(ctx, crypt.Identity{Passphrase: []byte(fixturePassphrase)}); err != nil {
+		t.Fatal(err)
+	}
+	if len(b.Manifest.Sources) != 1 || b.Manifest.Sources[0] != f.sourcePath {
+		t.Fatalf("sources after unlock = %v", b.Manifest.Sources)
+	}
+	if b.Manifest.Totals.Files != 2 {
+		t.Fatalf("totals after unlock = %+v", b.Manifest.Totals)
+	}
+	for i, c := range b.Chunks.Chunks {
+		if c.Ps != f.plainDigests[i] || c.Pb == 0 {
+			t.Fatalf("chunk %d after unlock = %+v", i, c)
+		}
+	}
+	var got bytes.Buffer
+	if err := b.StreamTar(ctx, &got, true); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got.Bytes(), f.tarBytes) {
+		t.Fatal("reconstructed tar differs")
+	}
+	full, err := b.Verify(ctx, true, false)
+	if err != nil || !full.OK || full.Entries != len(f.entries) {
+		t.Fatalf("full verify = %+v, %v", full, err)
+	}
+	// Selective restore depends on the plaintext prefix sums, which are only
+	// known once the private metadata has been merged.
+	idx, err := b.Index(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var selected bytes.Buffer
+	if err := b.StreamSelectedTar(ctx, idx, idx.Entries[:1], &selected, true); err != nil {
+		t.Fatalf("selected tar: %v", err)
+	}
+	if selected.Len() == 0 {
+		t.Fatal("selected tar is empty")
+	}
+}
+
+func TestPrivateMetadataNeedsTheKey(t *testing.T) {
+	f := makePrivateFixture(t, 1536)
+	b, err := OpenLocal(context.Background(), f.root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	if err := b.Unlock(context.Background(), crypt.Identity{Passphrase: []byte("wrong")}); !errors.Is(err, crypt.ErrWrongPassphrase) {
+		t.Fatalf("wrong passphrase = %v", err)
+	}
+	if b.Manifest.Sources != nil {
+		t.Fatal("a failed unlock revealed the sources")
+	}
+	if _, err := b.Index(context.Background()); !errors.Is(err, crypt.ErrWrongPassphrase) {
+		t.Fatalf("Index without key = %v", err)
 	}
 }
 

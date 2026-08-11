@@ -8,7 +8,7 @@ if ! command -v docker >/dev/null 2>&1; then
 	echo "phase 06 e2e OK"
 	exit 0
 fi
-for tool in curl cmp tar; do
+for tool in curl cmp tar jq; do
 	command -v "$tool" >/dev/null 2>&1 || { echo "missing $tool"; exit 1; }
 done
 
@@ -58,6 +58,24 @@ grep -q 'backup backimage' <<<"$info_output"
 list_output="$(BACKIMAGE_PASSPHRASE="$secret" docker run --rm \
 	-e BACKIMAGE_PASSPHRASE "$IMAGE" list)"
 grep -q 'tree/sub/small.txt' <<<"$list_output"
+
+echo "==> encrypted metadata: nothing about the content is public"
+# Labels are readable from the registry without pulling: they must not describe
+# the backup, and `info` without the passphrase must not print the sources.
+docker inspect "$IMAGE" | jq -e '.[0].Config.Labels["dev.backimage.sources"] == null' >/dev/null
+docker inspect "$IMAGE" | jq -e '.[0].Config.Labels["dev.backimage.files"] == null' >/dev/null
+docker inspect "$IMAGE" | jq -e '.[0].Config.Labels["dev.backimage.bytes-raw"] == null' >/dev/null
+if grep -q "$tree" <<<"$info_output"; then
+	echo "info leaks the source path without the passphrase"
+	exit 1
+fi
+bin/backimage --json inspect "$IMAGE" | jq -e '.manifest.sources == null and .manifest.totals.files == 0' >/dev/null
+bin/backimage --json inspect "$IMAGE" | jq -e '.manifest.private.path == "private.json.zst" and .manifest.schemaVersion == 2' >/dev/null
+# With the passphrase the same fields come back, from the encrypted blob.
+BACKIMAGE_PASSPHRASE="$secret" bin/backimage --json inspect "$IMAGE" \
+	| jq -e --arg tree "$tree" '.manifest.sources == [$tree] and .manifest.totals.files > 0' >/dev/null
+priv_info="$(BACKIMAGE_PASSPHRASE="$secret" docker run --rm -e BACKIMAGE_PASSPHRASE "$IMAGE" info)"
+grep -q "$tree" <<<"$priv_info"
 
 echo "==> canonical tar round-trip"
 BACKIMAGE_PASSPHRASE="$secret" docker run --rm \

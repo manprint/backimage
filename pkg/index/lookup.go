@@ -22,6 +22,10 @@ type Locator struct {
 // NewLocator builds a locator from a validated chunk table (ReadChunkTable
 // contracts). Negative sizes in the table produce a locator whose searches
 // return usage errors rather than panicking.
+//
+// It relies on the plain sizes, which are confidential in an encrypted backup:
+// pass a table whose Pb fields have been filled by MergePrivate, otherwise
+// every chunk looks empty.
 func NewLocator(t *ChunkTable) *Locator {
 	if t == nil {
 		return &Locator{t: &ChunkTable{}}

@@ -24,24 +24,16 @@ import (
 var stdoutIsTerminal = func() bool { return term.IsTerminal(int(os.Stdout.Fd())) }
 var removeDockerImage = dockerd.RemoveLocalImage
 
-func cmdInfo(_ context.Context, args []string) error {
+func cmdInfo(ctx context.Context, args []string) error {
 	var common commonOptions
 	fs := newFlagSet("info", &common)
 	asJSON := fs.Bool("json", false, "JSON output")
 	if err := parseFlags(fs, args); err != nil {
 		return err
 	}
-	f, err := os.Open(filepath.Join(common.root, "manifest.json"))
-	if err != nil {
-		return fmt.Errorf("questa immagine non è un backup backimage: %w", err)
-	}
-	m, err := index.ReadManifest(f)
-	closeErr := f.Close()
+	m, unlocked, err := infoManifest(ctx, common)
 	if err != nil {
 		return err
-	}
-	if closeErr != nil {
-		return closeErr
 	}
 	if *asJSON {
 		return json.NewEncoder(stdout).Encode(m)
@@ -55,10 +47,50 @@ func cmdInfo(_ context.Context, args []string) error {
 	if len(m.Sources) > 0 {
 		fmt.Fprintf(stdout, "  origine       %v\n", m.Sources)
 	}
-	fmt.Fprintf(stdout, "  contenuto     %d file, %d directory, %d byte\n", m.Totals.Files, m.Totals.Dirs, m.Totals.BytesRaw)
-	fmt.Fprintf(stdout, "  archivio      %s, %s livello %d -> %d byte\n", m.Archive.Format, m.Archive.Compression, m.Archive.CompressionLevel, m.Totals.BytesStored)
+	if m.Private != nil && !unlocked {
+		// Everything describing the content is encrypted: say so instead of
+		// printing the zeroes left in the public manifest.
+		fmt.Fprintf(stdout, "  contenuto     cifrato: fornisci la passphrase per i dettagli\n")
+		fmt.Fprintf(stdout, "  archivio      %s, %s livello %d\n", m.Archive.Format, m.Archive.Compression, m.Archive.CompressionLevel)
+	} else {
+		fmt.Fprintf(stdout, "  contenuto     %d file, %d directory, %d byte\n", m.Totals.Files, m.Totals.Dirs, m.Totals.BytesRaw)
+		fmt.Fprintf(stdout, "  archivio      %s, %s livello %d -> %d byte\n", m.Archive.Format, m.Archive.Compression, m.Archive.CompressionLevel, m.Totals.BytesStored)
+	}
 	fmt.Fprintf(stdout, "  cifratura     %s\n", encryption)
 	return nil
+}
+
+// infoManifest reads the manifest and, when a credential is available, unlocks
+// the backup so the encrypted metadata is merged into it. It never prompts: a
+// plain `docker run IMAGE info` must keep working unattended.
+func infoManifest(ctx context.Context, common commonOptions) (*index.Manifest, bool, error) {
+	f, err := os.Open(filepath.Join(common.root, "manifest.json"))
+	if err != nil {
+		return nil, false, fmt.Errorf("questa immagine non è un backup backimage: %w", err)
+	}
+	m, err := index.ReadManifest(f)
+	closeErr := f.Close()
+	if err != nil {
+		return nil, false, err
+	}
+	if closeErr != nil {
+		return nil, false, closeErr
+	}
+	if m.Private == nil || !common.hasCredential() {
+		return m, false, nil
+	}
+	b, err := recovery.OpenLocal(ctx, common.root)
+	if err != nil {
+		return nil, false, err
+	}
+	defer b.Close()
+	if err := common.unlock(ctx, b, false); err != nil {
+		return nil, false, err
+	}
+	if !b.IsUnlocked() {
+		return m, false, nil
+	}
+	return b.Manifest, true, nil
 }
 
 func openBackup(ctx context.Context, common commonOptions, required bool, report func(string)) (*recovery.Backup, error) {

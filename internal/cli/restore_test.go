@@ -32,6 +32,7 @@ type mockImageSource struct {
 	table       *index.ChunkTable
 	keys        map[string][]byte
 	idx         []byte
+	private     []byte
 	blobs       [][]byte
 	reads       int
 	closed      bool
@@ -55,6 +56,12 @@ func (s *mockImageSource) KeyFile(_ context.Context, name string) ([]byte, error
 }
 func (s *mockImageSource) IndexBlob(context.Context) ([]byte, error) {
 	return append([]byte(nil), s.idx...), s.indexErr
+}
+func (s *mockImageSource) PrivateBlob(context.Context) ([]byte, error) {
+	if len(s.private) == 0 {
+		return nil, os.ErrNotExist
+	}
+	return append([]byte(nil), s.private...), nil
 }
 func (s *mockImageSource) Blob(_ context.Context, i int) ([]byte, error) {
 	s.reads++

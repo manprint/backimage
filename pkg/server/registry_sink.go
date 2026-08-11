@@ -195,6 +195,7 @@ func (s *RegistrySink) CommitStream(ctx context.Context, commit StreamCommit) (s
 			Manifest:    commit.Manifest,
 			ChunkTable:  commit.ChunkTable,
 			IndexBlob:   commit.IndexBlob,
+			PrivateBlob: commit.PrivateBlob,
 			KeyFiles:    commit.KeyFiles,
 			DataLayers:  dataLayers,
 			Codec:       commit.Codec,

@@ -29,12 +29,26 @@ import (
 
 const defaultCacheBytes int64 = 2 << 30
 
+// metadataNames is the closed set of files read from the metadata layer.
+var metadataNames = map[string]bool{
+	"manifest.json":   true,
+	"chunks.json":     true,
+	"index.json.zst":  true,
+	index.PrivatePath: true,
+	"keys.age":        true,
+	"keys.pass.age":   true,
+}
+
 // Source gives random access to the blobs of a backup image.
 type Source interface {
 	Manifest(context.Context) (*index.Manifest, error)
 	ChunkTable(context.Context) (*index.ChunkTable, error)
 	KeyFile(context.Context, string) ([]byte, error)
 	IndexBlob(context.Context) ([]byte, error)
+	// PrivateBlob returns the sealed confidential metadata of an encrypted
+	// backup (index.PrivatePath). It returns os.ErrNotExist for a backup which
+	// has none, such as an unencrypted or a schema 1 one.
+	PrivateBlob(context.Context) ([]byte, error)
 	Blob(context.Context, int) ([]byte, error)
 	Close() error
 }
@@ -204,7 +218,7 @@ func (s *imageSource) loadMeta() {
 			continue
 		}
 		name := strings.TrimPrefix(strings.TrimPrefix(h.Name, "/"), "backup/")
-		if name != "manifest.json" && name != "chunks.json" && name != "index.json.zst" && name != "keys.age" && name != "keys.pass.age" {
+		if !metadataNames[name] {
 			continue
 		}
 		data, err := io.ReadAll(io.LimitReader(tr, h.Size+1))
@@ -269,6 +283,10 @@ func (s *imageSource) KeyFile(_ context.Context, name string) ([]byte, error) {
 
 func (s *imageSource) IndexBlob(_ context.Context) ([]byte, error) {
 	return s.metadata("index.json.zst")
+}
+
+func (s *imageSource) PrivateBlob(_ context.Context) ([]byte, error) {
+	return s.metadata(index.PrivatePath)
 }
 
 func (s *imageSource) Blob(ctx context.Context, i int) ([]byte, error) {

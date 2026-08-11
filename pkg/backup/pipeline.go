@@ -695,6 +695,7 @@ type builder struct {
 	manifestBytes    []byte
 	chunkTable       *index.ChunkTable
 	indexBlob        []byte
+	privateBlob      []byte
 	tempFiles        []string
 	cleaned          bool
 	createdAt        time.Time
@@ -1058,13 +1059,25 @@ func (b *builder) finalize() error {
 		m.Sources = nil
 		m.Host = index.HostInfo{}
 	}
+
+	b.chunkTable = &index.ChunkTable{SchemaVersion: index.SchemaVersion, Chunks: b.rows}
+
+	// An encrypted backup publishes no description of its plaintext: source
+	// paths, host, totals and the per-chunk plaintext digests and sizes move
+	// into the sealed private blob, which only the backup key can open.
+	if private := index.SplitPrivate(m, b.chunkTable); private != nil {
+		var pb bytes.Buffer
+		if err := index.WritePrivate(&pb, private, b.sealer); err != nil {
+			return err
+		}
+		b.privateBlob = pb.Bytes()
+		m.Private.StoredSha256 = "sha256:" + hex.EncodeToString(sha256Of(b.privateBlob))
+	}
 	b.manifest = m
 	b.manifestBytes = manifestJSON(m)
 
-	b.chunkTable = &index.ChunkTable{SchemaVersion: 1, Chunks: b.rows}
-
 	ict := &index.Index{
-		SchemaVersion: 1,
+		SchemaVersion: m.SchemaVersion,
 		Entries:       archiveToIndex(b.entries),
 	}
 	var ib bytes.Buffer
@@ -1223,6 +1236,7 @@ func (b *builder) buildImages() (map[string]v1.Image, v1.ImageIndex, error) {
 			Manifest:    b.manifest,
 			ChunkTable:  b.chunkTable,
 			IndexBlob:   b.indexBlob,
+			PrivateBlob: b.privateBlob,
 			KeyFiles:    keyFiles,
 			DataLayers:  b.data,
 			Codec:       b.codec,

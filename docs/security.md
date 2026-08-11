@@ -59,6 +59,14 @@ Overhead per chunk cifrato: 40 byte (24 header + 16 tag).
   `convergent` genera sempre una nuova chiave. GCM con nonce ripetuti sotto la
   stessa DEK sarebbe una perdita totale di confidenzialità.
 
+I blob di metadati (`index.json.zst`, `private.json.zst`) sono sigillati con lo
+stesso schema, con `plainSHA` uguale al digest del payload compresso: in
+modalità convergente il nonce dipende quindi dal contenuto. Derivarlo da una
+costante avrebbe fatto riusare lo stesso nonce su metadati diversi in due backup
+che condividono la chiave di repository — perdita totale di confidenzialità e
+autenticazione su quei blob. Test di regressione:
+`TestConvergentMetadataNonceIsContentDerived` in `pkg/index`.
+
 ### Trade-off della deduplica
 
 `--dedup` non è attivo di default. Con esso, un osservatore del registry può
@@ -67,9 +75,34 @@ cambiati i dati. Non ottiene il plaintext né la DEK. Usare la modalità normale
 per dati con elevato rischio di analisi delle modifiche o con un avversario che
 possa scegliere contenuti noti.
 
-Il manifest espone solo `encryption.keyFingerprint`, i primi 8 byte di
-`SHA-256(DEK)`: serve a verificare il riuso della chiave, non permette di
-ricostruirla.
+## Cosa è visibile senza la passphrase
+
+Un backup cifrato non descrive il proprio contenuto in nessun dato pubblico.
+Restano fuori dalla cifratura solo le informazioni necessarie a scaricare e
+verificare i blob senza chiave:
+
+| Visibile | Cifrato (`private.json.zst`) |
+|---|---|
+| data di creazione, versione tool, codec e livello | percorsi sorgente (`sources`) |
+| `aead`, `nonceMode`, `kdf` | hostname, OS, arch della macchina di origine |
+| digest e dimensione dei layer, numero di chunk | numero di file/dir/link e byte totali |
+| per chunk: path del blob, `ss` e `sb` (digest e byte del **blob cifrato**) | per chunk: `ps` e `pb` (digest e byte del **plaintext**) |
+| | impronta e recipient della chiave (`keyFingerprint`, `recipients`) |
+| | elenco file, permessi, owner, mtime, digest (`index.json.zst`) |
+
+Il digest del plaintext per chunk era il punto peggiore: pubblicato in chiaro
+avrebbe permesso, senza toccare la crittografia, di confermare offline se un
+file noto fa parte del backup. Ora vive nel blob privato e la verifica
+plaintext è possibile solo dopo lo sblocco; `verify --quick` e la verifica
+parziale del self-extract continuano a funzionare sui digest dei blob cifrati.
+Le label OCI (`dev.backimage.sources`, `.files`, `.bytes-raw`), leggibili dal
+registry senza scaricare l'immagine, non vengono pubblicate per un backup
+cifrato.
+
+Restano inevitabilmente osservabili: l'esistenza del backup, il momento in cui
+è stato fatto, la sua dimensione complessiva e la dimensione di ogni blob
+cifrato (quindi un profilo grossolano di comprimibilità), oltre a quanto
+`--dedup` rivela per costruzione.
 
 ### AAD (authenticated data)
 

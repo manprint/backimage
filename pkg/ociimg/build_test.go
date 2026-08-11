@@ -53,6 +53,7 @@ func sampleOpts(t *testing.T, data []v1.Layer) BuildOptions {
 		Manifest:    sampleManifest(),
 		ChunkTable:  sampleChunkTable(),
 		IndexBlob:   []byte("ztream-index"),
+		PrivateBlob: []byte("sealed-private-metadata"),
 		KeyFiles: map[string][]byte{
 			"keys.age":      []byte("age-secret"),
 			"keys.pass.age": []byte("scrypt-secret"),
@@ -124,7 +125,7 @@ func TestBuildImageLayerLayout(t *testing.T) {
 		t.Fatalf("/backimage mode = %#o, want 0755", e.Mode)
 	}
 	meta := tarEntries(t, layers[1])
-	for _, want := range []string{"/backup/manifest.json", "/backup/chunks.json", "/backup/index.json.zst", "/backup/keys.age", "/backup/keys.pass.age"} {
+	for _, want := range []string{"/backup/manifest.json", "/backup/chunks.json", "/backup/index.json.zst", "/backup/private.json.zst", "/backup/keys.age", "/backup/keys.pass.age"} {
 		if _, ok := meta[want]; !ok {
 			t.Errorf("missing %s", want)
 		}
@@ -157,13 +158,45 @@ func TestBuildImageConfig(t *testing.T) {
 		"dev.backimage.schema-version":   "1",
 		"dev.backimage.tool-version":     "0.4.0",
 		"dev.backimage.encrypted":        "true",
-		"dev.backimage.files":            "42",
-		"dev.backimage.bytes-raw":        "12345",
-		"dev.backimage.sources":          "/data",
+		"dev.backimage.chunks":           "2",
 		"org.opencontainers.image.title": "backimage backup",
 	} {
 		if c.Labels[k] != want {
 			t.Errorf("label %s = %q, want %q", k, c.Labels[k], want)
+		}
+	}
+	// An encrypted backup must not describe its content in the registry: these
+	// labels are readable without pulling the image, let alone decrypting it.
+	for _, k := range []string{"dev.backimage.files", "dev.backimage.bytes-raw", "dev.backimage.sources"} {
+		if v, ok := c.Labels[k]; ok {
+			t.Errorf("encrypted backup published label %s = %q", k, v)
+		}
+	}
+}
+
+func TestBuildImageLabelsWithoutEncryption(t *testing.T) {
+	opts := sampleOpts(t, nil)
+	m := sampleManifest()
+	m.Encryption = index.EncryptionInfo{}
+	m.Index.Encrypted = false
+	opts.Manifest = m
+	img, err := BuildImage(opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := img.ConfigFile()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for k, want := range map[string]string{
+		"dev.backimage.encrypted":   "false",
+		"dev.backimage.files":       "42",
+		"dev.backimage.bytes-raw":   "12345",
+		"dev.backimage.sources":     "/data",
+		"dev.backimage.compression": "store",
+	} {
+		if cfg.Config.Labels[k] != want {
+			t.Errorf("label %s = %q, want %q", k, cfg.Config.Labels[k], want)
 		}
 	}
 }
@@ -291,6 +324,7 @@ func TestBuildImageNilInputs(t *testing.T) {
 		t.Fatalf("nil manifest/keys must build: %v", err)
 	}
 	o.IndexBlob = nil
+	o.PrivateBlob = nil
 	if _, err := BuildImage(o); err == nil {
 		t.Fatal("want error for empty metadata layer")
 	}
