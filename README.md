@@ -238,9 +238,11 @@ backimage login --list
 Il file usa il formato Docker `auths`, viene scritto atomicamente e ha permessi
 `0600`; viene rifiutato se è leggibile da gruppo o da altri utenti. Il primo
 account di un provider è salvato sotto la chiave host (compatibile con Docker),
-gli account aggiuntivi sotto `host#username`. È un file
-locale compatibile con l'autenticazione Docker, non un password manager
-cifrato: proteggerlo e non inserirlo in repository, immagini o backup pubblici.
+gli account nominati aggiuntivi sotto `host#username`. Un bearer token
+host-wide usa invece un'identità interna riservata, distinta da ogni account
+nominato. È un file locale compatibile con l'autenticazione Docker, non un
+password manager cifrato: proteggerlo e non inserirlo in repository, immagini
+o backup pubblici.
 
 `backimage` cerca prima il proprio file. Se non trova una credenziale valida,
 usa la configurazione Docker e gli eventuali credential helper come fallback.
@@ -276,6 +278,38 @@ terza colonna spiega perché `sudo backimage login --list` può mostrare un
 elenco diverso dallo stesso comando senza `sudo`: sono due file distinti
 (`/root/.config/...` contro `/home/UTENTE/.config/...`). `--json` restituisce
 gli stessi campi più `authFile`.
+
+#### Bearer token host-wide: account `token`
+
+`backimage login REGISTRY --token TOKEN` salva un bearer token già emesso, che
+non porta uno username del registry. La sua identità pubblica è `token`: viene
+mostrata da `login --list` e negli errori di selezione, e può essere usata sia
+con `--registry-user` sia con `logout --user`.
+
+```console
+# Il valore passato a --token è visibile nella command line: preferire un
+# token breve e non riusabile quando il provider lo consente.
+backimage login ghcr.io --token "$REGISTRY_BEARER_TOKEN"
+
+# Se sullo stesso host esistono anche account nominati, scegliere il token.
+backimage backup /srv/data --repo ghcr.io/team/dumps --tag daily \
+  --registry-user token
+
+# Rimuove solo il token e conserva gli account nominati dello stesso host.
+backimage logout ghcr.io --user token
+```
+
+Token e login nominati possono essere inseriti in qualunque ordine: usano
+chiavi di storage distinte e non si sovrascrivono. Per compatibilità, il primo
+account continua a poter occupare la chiave host usata dalle versioni
+precedenti; quando deve coesistere con un altro account, il token riceve una
+chiave riservata separata. Anche un vecchio token salvato sulla chiave host
+resta leggibile.
+
+Quando il token convive con uno o più username, il comando non sceglie
+silenziosamente: richiede `--registry-user token` oppure uno username
+esplicito. Analogamente, `logout` senza `--user` si ferma se la scelta è
+ambigua; `--user token` elimina soltanto la credenziale bearer.
 
 #### Quale account viene usato
 
@@ -964,6 +998,17 @@ combinazioni: `90m`, `12h`, `3d`, `2w`, `1d12h`. **L'unità è obbligatoria**: u
 numero nudo come `3` viene rifiutato, perché non si capirebbe se sono secondi,
 ore o giorni.
 
+Una durata impostata esplicitamente deve inoltre essere **maggiore di zero**:
+`--keep-within 0` e `--delete-older-than 0` sono errori d'uso. Lo zero ha invece
+un significato valido per `--keep-last 0`, dove disabilita quella regola. Per
+non applicare una regola temporale basta omettere il relativo flag. Questa
+distinzione evita che `--delete-older-than 0`, apparentemente distruttivo,
+venga interpretato come regola disabilitata e conservi tutto in silenzio.
+
+La policy viene validata prima di aprire la connessione al registry: durata
+senza unità, negativa o zero, e la combinazione dei due flag temporali vengono
+rifiutate senza eseguire `ListTags` o altre operazioni remote.
+
 #### Regole di retention
 
 Un tag è conservato se **almeno una** regola lo seleziona, ed eliminato solo se
@@ -1102,8 +1147,30 @@ l'impronta sopravvive ai riavvii. La destinazione è, in ordine:
 | solo `--tls-self-signed` | in memoria: **effimero**, impronta nuova a ogni avvio |
 
 Se i file esistono vengono riusati; se mancano vengono creati (certificato
-valido 10 anni, chiave a `0600`, directory create con `0700`). La chiave non
-viene mai sovrascritta.
+valido 10 anni a `0644`, chiave a `0600`, directory create con `0700`). La
+chiave non viene mai sovrascritta.
+
+##### Pubblicazione e recupero della coppia TLS
+
+Certificato e chiave sono trattati come una coppia indivisibile:
+
+1. entrambi i PEM vengono scritti integralmente in file temporanei nelle
+   rispettive directory, con i permessi finali;
+2. i file vengono sincronizzati e chiusi prima di essere resi visibili;
+3. la pubblicazione usa rename sullo stesso filesystem, quindi un lettore non
+   osserva mai un PEM scritto solo in parte;
+4. se la pubblicazione del certificato fallisce dopo quella della chiave, la
+   chiave appena pubblicata viene rimossa. Il riavvio successivo può quindi
+   riprovare invece di restare bloccato su materiale generato a metà.
+
+Due path distinti non possono essere rinominati in un'unica operazione
+filesystem. Per questo, all'avvio, `backimage` accetta soltanto **entrambi i
+file presenti** oppure **entrambi assenti**. Se un arresto del sistema o un
+intervento esterno lascia un solo file, il server fallisce esplicitamente con
+`incomplete TLS material` e non genera una nuova chiave: prima di riavviare,
+ripristinare il file corrispondente oppure, dopo aver verificato che la coppia
+non sia recuperabile, rimuovere l'orfano. In questo modo un errore di I/O non
+causa una rotazione silenziosa del PIN fidato dai client.
 
 Percorso esplicito, indipendente dallo spool:
 
@@ -1536,6 +1603,66 @@ in cui persistere quello generato), `BACKIMAGE_TLS_CA` (mTLS),
 `BACKIMAGE_QUIET`, `BACKIMAGE_NO_COLOR`, `BACKIMAGE_CONFIG`,
 `BACKIMAGE_AUTH_FILE` e le variabili QUIC sperimentali.
 
+#### Precedenza fra ambiente e command line
+
+Il caricamento da ambiente visita sia i flag locali di `listen-remote`, sia i
+flag persistenti ereditati dalla root. Sono quindi effettivi anche
+`BACKIMAGE_JSON`, `BACKIMAGE_QUIET`, `BACKIMAGE_VERBOSE`,
+`BACKIMAGE_NO_COLOR`, `BACKIMAGE_CONFIG` e `BACKIMAGE_REGISTRY_USER`, non solo
+flag locali come `BACKIMAGE_WORK_DIR` o `BACKIMAGE_TLS_SELF_SIGNED`.
+
+La precedenza è intenzionalmente semplice:
+
+1. un flag presente sulla command line vince sempre, anche se imposta
+   esplicitamente `false`, `0` o una stringa vuota;
+2. in assenza del flag, una variabile `BACKIMAGE_*` non vuota diventa il valore
+   del flag;
+3. una variabile assente o composta solo da spazi viene ignorata e resta il
+   default normale.
+
+```console
+# JSON e verbosità arrivano dall'ambiente; l'indirizzo è un flag locale.
+BACKIMAGE_JSON=true BACKIMAGE_VERBOSE=2 \
+  backimage listen-remote --bind-address 127.0.0.1:7575 \
+    --tls-self-signed --insecure-no-auth --work-dir /tmp/backimage-server
+
+# Il false esplicito prevale su BACKIMAGE_JSON=true.
+BACKIMAGE_JSON=true \
+  backimage --json=false listen-remote --bind-address 127.0.0.1:7575 \
+    --tls-self-signed --insecure-no-auth --work-dir /tmp/backimage-server
+```
+
+I valori errati riportano il nome della variabile, per esempio
+`BACKIMAGE_MAX_SESSIONS="many"`; l'errore avviene prima dell'apertura del
+listener. Questa conversione automatica riguarda il comando `listen-remote`;
+`BACKIMAGE_AUTH_FILE`, `XDG_CONFIG_HOME` e le altre variabili non derivate da
+flag mantengono invece la semantica specifica descritta nella tabella sotto.
+
+#### Proprietà e persistenza di `/data`
+
+L'immagine viene eseguita come `nonroot:nonroot` (UID/GID `65532`) e contiene
+già `/data` con proprietario `65532:65532` e modo `0700`. Quando Docker crea un
+**nuovo volume nominato** vuoto per quel mount point, copia anche questi
+metadati: la configurazione Compose predefinita può quindi creare
+`/data/tls`, lo spool e gli altri file fin dal primo avvio senza privilegi
+root.
+
+Un bind mount segue invece proprietario e permessi della directory host, che
+va preparata esplicitamente:
+
+```console
+sudo mkdir -p /srv/backimage/data
+sudo chown 65532:65532 /srv/backimage/data
+sudo chmod 0700 /srv/backimage/data
+```
+
+Un volume nominato creato con una vecchia immagine può essere già `root:root`:
+aggiornare l'immagine non ne modifica i metadati. Prima fare un backup del
+volume e poi correggerne ricorsivamente il proprietario con un container di
+manutenzione, oppure ricrearlo consapevolmente. Ricreare il volume elimina
+anche il certificato persistente e cambia il PIN TLS, oltre a rimuovere ogni
+file rimasto nello spool.
+
 Note operative:
 
 - il volume `/data` è dello spool dei layer *e* del materiale TLS: dimensionarlo
@@ -1563,7 +1690,7 @@ backimage backup /srv/data --repo ghcr.io/team/dumps --tag daily --timestamp \
 | --- | --- |
 | `BACKIMAGE_PASSPHRASE` | Passphrase per immagini auto-estraenti e CLI |
 | `BACKIMAGE_AUTH_FILE` | File credenziali custom |
-| `BACKIMAGE_<FLAG>` | Valore di default per il flag omonimo di `listen-remote` (`--bind-address` → `BACKIMAGE_BIND_ADDRESS`) |
+| `BACKIMAGE_<FLAG>` | Valore di default per un flag locale o globale ereditato da `listen-remote` (`--bind-address` → `BACKIMAGE_BIND_ADDRESS`, `--json` → `BACKIMAGE_JSON`); la CLI esplicita prevale |
 | `XDG_CONFIG_HOME` | Base per `backimage/auth.json` e config |
 | `XDG_CACHE_HOME` | Cache layer e checkpoint; cache restore default 2 GiB |
 | `TMPDIR` | Spool se non è impostato `--temp-dir` |

@@ -187,7 +187,7 @@ func runLogout(cmd *cobra.Command, args []string) error {
 		return New(KindUsage, "", "%d logins for %s: %s; use --user NAME or --all",
 			len(names), host, strings.Join(names, ", "))
 	}
-	if all || (user == "" && len(names) == 1 && names[0] == "(token)") {
+	if all || (user == "" && len(names) == 1 && names[0] == registry.TokenAccountName) {
 		if err := store.Delete(host); err != nil {
 			return New(KindGeneric, "", "removing credentials: %v", err)
 		}
@@ -206,8 +206,8 @@ func runLogout(cmd *cobra.Command, args []string) error {
 	return pr.Result(fmt.Sprintf("logged out of %s (%s)", host, user))
 }
 
-// accountNamesFor lists the account names of one host, with "(token)" for a
-// host-wide token that carries no username.
+// accountNamesFor lists the account names of one host, with the public token
+// selector for a host-wide token that carries no username.
 func accountNamesFor(accounts []registry.Account, host string) []string {
 	names := make([]string, 0, len(accounts))
 	for _, a := range accounts {
@@ -215,7 +215,7 @@ func accountNamesFor(accounts []registry.Account, host string) []string {
 			continue
 		}
 		if a.Token {
-			names = append(names, "(token)")
+			names = append(names, registry.TokenAccountName)
 			continue
 		}
 		names = append(names, a.Username)
@@ -251,7 +251,7 @@ func listLogins(cmd *cobra.Command, opts Options) error {
 	for _, a := range accounts {
 		account := a.Username
 		if a.Token {
-			account = "(token)"
+			account = registry.TokenAccountName
 		}
 		rows = append(rows, loginRow{Provider: a.Registry, Account: account, Token: a.Token, LocalUser: owner, AuthFile: path})
 	}

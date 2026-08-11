@@ -51,6 +51,17 @@ func TestRepoPruneRejectsBothDurationFlags(t *testing.T) {
 	}
 }
 
+func TestRepoPruneRejectsZeroDuration(t *testing.T) {
+	for _, flag := range []string{"--keep-within", "--delete-older-than"} {
+		t.Run(flag, func(t *testing.T) {
+			_, _, err := runRoot(t, "repo", "prune", "example.com/me/x", flag, "0", "--dry-run")
+			if err == nil || !strings.Contains(err.Error(), "greater than zero") {
+				t.Fatalf("error = %v", err)
+			}
+		})
+	}
+}
+
 func TestPrunePlanText(t *testing.T) {
 	created := time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)
 	tag := func(name string, when time.Time) registry.TagInfo {

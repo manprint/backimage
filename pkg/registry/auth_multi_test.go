@@ -60,6 +60,59 @@ func TestStoreKeepsSeveralAccountsPerHost(t *testing.T) {
 	}
 }
 
+func TestStoreKeepsTokenAndNamedAccountInEitherOrder(t *testing.T) {
+	for _, tokenFirst := range []bool{false, true} {
+		name := "named-first"
+		if tokenFirst {
+			name = "token-first"
+		}
+		t.Run(name, func(t *testing.T) {
+			s := newTestStore(t)
+			named := Credentials{Registry: "ghcr.io", Username: "alice", Secret: "password"}
+			token := TokenCredentials("ghcr.io", "bearer")
+			if tokenFirst {
+				if err := s.Put(token); err != nil {
+					t.Fatal(err)
+				}
+				if err := s.Put(named); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if err := s.Put(named); err != nil {
+					t.Fatal(err)
+				}
+				if err := s.Put(token); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			if accounts, err := s.Accounts(); err != nil || len(accounts) != 2 {
+				t.Fatalf("accounts = %+v, %v", accounts, err)
+			}
+			if got, err := s.GetFor("ghcr.io", "alice"); err != nil || got == nil || got.Secret != "password" {
+				t.Fatalf("named account = %+v, %v", got, err)
+			}
+			got, err := s.GetFor("ghcr.io", TokenAccountName)
+			if err != nil || got == nil || got.Secret != "bearer" {
+				t.Fatalf("token account = %+v, %v", got, err)
+			}
+			auth, err := NewKeychainForUser(nil, s, TokenAccountName).Resolve(fakeRepo("ghcr.io", "team/image"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg, _ := auth.Authorization(); cfg.RegistryToken != "bearer" {
+				t.Fatalf("selected token = %+v", cfg)
+			}
+			if removed, err := s.DeleteFor("ghcr.io", TokenAccountName); err != nil || !removed {
+				t.Fatalf("DeleteFor token = %v, %v", removed, err)
+			}
+			if got, _ := s.GetFor("ghcr.io", "alice"); got == nil {
+				t.Fatal("deleting token removed named account")
+			}
+		})
+	}
+}
+
 func TestStoreDeleteForAndDeleteAll(t *testing.T) {
 	s := newTestStore(t)
 	for _, u := range []string{"user1", "user2"} {

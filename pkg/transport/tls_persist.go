@@ -73,15 +73,61 @@ func writeKeyPair(cert tls.Certificate, certPath, keyPath string) error {
 		}
 	}
 	certPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: cert.Certificate[0]})
-	// The key is written first and at 0600: a readable certificate without a
-	// key is recoverable, a world-readable key is not.
-	if err := os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), 0o600); err != nil {
-		return fmt.Errorf("write %s: %w", keyPath, err)
+	keyPEM := pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der})
+
+	// Fully write both files before publishing either one. The renames keep
+	// readers from observing partial PEM data; if the second rename fails, the
+	// first published file is removed so the next start is not wedged on an
+	// incomplete pair.
+	keyTemp, err := writeTLSFileTemp(keyPath, keyPEM, 0o600)
+	if err != nil {
+		return err
 	}
-	if err := os.WriteFile(certPath, certPEM, 0o644); err != nil { // #nosec G306 -- a certificate is public by design.
-		return fmt.Errorf("write %s: %w", certPath, err)
+	defer os.Remove(keyTemp)
+	certTemp, err := writeTLSFileTemp(certPath, certPEM, 0o644) // #nosec G306 -- a certificate is public by design.
+	if err != nil {
+		return err
+	}
+	defer os.Remove(certTemp)
+
+	if err := os.Rename(keyTemp, keyPath); err != nil {
+		return fmt.Errorf("publish %s: %w", keyPath, err)
+	}
+	if err := os.Rename(certTemp, certPath); err != nil {
+		publishErr := fmt.Errorf("publish %s: %w", certPath, err)
+		if cleanupErr := os.Remove(keyPath); cleanupErr != nil && !errors.Is(cleanupErr, os.ErrNotExist) {
+			return errors.Join(publishErr, fmt.Errorf("remove incomplete %s: %w", keyPath, cleanupErr))
+		}
+		return publishErr
 	}
 	return nil
+}
+
+func writeTLSFileTemp(path string, data []byte, mode os.FileMode) (string, error) {
+	f, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return "", fmt.Errorf("create temporary %s: %w", path, err)
+	}
+	temp := f.Name()
+	fail := func(action string, err error) (string, error) {
+		_ = f.Close()
+		_ = os.Remove(temp)
+		return "", fmt.Errorf("%s temporary %s: %w", action, path, err)
+	}
+	if err := f.Chmod(mode); err != nil {
+		return fail("chmod", err)
+	}
+	if _, err := f.Write(data); err != nil {
+		return fail("write", err)
+	}
+	if err := f.Sync(); err != nil {
+		return fail("sync", err)
+	}
+	if err := f.Close(); err != nil {
+		_ = os.Remove(temp)
+		return "", fmt.Errorf("close temporary %s: %w", path, err)
+	}
+	return temp, nil
 }
 
 func regularFileExists(path string) (bool, error) {

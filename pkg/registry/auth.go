@@ -23,6 +23,9 @@ type Credentials struct {
 
 const tokenUsername = "__backimage_bearer_token__"
 
+// TokenAccountName is the public selector used for a host-wide bearer token.
+const TokenAccountName = "token"
+
 // TokenCredentials wraps an already-minted bearer token in the same
 // Docker-compatible user:secret on-disk representation used by Store.
 func TokenCredentials(registry, token string) Credentials {
@@ -73,12 +76,12 @@ type Store interface {
 // caller did not say which one to use.
 var ErrAmbiguousAccount = errors.New("several logins for this registry")
 
-// accountKey builds the storage key of an account. A named account is stored
-// under "host#username"; a host-wide token keeps the bare host, which is also
-// the layout written by older versions.
+// accountKey builds the storage key of an account. Named accounts and tokens
+// use distinct suffixes; Put still keeps the first account at the bare host
+// key for compatibility with Docker and older backimage versions.
 func accountKey(registry, username string) string {
 	host := CanonicalHost(registry)
-	if username == "" || username == tokenUsername {
+	if username == "" {
 		return host
 	}
 	return host + "#" + username
@@ -168,7 +171,7 @@ func (s *fileStore) GetFor(key, username string) (*Credentials, error) {
 		return nil, err
 	}
 	for i := range found {
-		if found[i].Username == username {
+		if found[i].Username == username || (found[i].Username == tokenUsername && username == TokenAccountName) {
 			c := found[i]
 			return &c, nil
 		}
@@ -205,7 +208,7 @@ func usernamesOf(creds []Credentials) []string {
 	out := make([]string, 0, len(creds))
 	for _, c := range creds {
 		if c.Username == tokenUsername {
-			out = append(out, "token")
+			out = append(out, TokenAccountName)
 			continue
 		}
 		out = append(out, c.Username)
@@ -272,7 +275,7 @@ func (s *fileStore) DeleteFor(key, username string) (bool, error) {
 				u = c.Username
 			}
 		}
-		if u == username || (username == "" && u == tokenUsername) {
+		if u == username || (u == tokenUsername && (username == "" || username == TokenAccountName)) {
 			delete(f.Auths, k)
 			return true, s.write(f)
 		}

@@ -68,3 +68,31 @@ func TestApplyEnvDefaultsRejectsBadValue(t *testing.T) {
 		t.Fatalf("error = %q, want the variable name", got)
 	}
 }
+
+func TestApplyEnvDefaultsIncludesInheritedFlags(t *testing.T) {
+	t.Setenv("BACKIMAGE_JSON", "true")
+	t.Setenv("BACKIMAGE_QUIET", "true")
+	t.Setenv("BACKIMAGE_VERBOSE", "2")
+	t.Setenv("BACKIMAGE_NO_COLOR", "true")
+
+	root := NewRootCommand()
+	listen, _, err := root.Find([]string{"listen-remote"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Simulate an explicit CLI value: it must beat BACKIMAGE_QUIET=true.
+	if err := root.ParseFlags([]string{"--quiet=false"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := applyEnvDefaults(listen); err != nil {
+		t.Fatal(err)
+	}
+
+	json, _ := root.PersistentFlags().GetBool("json")
+	quiet, _ := root.PersistentFlags().GetBool("quiet")
+	verbose, _ := root.PersistentFlags().GetCount("verbose")
+	noColor, _ := root.PersistentFlags().GetBool("no-color")
+	if !json || quiet || verbose != 2 || !noColor {
+		t.Fatalf("inherited flags: json=%v quiet=%v verbose=%d no-color=%v", json, quiet, verbose, noColor)
+	}
+}

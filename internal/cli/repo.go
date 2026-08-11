@@ -109,8 +109,8 @@ func pruneDuration(cmd *cobra.Command, name string) (time.Duration, bool, error)
 	if err != nil {
 		return 0, false, fmt.Errorf("--%s: %w", name, err)
 	}
-	if d < 0 {
-		return 0, false, fmt.Errorf("--%s cannot be negative", name)
+	if d <= 0 {
+		return 0, false, fmt.Errorf("--%s must be greater than zero", name)
 	}
 	return d, true, nil
 }

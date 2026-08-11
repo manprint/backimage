@@ -25,7 +25,7 @@ func EnvVarFor(flagName string) string {
 // the command line. Repeatable flags accept a comma-separated list.
 func applyEnvDefaults(cmd *cobra.Command) error {
 	var errs []error
-	cmd.Flags().VisitAll(func(f *pflag.Flag) {
+	apply := func(f *pflag.Flag) {
 		if f.Changed {
 			return
 		}
@@ -44,6 +44,10 @@ func applyEnvDefaults(cmd *cobra.Command) error {
 			return
 		}
 		f.Changed = true
-	})
+	}
+	// cmd.Flags excludes persistent flags inherited from parents. Visit both
+	// sets so root options such as --json and --quiet also honor BACKIMAGE_*.
+	cmd.InheritedFlags().VisitAll(apply)
+	cmd.Flags().VisitAll(apply)
 	return errors.Join(errs...)
 }
