@@ -32,7 +32,12 @@ Durante il backup vengono scritti su stderr log timestampati. Le fasi visibili
 sono: scansione delle sorgenti, pianificazione dei chunk/layer, archiviazione,
 compressione e cifratura, costruzione delle immagini OCI, controllo della
 presenza di ogni blob, upload parallelo, pubblicazione dei manifest e risultato
-finale. Il numero di upload paralleli è quello di `--jobs` (default 3). Il
+finale. Il numero di upload paralleli è quello di `--jobs` (default 3). Ogni
+blob viaggia in un'unica richiesta HTTP streamata: spezzarlo in chunk costa un
+round trip ciascuno, che il registry chiude solo dopo aver scritto il chunk sul
+proprio storage. `--upload-chunk-size 32MiB` forza di nuovo il chunking, e serve
+solo verso registry che rifiutano richieste grandi (un 413 attiva comunque il
+fallback da solo). Il
 riepilogo di successo resta su stdout e non viene prefissato dal timestamp;
 con `--json` stdout contiene solo JSON.
 
@@ -100,6 +105,7 @@ solo dopo la pubblicazione del manifest finale.
 | `--password` | — | passphrase diretta; visibile in history e processi |
 | `--recipient` | — | destinatario age, ripetibile |
 | `--jobs` | 3 | upload paralleli |
+| `--upload-chunk-size` | 0 | chunk HTTP per blob; 0 = una richiesta per blob |
 | `--platform` | amd64, arm64 | piattaforma, ripetibile |
 | `--output` | `registry` | destinazione |
 | `--output-path` | — | path per layout/tar |

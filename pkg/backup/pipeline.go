@@ -44,7 +44,12 @@ type Config struct {
 	Level        int   // codec level; 0 = codec default
 	MaxLayerSize int64 // target layer bytes, default 1 GiB
 	Jobs         int
-	Version      string
+	// UploadChunkSize splits each blob upload into HTTP PATCH chunks of this
+	// size. Zero, the default, sends one streamed request per blob, which is
+	// what lets a push use the whole link: every chunk otherwise costs a
+	// round trip that the registry only answers once it has stored it.
+	UploadChunkSize int64
+	Version         string
 
 	Encrypt    bool
 	Passphrase func() ([]byte, error) // encrypted with a passphrase
@@ -143,6 +148,9 @@ func Validate(cfg Config) error {
 	}
 	if cfg.Jobs < 0 {
 		return fmt.Errorf("--jobs non puo' essere negativo, got %d", cfg.Jobs)
+	}
+	if cfg.UploadChunkSize < 0 {
+		return fmt.Errorf("--upload-chunk-size non puo' essere negativo, got %d", cfg.UploadChunkSize)
 	}
 	if cfg.Encrypt && cfg.Passphrase == nil && len(cfg.Recipients) == 0 {
 		return errors.New("cifratura attiva ma nessuna passphrase o destinatario age")
@@ -1322,7 +1330,7 @@ func (b *builder) cleanup() {
 func (b *builder) pushRegistry(ctx context.Context, idx v1.ImageIndex, images map[string]v1.Image) error {
 	opts := registry.PushOptions{
 		Jobs:       b.cfg.Jobs,
-		ChunkSize:  8 << 20,
+		ChunkSize:  b.cfg.UploadChunkSize,
 		MaxRetries: 5,
 	}
 	if b.cfg.Resume {

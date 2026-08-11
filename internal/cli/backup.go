@@ -149,6 +149,7 @@ func newBackupCommand() *cobra.Command {
 	f.Bool("numeric-owner", false, "do not resolve user/group names")
 	f.Bool("allow-degraded", false, "continue despite unreadable files")
 	f.Int("jobs", 3, "number of concurrent blob uploads")
+	f.String("upload-chunk-size", "0", "split each blob upload into HTTP chunks of this size, e.g. 32MiB; 0 sends one request per blob (fastest, use a value only for a registry that refuses large bodies)")
 	f.StringSlice("platform", []string{"linux/amd64", "linux/arm64"}, "self-extract platforms (repeatable)")
 	f.Bool("no-metadata", false, "omit source paths from labels")
 	f.Bool("dry-run", false, "print the plan and exit without writing")
@@ -323,39 +324,44 @@ func runBackup(cmd *cobra.Command, args []string) error {
 	noMeta := getFlagBool(cmd, "no-metadata")
 	dryRun := getFlagBool(cmd, "dry-run")
 	jobs := getFlagInt(cmd, "jobs")
+	uploadChunk, err := parseSize(getFlagString(cmd, "upload-chunk-size"))
+	if err != nil {
+		return New(KindUsage, "", "upload-chunk-size: %v", err)
+	}
 
 	cfg := backup.Config{
-		RootPaths:     append([]string(nil), args...),
-		Ref:           ref,
-		Compression:   compression,
-		Level:         level,
-		MaxLayerSize:  maxLayer,
-		Jobs:          jobs,
-		Version:       buildinfo.Version,
-		Encrypt:       encrypt,
-		Passphrase:    passFn,
-		Recipients:    recipients,
-		Dedup:         dedup,
-		DedupParams:   dedupParams,
-		AgeIdentity:   ageIdentity,
-		Exclude:       excludes,
-		OneFileSystem: oneFS,
-		NumericOwner:  numOwner,
-		AllowDegraded: degraded,
-		NoMetadata:    noMeta,
-		Runnable:      runnable,
-		Platforms:     platforms,
-		TempDir:       tempDir,
-		Resume:        resume,
-		Keychain:      kc,
-		Store:         store,
-		DryRun:        dryRun,
-		Output:        output,
-		OutputPath:    outputPath,
-		Remote:        remoteUploader,
-		RemoteStream:  remoteStream,
-		Created:       getFlagString(cmd, "created"),
-		SelfExtract:   embedded.SelfExtract,
+		RootPaths:       append([]string(nil), args...),
+		Ref:             ref,
+		Compression:     compression,
+		Level:           level,
+		MaxLayerSize:    maxLayer,
+		Jobs:            jobs,
+		UploadChunkSize: uploadChunk,
+		Version:         buildinfo.Version,
+		Encrypt:         encrypt,
+		Passphrase:      passFn,
+		Recipients:      recipients,
+		Dedup:           dedup,
+		DedupParams:     dedupParams,
+		AgeIdentity:     ageIdentity,
+		Exclude:         excludes,
+		OneFileSystem:   oneFS,
+		NumericOwner:    numOwner,
+		AllowDegraded:   degraded,
+		NoMetadata:      noMeta,
+		Runnable:        runnable,
+		Platforms:       platforms,
+		TempDir:         tempDir,
+		Resume:          resume,
+		Keychain:        kc,
+		Store:           store,
+		DryRun:          dryRun,
+		Output:          output,
+		OutputPath:      outputPath,
+		Remote:          remoteUploader,
+		RemoteStream:    remoteStream,
+		Created:         getFlagString(cmd, "created"),
+		SelfExtract:     embedded.SelfExtract,
 	}
 	if err := backup.Validate(cfg); err != nil {
 		return New(KindUsage, "", "%v", err)

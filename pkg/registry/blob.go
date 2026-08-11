@@ -26,7 +26,7 @@ func NewBlobClient(ctx context.Context, ref name.Reference, provider Provider, c
 		return nil, errors.New("registry token provider is required")
 	}
 	if chunkSize <= 0 {
-		chunkSize = 32 << 20
+		chunkSize = fallbackChunkSize
 	}
 	if chunkSize > 64<<20 {
 		return nil, errors.New("registry upload chunk exceeds 64 MiB memory limit")
@@ -37,13 +37,11 @@ func NewBlobClient(ctx context.Context, ref name.Reference, provider Provider, c
 	}
 	scope := Scope{Repository: ref.Context().RepositoryStr(), Actions: []string{"pull", "push"}}
 	p := &pusher{
-		ctx:  ctx,
-		ref:  ref,
-		base: base + "/v2/" + ref.Context().RepositoryStr(),
-		client: &http.Client{Transport: NewRoundTripper(
-			http.DefaultTransport, provider, scope,
-		)},
-		opts: PushOptions{ChunkSize: int64(chunkSize), MaxRetries: 5},
+		ctx:    ctx,
+		ref:    ref,
+		base:   base + "/v2/" + ref.Context().RepositoryStr(),
+		client: newRegistryClient(provider, scope),
+		opts:   PushOptions{ChunkSize: int64(chunkSize), MaxRetries: 5},
 	}
 	return &BlobClient{p: p, chunkSize: chunkSize}, nil
 }
@@ -52,7 +50,9 @@ func (c *BlobClient) Exists(digest string) (bool, error) {
 	return c.p.blobExists(digest)
 }
 
-// Open starts a registry upload session. At most chunkSize bytes are retained.
+// Open starts a registry upload session. The upload keeps two chunk buffers,
+// so the caller fills the next chunk while the previous one is in flight;
+// the working set is 2*chunkSize and never depends on the blob size.
 func (c *BlobClient) Open(digest string) (*BlobUpload, error) {
 	if !validSHA256Digest(digest) {
 		return nil, fmt.Errorf("invalid blob digest %q", digest)
@@ -73,15 +73,30 @@ func (c *BlobClient) Open(digest string) (*BlobUpload, error) {
 }
 
 // BlobUpload implements io.Writer and commits with the declared digest.
+//
+// A full buffer is handed to a background PATCH and the caller keeps writing
+// into the other buffer: the stream feeding the upload and the request in
+// flight overlap instead of alternating. Only one PATCH runs at a time, since
+// each one returns the location of the next.
 type BlobUpload struct {
 	mu        sync.Mutex
 	client    *BlobClient
 	digest    string
 	loc       string
-	buf       []byte
+	buf       []byte           // filled by Write
+	spare     []byte           // idle buffer, nil while a PATCH holds it
+	inflight  chan patchResult // nil when no PATCH is in flight
 	err       error
 	committed bool
 	aborted   bool
+}
+
+// patchResult carries a finished background PATCH back to the writer,
+// returning ownership of the buffer it sent.
+type patchResult struct {
+	loc string
+	buf []byte
+	err error
 }
 
 func (u *BlobUpload) Write(p []byte) (int, error) {
@@ -97,7 +112,7 @@ func (u *BlobUpload) Write(p []byte) (int, error) {
 	for len(p) > 0 {
 		space := cap(u.buf) - len(u.buf)
 		if space == 0 {
-			if err := u.flush(); err != nil {
+			if err := u.startFlush(); err != nil {
 				u.err = err
 				return written, err
 			}
@@ -145,6 +160,8 @@ func (u *BlobUpload) Abort(ctx context.Context) error {
 		return nil
 	}
 	u.aborted = true
+	// A PATCH still in flight would race the DELETE for the same session.
+	_ = u.waitFlush()
 	req, err := http.NewRequestWithContext(ctx, http.MethodDelete, u.loc, nil)
 	if err != nil {
 		return err
@@ -163,7 +180,52 @@ func (u *BlobUpload) Abort(ctx context.Context) error {
 	return nil
 }
 
+// startFlush hands the filled buffer to a background PATCH and swaps in the
+// spare one. It first waits for any previous PATCH, because that call is what
+// yields the location this one must use. Callers hold u.mu.
+func (u *BlobUpload) startFlush() error {
+	if len(u.buf) == 0 {
+		return nil
+	}
+	if err := u.waitFlush(); err != nil {
+		return err
+	}
+	body, loc := u.buf, u.loc
+	next := u.spare
+	if next == nil {
+		next = make([]byte, 0, cap(body))
+	}
+	ch := make(chan patchResult, 1)
+	u.buf, u.spare, u.inflight = next[:0], nil, ch
+	go func() {
+		to, perr := u.client.p.patch(loc, body)
+		ch <- patchResult{loc: to, buf: body, err: perr}
+	}()
+	return nil
+}
+
+// waitFlush blocks until the in-flight PATCH, if any, has finished, and takes
+// back its buffer and the location of the next request. Callers hold u.mu.
+func (u *BlobUpload) waitFlush() error {
+	if u.inflight == nil {
+		return nil
+	}
+	res := <-u.inflight
+	u.inflight = nil
+	u.spare = res.buf[:0]
+	if res.err != nil {
+		u.err = res.err
+		return res.err
+	}
+	u.loc = res.loc
+	return nil
+}
+
+// flush drains everything still pending, synchronously.
 func (u *BlobUpload) flush() error {
+	if err := u.waitFlush(); err != nil {
+		return err
+	}
 	if len(u.buf) == 0 {
 		return nil
 	}

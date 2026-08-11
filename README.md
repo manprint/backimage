@@ -897,6 +897,7 @@ Flag:
 | `--numeric-owner` | `false` | Non risolve nomi utente/gruppo |
 | `--allow-degraded` | `false` | Disattiva il preflight strict delle capability; non concede privilegi |
 | `--jobs N` | `3` | Upload paralleli |
+| `--upload-chunk-size N` | `0` | Spezza ogni upload in chunk HTTP; `0` invia un blob per richiesta (più veloce) |
 | `--platform OS/ARCH` | `linux/amd64,linux/arm64` | Piattaforme auto-estraenti; ripetibile |
 | `--no-metadata` | `false` | Omette i path sorgente dalle label |
 | `--dry-run` | `false` | Mostra il piano senza scrivere |

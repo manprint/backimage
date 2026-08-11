@@ -59,6 +59,12 @@ type fakeRegistry struct {
 	uploadHits  int
 	blockSecond bool // block the 2nd PUT finalize until gate closes
 	gate        chan struct{}
+
+	// Upload shape observed by the tests of the single-request path.
+	patchBodies  []int    // body length of every PATCH received
+	patchTE      []string // Transfer-Encoding of every PATCH received
+	maxPatchBody int      // when > 0, larger PATCH bodies answer 413
+	unauthPatch  int      // first N PATCH answer 401 to exercise the replay
 }
 
 func newFakeRegistry() *fakeRegistry {
@@ -118,9 +124,26 @@ func (f *fakeRegistry) server() *httptest.Server {
 			body, _ := io.ReadAll(r.Body)
 			id := rest[strings.LastIndex(rest, "uploads/")+8:]
 			f.mu.Lock()
-			f.uploadData[id] = append(f.uploadData[id], body...)
+			f.patchBodies = append(f.patchBodies, len(body))
+			f.patchTE = append(f.patchTE, strings.Join(r.TransferEncoding, ","))
+			tooBig := f.maxPatchBody > 0 && len(body) > f.maxPatchBody
+			unauth := f.unauthPatch > 0
+			if unauth {
+				f.unauthPatch--
+			}
+			if !tooBig && !unauth {
+				f.uploadData[id] = append(f.uploadData[id], body...)
+			}
 			f.mu.Unlock()
-			w.WriteHeader(http.StatusAccepted)
+			switch {
+			case unauth:
+				w.Header().Set("WWW-Authenticate", `Bearer realm="`+r.Host+`/token",service="test"`)
+				w.WriteHeader(http.StatusUnauthorized)
+			case tooBig:
+				w.WriteHeader(http.StatusRequestEntityTooLarge)
+			default:
+				w.WriteHeader(http.StatusAccepted)
+			}
 		case strings.Contains(rest, "blobs/uploads/") && r.Method == http.MethodPut:
 			digest := r.URL.Query().Get("digest")
 			id := rest[strings.LastIndex(rest, "uploads/")+8:]

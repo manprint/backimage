@@ -70,51 +70,52 @@ backimage backup <PATH...> --repo IMAGE [flags]
 ### Options
 
 ```
-      --age-identity string       age identity file used to reuse a deduplication key
-      --allow-degraded            continue despite unreadable files
-      --auth-token string         pre-shared remote authentication token
-      --auth-token-file string    read the remote authentication token from a file
-      --compression string        layer codec: zstd|gzip|xz|lz4|none (xz and lz4 require --runnable=false) (default "zstd")
-      --compression-level int     codec compression level; 0 = codec default, higher = smaller and slower
-      --created string            fixed image creation time in RFC3339, e.g. 2026-08-10T03:15:00Z (reproducible builds)
-      --dedup                     enable content-defined incremental deduplication (reveals chunk equality)
-      --dedup-chunk-avg string    advanced CDC average chunk size, e.g. 1MiB (default: codec choice)
-      --dedup-chunk-max string    advanced CDC maximum chunk size, e.g. 4MiB (default: codec choice)
-      --dedup-chunk-min string    advanced CDC minimum chunk size, e.g. 256KiB (default: codec choice)
-      --dedup-polynomial string   advanced Rabin polynomial (0x...) for CDC
-      --dry-run                   print the plan and exit without writing
-      --encrypt                   encrypt chunks (default) (default true)
-      --exclude strings           glob pattern to exclude (repeatable)
-  -h, --help                      help for backup
-      --jobs int                  number of concurrent blob uploads (default 3)
-      --local-repo                output to the Docker daemon instead of a registry
-      --max-layer-size string     target size of each OCI layer, e.g. 512MiB, 2GiB (default "1GiB")
-      --no-encrypt                disable encryption (exclusive with --encrypt)
-      --no-metadata               omit source paths from labels
-      --numeric-owner             do not resolve user/group names
-      --one-file-system           do not cross mount points
-      --output string             registry|daemon|oci-layout|tar (default "registry")
-      --output-path string        destination for oci-layout/tar
-      --passphrase-file string    read the passphrase from a file
-      --passphrase-stdin          read the passphrase from stdin
-      --password string           passphrase (visible in shell history and process listings)
-      --platform strings          self-extract platforms (repeatable) (default [linux/amd64,linux/arm64])
-      --recipient strings         age public key (repeatable)
-      --remote string             delegate the backup to a remote backimage server, HOST:PORT
-      --remote-mode string        stream: the server runs the whole pipeline (default); layers: legacy client-side pipeline (default "stream")
-      --repo string               target repository without a tag, e.g. ghcr.io/me/dumps (required)
-      --resume                    resume from the checkpoint if present (default true)
-      --runnable                  build runnable images (false allows non-standard codecs) (default true)
-      --server-side-compress      deprecated alias of --remote-mode stream (already the default)
-      --tag string                tag to publish; combine with --timestamp for one tag per run (default "latest")
-      --temp-dir string           spool directory (default $TMPDIR)
-      --timestamp                 append a UTC timestamp to --tag, e.g. daily-20260810T031500Z
-      --timestamp-format string   Go time layout used by --timestamp (reference date 2006-01-02 15:04:05) (default "20060102T150405Z")
-      --tls-ca string             PEM CA bundle for the remote server
-      --tls-cert string           PEM client certificate for mTLS
-      --tls-key string            PEM client private key for mTLS
-      --tls-pin string            remote server certificate SHA-256 fingerprint, hex only (drop the SHA256: prefix printed by the server)
-      --udp                       use QUIC instead of TCP for --remote
+      --age-identity string        age identity file used to reuse a deduplication key
+      --allow-degraded             continue despite unreadable files
+      --auth-token string          pre-shared remote authentication token
+      --auth-token-file string     read the remote authentication token from a file
+      --compression string         layer codec: zstd|gzip|xz|lz4|none (xz and lz4 require --runnable=false) (default "zstd")
+      --compression-level int      codec compression level; 0 = codec default, higher = smaller and slower
+      --created string             fixed image creation time in RFC3339, e.g. 2026-08-10T03:15:00Z (reproducible builds)
+      --dedup                      enable content-defined incremental deduplication (reveals chunk equality)
+      --dedup-chunk-avg string     advanced CDC average chunk size, e.g. 1MiB (default: codec choice)
+      --dedup-chunk-max string     advanced CDC maximum chunk size, e.g. 4MiB (default: codec choice)
+      --dedup-chunk-min string     advanced CDC minimum chunk size, e.g. 256KiB (default: codec choice)
+      --dedup-polynomial string    advanced Rabin polynomial (0x...) for CDC
+      --dry-run                    print the plan and exit without writing
+      --encrypt                    encrypt chunks (default) (default true)
+      --exclude strings            glob pattern to exclude (repeatable)
+  -h, --help                       help for backup
+      --jobs int                   number of concurrent blob uploads (default 3)
+      --local-repo                 output to the Docker daemon instead of a registry
+      --max-layer-size string      target size of each OCI layer, e.g. 512MiB, 2GiB (default "1GiB")
+      --no-encrypt                 disable encryption (exclusive with --encrypt)
+      --no-metadata                omit source paths from labels
+      --numeric-owner              do not resolve user/group names
+      --one-file-system            do not cross mount points
+      --output string              registry|daemon|oci-layout|tar (default "registry")
+      --output-path string         destination for oci-layout/tar
+      --passphrase-file string     read the passphrase from a file
+      --passphrase-stdin           read the passphrase from stdin
+      --password string            passphrase (visible in shell history and process listings)
+      --platform strings           self-extract platforms (repeatable) (default [linux/amd64,linux/arm64])
+      --recipient strings          age public key (repeatable)
+      --remote string              delegate the backup to a remote backimage server, HOST:PORT
+      --remote-mode string         stream: the server runs the whole pipeline (default); layers: legacy client-side pipeline (default "stream")
+      --repo string                target repository without a tag, e.g. ghcr.io/me/dumps (required)
+      --resume                     resume from the checkpoint if present (default true)
+      --runnable                   build runnable images (false allows non-standard codecs) (default true)
+      --server-side-compress       deprecated alias of --remote-mode stream (already the default)
+      --tag string                 tag to publish; combine with --timestamp for one tag per run (default "latest")
+      --temp-dir string            spool directory (default $TMPDIR)
+      --timestamp                  append a UTC timestamp to --tag, e.g. daily-20260810T031500Z
+      --timestamp-format string    Go time layout used by --timestamp (reference date 2006-01-02 15:04:05) (default "20060102T150405Z")
+      --tls-ca string              PEM CA bundle for the remote server
+      --tls-cert string            PEM client certificate for mTLS
+      --tls-key string             PEM client private key for mTLS
+      --tls-pin string             remote server certificate SHA-256 fingerprint, hex only (drop the SHA256: prefix printed by the server)
+      --udp                        use QUIC instead of TCP for --remote
+      --upload-chunk-size string   split each blob upload into HTTP chunks of this size, e.g. 32MiB; 0 sends one request per blob (fastest, use a value only for a registry that refuses large bodies) (default "0")
 ```
 
 ### Options inherited from parent commands

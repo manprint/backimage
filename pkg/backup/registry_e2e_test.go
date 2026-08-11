@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	mrand "math/rand"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -31,6 +32,7 @@ type memReg struct {
 	ups       map[string][]byte
 	nextUp    uint64
 	putHits   int
+	patchHits int
 }
 
 func newMemReg() *memReg {
@@ -77,6 +79,7 @@ func (m *memReg) server() *httptest.Server {
 			id := rest[strings.LastIndex(rest, "uploads/")+len("uploads/"):]
 			b, _ := io.ReadAll(r.Body)
 			m.ups[id] = append(m.ups[id], b...)
+			m.patchHits++
 			w.WriteHeader(http.StatusAccepted)
 		case strings.Contains(rest, "blobs/uploads/") && r.Method == http.MethodPut:
 			id := rest[strings.LastIndex(rest, "uploads/")+len("uploads/"):]
@@ -371,5 +374,54 @@ func TestDedupRefusesRandomNonceKeyReuse(t *testing.T) {
 	}
 	if warning := dedupKeyWarning(previous, Config{}); !strings.Contains(warning, "modalita' nonce") {
 		t.Fatalf("missing immutable-mode warning: %q", warning)
+	}
+}
+
+// TestPipelineUploadChunkSizeWiring checks that the CLI knob reaches the
+// pusher: by default the pipeline must cost one PATCH per blob, and asking
+// for a chunk size must actually split the uploads.
+func TestPipelineUploadChunkSizeWiring(t *testing.T) {
+	// 6 MiB of incompressible noise from a fixed seed: a compressible fixture
+	// would collapse into blobs smaller than any chunk size and the test
+	// would prove nothing.
+	payload := make([]byte, 6<<20)
+	if _, err := mrand.New(mrand.NewSource(1)).Read(payload); err != nil {
+		t.Fatal(err)
+	}
+
+	run := func(t *testing.T, chunk int64) (patches, blobs int) {
+		t.Helper()
+		reg := newMemReg()
+		srv := reg.server()
+		defer srv.Close()
+		tree := t.TempDir()
+		if err := os.WriteFile(filepath.Join(tree, "noise.dat"), payload, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cfg := pipelinePushConfig(srv.URL, tree)
+		cfg.UploadChunkSize = chunk
+		prepPushDirs(&cfg)
+		if _, err := Run(context.Background(), cfg); err != nil {
+			t.Fatalf("push with chunk %d: %v", chunk, err)
+		}
+		reg.mu.Lock()
+		defer reg.mu.Unlock()
+		return reg.patchHits, len(reg.blobs)
+	}
+
+	singlePatches, blobs := run(t, 0)
+	if blobs == 0 {
+		t.Fatal("no blobs stored")
+	}
+	if singlePatches != blobs {
+		t.Errorf("default push sent %d PATCH for %d blobs, want one each", singlePatches, blobs)
+	}
+
+	chunkedPatches, chunkedBlobs := run(t, 1<<20)
+	if chunkedBlobs != blobs {
+		t.Fatalf("chunked push stored %d blobs, want the same %d", chunkedBlobs, blobs)
+	}
+	if chunkedPatches <= singlePatches {
+		t.Errorf("--upload-chunk-size 1MiB sent %d PATCH, not more than the %d of a single-request push", chunkedPatches, singlePatches)
 	}
 }

@@ -33,10 +33,8 @@ func VerifyPushAccess(ctx context.Context, ref name.Reference, kc Keychain) erro
 		return err
 	}
 	scope := Scope{Repository: ref.Context().RepositoryStr(), Actions: []string{"pull", "push"}}
-	client := &http.Client{
-		Transport: NewRoundTripper(http.DefaultTransport, NewProvider(ref.Context().RegistryStr(), auth), scope),
-		Timeout:   30 * time.Second,
-	}
+	client := newRegistryClient(NewProvider(ref.Context().RegistryStr(), auth), scope)
+	client.Timeout = 30 * time.Second
 	probe := base + "/v2/" + ref.Context().RepositoryStr() + "/blobs/sha256:" + strings.Repeat("0", 64)
 	req, err := http.NewRequestWithContext(ctx, http.MethodHead, probe, nil)
 	if err != nil {

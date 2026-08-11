@@ -17,7 +17,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   rifusi in memoria, quindi restore, `ls`, `find`, `verify` e il self-extract si
   comportano come prima.
 
+- `backimage backup --upload-chunk-size`: spezza ogni upload in chunk HTTP
+  della dimensione indicata (es. `32MiB`). Il default `0` invia un blob per
+  richiesta ed è la scelta più veloce; serve solo verso registry che rifiutano
+  richieste grandi.
+
 ### Changed
+
+- **Prestazioni**: ogni blob viene caricato in un'unica richiesta HTTP
+  streamata invece che in chunk PATCH da 8 MiB. Il chunking costava un round
+  trip completo per chunk, che il registry chiude solo dopo aver scritto il
+  chunk sul proprio storage: circa 130 attese sincrone per un layer da 1 GiB.
+  Il corpo non passa più per la memoria e viene riaperto in caso di 401. Un
+  registry che rifiuta corpi grandi (413) fa ricadere il push su chunk da
+  32 MiB da solo. In cambio, un layer fallito riparte da zero: il checkpoint
+  per-blob resta invariato.
+
+- **Prestazioni**: sul percorso remoto (server che riceve i layer in
+  streaming) l'upload tiene due buffer, così il riempimento del chunk
+  successivo si sovrappone alla PATCH in volo. Il working set per upload
+  concorrente passa da uno a due chunk (64 MiB con il default) e resta
+  indipendente dalla dimensione del blob. Un errore di PATCH può ora emergere
+  al flush successivo invece che dalla `Write` che ha riempito il buffer:
+  resta sticky e `Commit` lo riporta sempre.
+
+- **Prestazioni**: il traffico verso i registry non usa più
+  `http.DefaultTransport`. Il nuovo transport dedicato forza HTTP/1.1 (con h2
+  ogni upload concorrente veniva multiplexato su una sola connessione TCP e si
+  bloccava sul flow control dei reverse proxy davanti ai registry),
+  dimensiona il pool di connessioni idle sul numero di job e allarga i buffer
+  di scrittura. Proxy, timeout e default TLS restano quelli della libreria
+  standard. Analisi e passi successivi in `docs/TROUGHPUT_IMPROVE.md`.
 
 - **Sicurezza**: senza passphrase (o identità age) un'immagine cifrata non
   rivela più nulla del proprio contenuto. In particolare non è più pubblico il

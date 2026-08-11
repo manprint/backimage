@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/go-containerregistry/pkg/authn"
@@ -33,11 +34,21 @@ type Progress struct {
 	FromCheckpoint bool   `json:"fromCheckpoint,omitempty"`
 }
 
+// fallbackChunkSize is used when a registry refuses a single-request upload
+// with 413, and by callers that ask for chunking without naming a size.
+const fallbackChunkSize = 32 << 20
+
 // PushOptions tunes the upload.
 type PushOptions struct {
-	Jobs       int   // parallel blob uploads, default 3
-	ChunkSize  int64 // HTTP PATCH chunk size, default 32 MiB
-	MaxRetries int   // per blob attempt budget, default 5
+	Jobs int // parallel blob uploads, default 3
+	// ChunkSize is the HTTP PATCH chunk size. Zero, the default, sends each
+	// blob as one streamed request instead: chunking costs a full round trip
+	// per chunk, and registries normally persist a chunk to their backing
+	// store before answering, which caps a push at a fraction of the link
+	// speed. Set it only for a registry that refuses large bodies; a 413 also
+	// switches the running push over on its own.
+	ChunkSize  int64
+	MaxRetries int // per blob attempt budget, default 5
 	Checkpoint CheckpointStore
 	ID         string // deterministic checkpoint id
 	Manifest   []byte // manifest.json bytes carried by the checkpoint
@@ -64,9 +75,6 @@ type blobTask struct {
 func Push(ctx context.Context, ref name.Reference, images map[string]v1.Image, idx v1.ImageIndex, kc Keychain, opts PushOptions) error {
 	if opts.Jobs <= 0 {
 		opts.Jobs = 3
-	}
-	if opts.ChunkSize <= 0 {
-		opts.ChunkSize = 32 << 20
 	}
 	if opts.MaxRetries <= 0 {
 		opts.MaxRetries = 5
@@ -99,9 +107,7 @@ func Push(ctx context.Context, ref name.Reference, images map[string]v1.Image, i
 		tagged:       tagged,
 		opts:         opts,
 		done:         make(map[string]bool, len(tasks)),
-		client: &http.Client{
-			Transport: NewRoundTripper(http.DefaultTransport, NewProvider(ref.Context().RegistryStr(), auth), scope),
-		},
+		client:       newRegistryClient(NewProvider(ref.Context().RegistryStr(), auth), scope),
 	}
 	if opts.Checkpoint != nil && opts.ID != "" {
 		ck, err := opts.Checkpoint.Load(opts.ID)
@@ -132,9 +138,6 @@ func PushWithProvider(ctx context.Context, ref name.Reference, images map[string
 	if opts.Jobs <= 0 {
 		opts.Jobs = 3
 	}
-	if opts.ChunkSize <= 0 {
-		opts.ChunkSize = 32 << 20
-	}
 	if opts.MaxRetries <= 0 {
 		opts.MaxRetries = 5
 	}
@@ -157,9 +160,7 @@ func PushWithProvider(ctx context.Context, ref name.Reference, images map[string
 		tagged:       tagged,
 		opts:         opts,
 		done:         make(map[string]bool, len(tasks)),
-		client: &http.Client{Transport: NewRoundTripper(
-			http.DefaultTransport, provider, scope,
-		)},
+		client:       newRegistryClient(provider, scope),
 	}
 	if opts.Checkpoint != nil && opts.ID != "" {
 		ck, loadErr := opts.Checkpoint.Load(opts.ID)
@@ -292,6 +293,31 @@ type pusher struct {
 	mu     sync.Mutex
 	ckptMu sync.Mutex
 	done   map[string]bool
+
+	// chunkFallback is set once a registry rejects a single-request upload,
+	// so the remaining blobs of the same push do not repeat the attempt.
+	chunkFallback atomic.Int64
+	// fallbackChunk overrides the size used by that fallback; zero means
+	// fallbackChunkSize. Tests set it to keep fixtures small.
+	fallbackChunk int64
+}
+
+// fallbackChunkBytes is the chunk size used after a registry refuses a
+// single-request upload.
+func (p *pusher) fallbackChunkBytes() int64 {
+	if p.fallbackChunk > 0 {
+		return p.fallbackChunk
+	}
+	return fallbackChunkSize
+}
+
+// uploadChunkSize returns the chunk size in force, or 0 when blobs are sent
+// in a single request.
+func (p *pusher) uploadChunkSize() int64 {
+	if v := p.chunkFallback.Load(); v > 0 {
+		return v
+	}
+	return p.opts.ChunkSize
 }
 
 func (p *pusher) run() error {
@@ -516,8 +542,52 @@ type httpError struct {
 
 func (e *httpError) Error() string { return e.msg }
 
-// doUpload performs one full upload attempt for t.
+// doUpload performs one full upload attempt for t: one streamed request per
+// blob, or chunked when the caller asked for it or a registry refused the
+// body size.
 func (p *pusher) doUpload(t blobTask) error {
+	if size := p.uploadChunkSize(); size > 0 {
+		return p.uploadChunked(t, size)
+	}
+	err := p.uploadSingle(t)
+	var hr *httpError
+	if errors.As(err, &hr) && hr.code == http.StatusRequestEntityTooLarge {
+		// The registry caps the request body. Fall back for this blob and
+		// for the rest of the push.
+		size := p.fallbackChunkBytes()
+		p.chunkFallback.CompareAndSwap(0, size)
+		return p.uploadChunked(t, size)
+	}
+	return err
+}
+
+// uploadSingle sends the whole blob as one streamed PATCH: three round trips
+// per blob instead of one per chunk, and the body never lands in memory.
+func (p *pusher) uploadSingle(t blobTask) error {
+	// Open first: a source that cannot be read must not leave an orphan
+	// upload session behind on the registry.
+	rc, err := t.open()
+	if err != nil {
+		return err
+	}
+	defer rc.Close()
+	loc, err := p.startUpload()
+	if err != nil {
+		return err
+	}
+	if loc == "" {
+		return &httpError{code: 0, msg: "registry: empty upload location"}
+	}
+	loc, err = p.patchStream(loc, rc, t.size, t.open)
+	if err != nil {
+		return err
+	}
+	return p.putFinal(loc, t.digest)
+}
+
+// uploadChunked sends the blob in PATCH chunks of at most size bytes. Each
+// chunk costs a full round trip, so this is the fallback, not the default.
+func (p *pusher) uploadChunked(t blobTask, size int64) error {
 	rc, err := t.open()
 	if err != nil {
 		return err
@@ -534,8 +604,7 @@ func (p *pusher) doUpload(t blobTask) error {
 	}
 
 	// 2. stream in PATCH chunks; a reader error aborts the session
-	var sent int64
-	buf := make([]byte, p.opts.ChunkSize)
+	buf := make([]byte, size)
 	for {
 		n, rerr := io.ReadFull(rc, buf)
 		if n > 0 {
@@ -543,7 +612,6 @@ func (p *pusher) doUpload(t blobTask) error {
 			if err != nil {
 				return err
 			}
-			sent += int64(n)
 		}
 		if rerr != nil {
 			if rerr == io.EOF || rerr == io.ErrUnexpectedEOF {
@@ -554,10 +622,7 @@ func (p *pusher) doUpload(t blobTask) error {
 	}
 
 	// 3. finalize
-	if err := p.putFinal(loc, t.digest); err != nil {
-		return err
-	}
-	return nil
+	return p.putFinal(loc, t.digest)
 }
 
 func (p *pusher) startUpload() (string, error) {
@@ -583,8 +648,32 @@ func (p *pusher) patch(loc string, chunk []byte) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("Content-Type", "application/octet-stream")
 	req.ContentLength = int64(len(chunk))
+	return p.sendPatch(loc, req)
+}
+
+// patchStream sends body as the request payload without buffering it. size
+// must be the exact byte count: registries need a Content-Length, and a
+// streamed body would otherwise be sent with chunked transfer encoding.
+// reopen lets the bearer round tripper replay the request after a 401.
+func (p *pusher) patchStream(loc string, body io.Reader, size int64, reopen func() (io.ReadCloser, error)) (string, error) {
+	if size <= 0 {
+		body = http.NoBody
+	}
+	req, err := http.NewRequestWithContext(p.ctx, http.MethodPatch, loc, body)
+	if err != nil {
+		return "", err
+	}
+	req.ContentLength = size
+	if reopen != nil {
+		req.GetBody = reopen
+	}
+	return p.sendPatch(loc, req)
+}
+
+// sendPatch performs one PATCH and returns the location of the next one.
+func (p *pusher) sendPatch(loc string, req *http.Request) (string, error) {
+	req.Header.Set("Content-Type", "application/octet-stream")
 	resp, err := p.client.Do(req)
 	if err != nil {
 		return "", err

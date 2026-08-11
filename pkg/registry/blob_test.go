@@ -127,11 +127,49 @@ func TestBlobUploadStickyPatchError(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := upload.Write([]byte("abc")); err == nil {
-		t.Fatal("PATCH error missing")
+	// A PATCH runs in the background, so its failure surfaces at the next
+	// flush boundary at the latest — never later than Commit, and never
+	// swallowed.
+	var writeErr error
+	for i := 0; i < 8 && writeErr == nil; i++ {
+		_, writeErr = upload.Write([]byte("abc"))
+	}
+	if writeErr == nil {
+		t.Error("PATCH error never surfaced through Write")
 	}
 	if err := upload.Commit(context.Background()); err == nil {
 		t.Fatal("sticky error missing")
+	}
+	if _, err := upload.Write([]byte("x")); err == nil {
+		t.Fatal("write after a failed upload succeeded")
+	}
+}
+
+// TestBlobUploadReportsPatchErrorAtCommit pins the weakest case: a blob small
+// enough that its only PATCH is the one Commit issues.
+func TestBlobUploadReportsPatchErrorAtCommit(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPost {
+			w.Header().Set("Location", srvURL(r)+"/upload")
+			w.WriteHeader(http.StatusAccepted)
+			return
+		}
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+	provider := NewStaticProvider(func(context.Context, Scope) (*Token, error) {
+		return &Token{Value: "x", ExpiresAt: time.Now().Add(time.Hour)}, nil
+	})
+	client, _ := NewBlobClient(context.Background(), blobTestRef(t, srv.URL), provider, 1<<20)
+	upload, err := client.Open(testBlobDigest([]byte("abc")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := upload.Write([]byte("abc")); err != nil {
+		t.Fatalf("buffered write: %v", err)
+	}
+	if err := upload.Commit(context.Background()); err == nil {
+		t.Fatal("commit hid the PATCH failure")
 	}
 }
 
