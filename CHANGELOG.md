@@ -16,11 +16,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   byte *compressi*. Due backup che condividono la chiave di repository
   sigillavano quindi due stringhe di byte diverse sotto lo stesso nonce ogni
   volta che la forma compressa di un chunk invariato cambiava: bastava un
-  `--compression` o un `--level` diverso, oppure lo stesso codec eseguito con un
-  numero di worker differente, che `klauspost/compress` è libero di inquadrare
-  in modo diverso. Due messaggi AES-GCM sotto la stessa chiave e lo stesso nonce
-  espongono lo XOR dei rispettivi plaintext e la chiave di autenticazione GHASH,
-  cioè la possibilità di forgiare blob autenticati arbitrari con quel DEK.
+  `--compression` o un `--compression-level` diverso fra due esecuzioni, oppure
+  un aggiornamento del compressore che cambi l'output a parità di livello. Due
+  messaggi AES-GCM sotto la stessa chiave e lo stesso nonce espongono lo XOR dei
+  rispettivi plaintext e la chiave di autenticazione GHASH, cioè la possibilità
+  di forgiare blob autenticati arbitrari con quel DEK.
 
   Il nonce è ora derivato dai byte che GCM cifra davvero
   (`HMAC-SHA256(NonceKey, label ‖ role ‖ sha256(payload))`): nonce uguale
@@ -87,6 +87,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   della dimensione indicata (es. `32MiB`). Il default `0` invia un blob per
   richiesta ed è la scelta più veloce; serve solo verso registry che rifiutano
   richieste grandi.
+
+### Fixed
+
+- **Deduplica non deterministica sul livello di compressione**. Un chunk si
+  deduplica solo se comprime negli stessi byte, e il livello lo decide quanto il
+  codec. `--dedup` eredita ora il livello dal backup di riferimento quando non è
+  stato chiesto esplicitamente, esattamente come già faceva con i parametri CDC:
+  un default che si muove fra due release avrebbe altrimenti ricodificato ogni
+  chunk azzerando la dedup, senza nulla nell'output a spiegare il caricamento.
+  Un `--compression-level` esplicito vince sempre.
+
+  Se codec o livello effettivi non coincidono con quelli del backup precedente
+  il backup lo dice, invece di ricaricare tutto in silenzio. Il codec viene
+  segnalato e non adottato: adottarlo potrebbe tirare dentro `xz` o `lz4`, che
+  un'immagine eseguibile rifiuta, e passare `--compression` è una scelta
+  deliberata che merita una spiegazione, non un override.
+
+  Il numero di worker dello zstd, invece, **non** era una causa: misurato che
+  `WithEncoderConcurrency` non altera i byte prodotti. La parallelizzazione resta
+  e la proprietà è bloccata da `TestZstdOutputIndependentOfWorkerCount`, così un
+  eventuale cambiamento in `klauspost/compress` fa fallire un test invece di
+  degradare la dedup in silenzio. `TestCodecOutputIsReproducible` estende la
+  verifica di riproducibilità a tutti i codec e livelli.
+
+- L'identità del checkpoint (`checkpointID`) usa ora il livello di compressione
+  **risolto** e non lo zero del chiamante: due esecuzioni con livelli effettivi
+  diversi non condividono più un checkpoint. Effetto collaterale: i checkpoint
+  creati da una versione precedente non vengono più ritrovati e un backup
+  interrotto riparte da capo una volta.
 
 ### Changed
 

@@ -79,19 +79,20 @@ Fino alla 0.2.3 il nonce convergente era
 la stessa chiave di repository potevano sigillare **byte diversi sotto lo stesso
 nonce** ogni volta che la forma compressa di un chunk invariato cambiava:
 
-- `--compression` o `--level` diversi tra due esecuzioni;
-- lo **stesso** codec con un numero di worker diverso —
-  `zstd.WithEncoderConcurrency(min(GOMAXPROCS,4))` in `pkg/compress/zstd.go` fa
-  dipendere l'inquadramento del frame dal parallelismo, quindi bastava un carico
-  o un conteggio di core differente;
-- un aggiornamento di `klauspost/compress` che cambiasse l'output a parità di
-  livello.
+- `--compression` o `--compression-level` diversi tra due esecuzioni;
+- un aggiornamento del compressore che cambi l'output a parità di livello: le
+  librerie di compressione non garantiscono stabilità dei byte fra versioni.
 
-Non serviva alcun errore dell'utente. Due messaggi AES-GCM sotto la stessa
-coppia (chiave, nonce) consegnano a chi possiede le due immagini lo XOR dei due
-plaintext **e** la chiave di autenticazione GHASH `H`, cioè la capacità di
-forgiare blob autenticati arbitrari con quel DEK: cadono insieme confidenzialità
-e integrità.
+Il numero di worker dello zstd **non** è tra le cause: è stato misurato che
+`zstd.WithEncoderConcurrency` non altera i byte prodotti (48 combinazioni di
+dimensione, livello e worker, dati comprimibili e non). La proprietà è ora
+bloccata da `TestZstdOutputIndependentOfWorkerCount` in `pkg/compress`, perché
+la deduplica ci si appoggia.
+
+Due messaggi AES-GCM sotto la stessa coppia (chiave, nonce) consegnano a chi
+possiede le due immagini lo XOR dei due plaintext **e** la chiave di
+autenticazione GHASH `H`, cioè la capacità di forgiare blob autenticati arbitrari
+con quel DEK: cadono insieme confidenzialità e integrità.
 
 Correzione: il nonce è derivato dai byte effettivamente cifrati, e
 `crypt.Sealer.Seal` non accetta più un digest dal chiamante, così l'errore non è

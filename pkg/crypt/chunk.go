@@ -113,12 +113,11 @@ func (s *sealer) Overhead() int { return s.overhead }
 // 0.2.3 the nonce came from the digest of the *plaintext* chunk while GCM
 // encrypted the *compressed* chunk, so two backups sharing a repository key
 // sealed two different byte strings under one nonce as soon as the compressed
-// form of a chunk changed. That needed no mistake from the user: a different
-// --compression or --level does it, and so does the same codec run with a
-// different worker count, which klauspost/compress is free to frame
-// differently. Two AES-GCM messages under one key and nonce hand an attacker
-// the XOR of their plaintexts and the GHASH authentication key, which is
-// forgery of arbitrary authenticated blobs under that DEK.
+// form of a chunk changed: a different --compression or --compression-level
+// between two runs does it, and so does a compressor release that reshapes its
+// output at the same level. Two AES-GCM messages under one key and nonce hand
+// an attacker the XOR of their plaintexts and the GHASH authentication key,
+// which is forgery of arbitrary authenticated blobs under that DEK.
 //
 // Keying the nonce on the sealed bytes makes that impossible by construction:
 // equal nonce now means equal payload, which is exactly the case deduplication

@@ -271,6 +271,17 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		}
 	}
 
+	// The codec level is resolved here, once, because two things downstream need
+	// the effective value and not the caller's zero: the checkpoint identity,
+	// which must not describe two different sets of blob bytes with one id, and
+	// the dedup inheritance just below.
+	cfg.Level = resolveLevel(previous, codec, cfg.Dedup, cfg.Level)
+	if cfg.Dedup && cfg.Progress != nil {
+		if warn := compressionDedupWarning(previous, codec.Name(), cfg.Level); warn != "" {
+			cfg.Progress(warn)
+		}
+	}
+
 	// 1) light estimate walk (no writes).
 	if cfg.Progress != nil {
 		cfg.Progress("backup: scansione sorgenti in corso")
@@ -365,12 +376,8 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	}
 
 	// 4) streaming section: archive -> split -> compress -> seal -> spool.
-	level := cfg.Level
-	if level == 0 {
-		_, _, def := codec.Levels()
-		level = def
-	}
-	bp := &builder{cfg: cfg, codec: codec, plan: plan, km: km, passphrase: passphrase, level: level, createdAt: createdAt, cdcParams: cdcParams, estimatedRaw: est.Bytes, maxDataLayers: 118}
+	// cfg.Level already holds the effective level, resolved before the estimate.
+	bp := &builder{cfg: cfg, codec: codec, plan: plan, km: km, passphrase: passphrase, level: cfg.Level, createdAt: createdAt, cdcParams: cdcParams, estimatedRaw: est.Bytes, maxDataLayers: 118}
 
 	// 4-bis) streaming remote: the server owns the pipeline from here on.
 	if cfg.RemoteStream != nil {
@@ -616,6 +623,62 @@ func dedupParamsSpecified(p chunk.CDCParams) bool {
 
 func sameCDCParams(a, b chunk.CDCParams) bool {
 	return a.Min == b.Min && a.Avg == b.Avg && a.Max == b.Max && a.Polynomial == b.Polynomial
+}
+
+// resolveLevel returns the codec level this backup will actually use.
+//
+// Deduplication compares stored blob digests, so an unchanged chunk dedups
+// against the previous backup only when it compresses to exactly the same
+// bytes — and the level decides that as much as the codec does. When the caller
+// asked for no level in particular, `--dedup` therefore adopts the level the
+// base backup recorded instead of the codec default: a default that moves
+// between releases would otherwise re-encode every chunk and silently drop the
+// hit rate to zero, with nothing in the output to explain the sudden upload.
+//
+// An explicit --compression-level always wins; a level the current codec cannot
+// accept (the base used another codec, or the range shrank) falls back to the
+// default.
+func resolveLevel(previous *dedupBase, codec compress.Codec, dedup bool, requested int) int {
+	minLevel, maxLevel, def := codec.Levels()
+	if requested != 0 {
+		return requested
+	}
+	if !dedup || previous == nil || previous.manifest == nil {
+		return def
+	}
+	if previous.manifest.Archive.Compression != codec.Name() {
+		return def
+	}
+	inherited := previous.manifest.Archive.CompressionLevel
+	if inherited < minLevel || inherited > maxLevel {
+		return def
+	}
+	return inherited
+}
+
+// compressionDedupWarning names a codec or level that cannot share blobs with
+// the base backup, so a full re-upload is never a surprise. Empty means the two
+// agree.
+//
+// The codec is reported and never adopted: switching to it silently could pull
+// in xz or lz4, which a runnable image refuses, and passing --compression is a
+// deliberate act that deserves an explanation rather than an override.
+func compressionDedupWarning(previous *dedupBase, codecName string, level int) string {
+	if previous == nil || previous.manifest == nil || previous.manifest.Archive.Compression == "" {
+		return ""
+	}
+	prev := previous.manifest.Archive
+	if prev.Compression != codecName {
+		return fmt.Sprintf("dedup: il backup precedente usa la compressione %s, questo usa %s: "+
+			"i blob non sono condivisibili e verranno ricaricati tutti",
+			prev.Compression, codecName)
+	}
+	if prev.CompressionLevel != level {
+		return fmt.Sprintf("dedup: livello di compressione %d invece di %d del backup precedente: "+
+			"i blob non sono condivisibili e verranno ricaricati tutti",
+			level, prev.CompressionLevel)
+	}
+	return ""
 }
 
 // legacyEnvelopeKey reports whether previous sealed its blobs with the

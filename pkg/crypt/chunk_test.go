@@ -133,9 +133,9 @@ func TestSealConvergent(t *testing.T) {
 // Up to 0.2.3 Seal took the digest of the *plaintext* chunk and encrypted the
 // *compressed* chunk. Two backups sharing a repository key therefore sealed
 // two different byte strings under one nonce whenever the compressed form of an
-// unchanged chunk changed: a different --compression or --level, or the same
-// codec framing its output differently because it ran with another worker
-// count. Two AES-GCM messages under one key and nonce give away the XOR of
+// unchanged chunk changed: a different --compression or --compression-level
+// between two runs, or a compressor release that reshapes its output at the same
+// level. Two AES-GCM messages under one key and nonce give away the XOR of
 // their plaintexts and the GHASH authentication key.
 //
 // The two payloads below stand for zstd(P) and gzip(P) of one plaintext P.

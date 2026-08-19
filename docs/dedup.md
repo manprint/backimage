@@ -19,9 +19,38 @@ immutati. Rimane un'immagine OCI valida: la deduplica è quindi a granularità d
    bruciata (vedi [security.md](security.md)): viene generata una chiave nuova e
    il backup ricarica tutti i blob **una volta sola**, poi la deduplica riprende
    normalmente. Il messaggio di progresso lo dice esplicitamente.
-4. Il registry riceve `HEAD` per ogni blob: i layer con digest già presenti non
+4. Il livello di compressione viene ereditato dal backup di riferimento quando
+   non è stato indicato con `--compression-level`. Un chunk si deduplica solo se
+   comprime negli **stessi byte**, e il livello lo decide quanto il codec: un
+   default che si muove fra due release ricodificherebbe ogni chunk azzerando la
+   dedup senza alcun segnale. Se codec o livello effettivi differiscono da quelli
+   del backup precedente, il backup lo segnala; il codec viene segnalato e non
+   adottato, perché adottarlo potrebbe tirare dentro `xz` o `lz4` che
+   un'immagine eseguibile rifiuta.
+5. Il registry riceve `HEAD` per ogni blob: i layer con digest già presenti non
    vengono caricati. L'output JSON riporta `skippedBlobs`, `skippedBytes` e
    `uploadedBytes`.
+
+## Determinismo della compressione
+
+La dedup poggia su un'assunzione non ovvia: lo stesso chunk, con lo stesso codec
+e lo stesso livello, deve produrre gli stessi byte su qualunque macchina. Se non
+è così il digest del blob cambia, il registry vede un layer nuovo e il tasso di
+riuso crolla **in silenzio**.
+
+Lo zstd è configurato con `WithEncoderConcurrency(min(GOMAXPROCS,4))`, quindi il
+numero di worker varia con la macchina e con il carico. È stato misurato che
+`klauspost/compress` mantiene l'output indipendente da quel valore, perciò la
+parallelizzazione resta: `TestZstdOutputIndependentOfWorkerCount` in
+`pkg/compress` lo blocca, così un eventuale cambiamento della libreria fa
+fallire un test invece di degradare la dedup senza avvisare.
+`TestCodecOutputIsReproducible` verifica la riproducibilità su tutti i codec e
+livelli.
+
+Resta un fattore fuori dal controllo del tool: un aggiornamento del compressore
+può cambiare l'output a parità di livello, perché le librerie di compressione non
+garantiscono stabilità dei byte fra versioni. In quel caso il primo backup dopo
+l'aggiornamento ricarica i blob una volta, poi la dedup riprende.
 
 I parametri CDC sono nell'`manifest.json` (`chunking.minChunkBytes`,
 `targetChunkBytes`, `maxChunkBytes`, `polynomial`). Un nuovo `--dedup` li

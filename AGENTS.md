@@ -204,6 +204,14 @@ senza rete e senza backimage installato sull'host di destinazione.
   controllo opzionale.
 - Una chiave con `envelopeVersion` inferiore a `crypt.EnvelopeVersion` è
   bruciata: `--dedup` non la riusa (`legacyEnvelopeKey`).
+- La dedup confronta digest di blob, quindi dipende dal fatto che lo stesso chunk
+  comprima negli stessi byte: codec e livello sono parte del contratto
+  (`resolveLevel` eredita il livello dal backup di riferimento). Non introdurre
+  non determinismo nel percorso di compressione — nessun timestamp, nessun seed
+  casuale, nessuna dipendenza dal numero di worker: `pkg/compress`
+  `TestCodecOutputIsReproducible` e `TestZstdOutputIndependentOfWorkerCount`
+  bloccano la proprietà, perché una sua rottura degrada la dedup in silenzio
+  invece di fallire.
 - La passphrase del backup non è una credenziale del registry.
 - Non loggare password, token, DEK, passphrase o chiavi private.
 - Preferire file o stdin ai segreti sulla command line.
