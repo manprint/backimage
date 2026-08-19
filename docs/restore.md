@@ -33,6 +33,12 @@ Una passphrase errata viene rilevata usando il solo layer dei metadati, prima
 di scaricare un layer dati. `--no-verify` è una modalità di emergenza e salta
 il digest plaintext; autenticazione e decompressione restano obbligatorie.
 
+Da 0.2.4 `--no-verify` **non ha effetto su un backup cifrato**: i digest del
+plaintext vivono nel blob privato sigillato e sono ciò che rifiuta un chunk
+spostato tra due backup che condividono la chiave, quindi il controllo è sempre
+eseguito. Su un backup in chiaro, dove ogni digest è pubblico, il flag continua a
+valere come prima.
+
 ## Sorgenti disponibili
 
 | Sorgente | Selezione | Requisiti | Uso tipico |

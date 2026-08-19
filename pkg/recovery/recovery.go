@@ -366,7 +366,7 @@ func (b *Backup) PlainChunk(ctx context.Context, i int) (io.ReadCloser, error) {
 	var payload []byte
 	var codecID compress.ID
 	if b.Manifest.Encryption.Enabled {
-		payload, codecID, err = b.opener.Open(nil, uint32(i), stored)
+		payload, codecID, err = b.opener.Open(nil, crypt.RoleData, uint32(i), stored)
 		clear(stored)
 		if err != nil {
 			return nil, fmt.Errorf("chunk %d authentication: %w", i, err)
@@ -405,9 +405,24 @@ func (r *bufferedReader) Close() error {
 	return err
 }
 
+// mustVerify decides whether the per-chunk plaintext digest is checked.
+//
+// On an encrypted backup it always is, whatever the caller asked for. Since
+// 0.2.3 that digest lives in the sealed private blob, which makes it the last
+// link of the integrity chain rather than the corruption check it used to be:
+// it is what refuses a chunk moved between two backups that share a
+// repository key, a splice AES-GCM cannot see on its own because convergent
+// mode deliberately leaves the chunk position out of the authenticated data.
+// Trading it for speed would reopen that hole, so --no-verify only ever
+// applies to a plaintext backup, where every digest is public anyway.
+func (b *Backup) mustVerify(verify bool) bool {
+	return verify || b.Manifest.Encryption.Enabled
+}
+
 // StreamTar writes the reconstructed plaintext tar. It uses memory bounded
 // by one stored chunk regardless of total backup size.
 func (b *Backup) StreamTar(ctx context.Context, dst io.Writer, verify bool) error {
+	verify = b.mustVerify(verify)
 	for i, c := range b.Chunks.Chunks {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -452,6 +467,7 @@ func (b *Backup) StreamSelectedTar(ctx context.Context, idx *index.Index, select
 	if idx == nil {
 		return errors.New("nil index")
 	}
+	verify = b.mustVerify(verify)
 	wanted := make(map[string]bool, len(selected))
 	for _, e := range selected {
 		wanted[e.Path] = true

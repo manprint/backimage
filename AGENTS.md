@@ -178,15 +178,32 @@ senza rete e senza backimage installato sull'host di destinazione.
 - Un backup cifrato non deve descrivere il proprio contenuto in nessun dato
   leggibile senza chiave: né in `manifest.json`/`chunks.json`, né nelle label o
   annotazioni OCI. Ciò che resta pubblico è solo quanto serve a scaricare e
-  verificare i blob cifrati (`p`, `ss`, `sb`, layer, codec, `nonceMode`).
+  verificare i blob cifrati (`p`, `ss`, `sb`, layer, codec, `nonceMode`,
+  `envelopeVersion`).
   Aggiungere un campo pubblico che parli del plaintext è una regressione:
   metterlo in `index.Private` (`pkg/index/private.go`). Test di riferimento:
   `pkg/index/private_test.go`, `TestPrivateMetadataHidesContentUntilUnlock`
   (`pkg/recovery`), `TestPipelineEncryptedPublishesNoContentMetadata`
   (`pkg/backup`) e la sezione «encrypted metadata» in `test/e2e/phase_06.sh`.
-- I blob di metadati vanno sigillati con un `plainSHA` derivato dal contenuto:
-  una costante riuserebbe il nonce GCM tra backup che condividono la chiave
-  convergente.
+- Il nonce convergente si deriva **solo** dai byte che AES-GCM cifra
+  (`crypt.convergentNonce` lavora sul payload che riceve). `Seal` non accetta un
+  digest dal chiamante proprio per rendere l'errore inesprimibile: non
+  reintrodurre un parametro del genere. Derivare il nonce da qualsiasi altra
+  cosa — il plaintext prima della compressione, una costante, un contatore —
+  fa riusare il nonce tra backup che condividono la chiave convergente, e due
+  messaggi GCM sotto la stessa coppia (chiave, nonce) espongono lo XOR dei
+  plaintext e la chiave GHASH. È il bug corretto nella 0.2.4; regressioni:
+  `TestConvergentNonceIsSealedPayloadDerived` (`pkg/crypt`),
+  `TestConvergentMetadataNonceIsContentDerived` (`pkg/index`).
+- Ogni blob sigillato dichiara il proprio `crypt.Role`, che entra nello AAD:
+  aggiungendo un nuovo tipo di blob va aggiunto un ruolo, non riusato uno
+  esistente. Lo AAD non può invece legare l'identità del backup, o due chunk
+  identici diventerebbero diversi e la dedup fra tag morirebbe: lo splice fra
+  backup è respinto dai digest plaintext nel blob privato, che il restore
+  verifica sempre su un backup cifrato (`Backup.mustVerify`). Non rendere quel
+  controllo opzionale.
+- Una chiave con `envelopeVersion` inferiore a `crypt.EnvelopeVersion` è
+  bruciata: `--dedup` non la riusa (`legacyEnvelopeKey`).
 - La passphrase del backup non è una credenziale del registry.
 - Non loggare password, token, DEK, passphrase o chiavi private.
 - Preferire file o stdin ai segreti sulla command line.

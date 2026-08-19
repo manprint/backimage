@@ -11,15 +11,25 @@ import (
 // Envelope layout (overview.md §4.4):
 //
 //	0  8  magic  "BIMGCHK1"
-//	8  1  version = 1
+//	8  1  version (1 = legacy, 2 = role-bound AAD, payload-derived nonce)
 //	9  1  codec   (compress.ID)
 //	10 1  aead    (0=none, 1=aes-256-gcm)
 //	11 1  flags   (bit0 = convergent nonce)
 //	12 12 nonce   (present only if aead != 0)
 //	24 .. payload (compressed, then encrypted) + GCM tag 16 B
+//
+// The byte layout is identical in both versions: only the meaning of the
+// authenticated data and the derivation of a convergent nonce changed.
 const (
-	envelopeMagic   = "BIMGCHK1"
-	envelopeVersion = 1
+	envelopeMagic = "BIMGCHK1"
+	// envelopeVersionLegacy is what backimage wrote up to 0.2.3: an AAD that
+	// does not name the role of the blob, and a convergent nonce derived from
+	// the digest of the *plaintext* chunk rather than from the bytes AES-GCM
+	// actually encrypts. It is still read, so existing backups keep restoring,
+	// and never written.
+	envelopeVersionLegacy = 1
+	// envelopeVersion is the version Seal writes.
+	envelopeVersion = 2
 	aeadNone        = 0
 	aeadAES256GCM   = 1
 	flagConvergent  = 1 << 0
@@ -28,6 +38,41 @@ const (
 	headerNonceSize = 12
 	headerMaxSize   = headerEndSize + headerNonceSize // 24
 )
+
+// EnvelopeVersion is the envelope version this build writes. The manifest
+// records it so a later backup can tell whether the key it is about to reuse
+// ever sealed a blob with the legacy derivation.
+const EnvelopeVersion = envelopeVersion
+
+// Role names what a sealed blob is. Version 2 authenticates it, so the file
+// index, the confidential metadata and a data chunk are not interchangeable
+// even when one key seals all three.
+type Role uint8
+
+const (
+	// RoleData is one data chunk of the archive stream.
+	RoleData Role = 0
+	// RoleIndex is index.json.zst, the per-file table.
+	RoleIndex Role = 1
+	// RolePrivate is private.json.zst, the confidential metadata.
+	RolePrivate Role = 2
+)
+
+func (r Role) valid() bool { return r <= RolePrivate }
+
+// String names the role for error messages.
+func (r Role) String() string {
+	switch r {
+	case RoleData:
+		return "data"
+	case RoleIndex:
+		return "index"
+	case RolePrivate:
+		return "private"
+	default:
+		return fmt.Sprintf("role(%d)", uint8(r))
+	}
+}
 
 // Header is the fixed prefix of every stored blob.
 type Header struct {
@@ -87,8 +132,9 @@ func ParseHeader(src []byte) (Header, int, error) {
 		AEAD:    src[10],
 		Flags:   src[11],
 	}
-	if h.Version != envelopeVersion {
-		return Header{}, 0, fmt.Errorf("unsupported blob version %d (support %d)", h.Version, envelopeVersion)
+	if h.Version != envelopeVersion && h.Version != envelopeVersionLegacy {
+		return Header{}, 0, fmt.Errorf("unsupported blob version %d (support %d-%d)",
+			h.Version, envelopeVersionLegacy, envelopeVersion)
 	}
 	if _, err := compress.ByID(h.Codec); err != nil {
 		return Header{}, 0, fmt.Errorf("unknown codec %d", h.Codec)
@@ -106,21 +152,44 @@ func ParseHeader(src []byte) (Header, int, error) {
 	return h, n, nil
 }
 
-// AAD builds the additional authenticated data for a chunk. Random-nonce
-// blobs bind their position to detect a reordered chunk table. Convergent
-// blobs deliberately omit the position: a CDC boundary may move a matching
-// chunk to another index in a later backup, and binding that index would make
-// otherwise identical encrypted blobs different. The header, codec and nonce
-// remain authenticated in both modes.
-func AAD(h Header, chunkIndex uint32) []byte {
-	out := make([]byte, 16)
+// AAD builds the additional authenticated data for one blob.
+//
+// Version 2 authenticates the role, so a data chunk cannot be accepted where
+// the file index or the private metadata is expected. Before that the three
+// were sealed with an identical AAD at chunk index 0, which made them
+// interchangeable under one key.
+//
+// Random-nonce blobs also bind their position, to detect a reordered chunk
+// table. Convergent blobs deliberately omit the position: a CDC boundary may
+// move a matching chunk to another index in a later backup, and binding that
+// index would make otherwise identical encrypted blobs different. Their
+// integrity across positions is carried by the per-chunk plaintext digests in
+// the sealed private blob, which restore always verifies.
+//
+// The version 1 layout is reproduced byte for byte, or backups written before
+// 0.2.4 would stop opening.
+func AAD(h Header, role Role, chunkIndex uint32) []byte {
+	if h.Version == envelopeVersionLegacy {
+		out := make([]byte, 16)
+		copy(out[0:8], envelopeMagic)
+		out[8] = h.Version
+		out[9] = byte(h.Codec)
+		out[10] = h.AEAD
+		out[11] = h.Flags
+		if h.Flags&flagConvergent == 0 {
+			binary.BigEndian.PutUint32(out[12:16], chunkIndex)
+		}
+		return out
+	}
+	out := make([]byte, 17)
 	copy(out[0:8], envelopeMagic)
 	out[8] = h.Version
 	out[9] = byte(h.Codec)
 	out[10] = h.AEAD
 	out[11] = h.Flags
+	out[12] = byte(role)
 	if h.Flags&flagConvergent == 0 {
-		binary.BigEndian.PutUint32(out[12:16], chunkIndex)
+		binary.BigEndian.PutUint32(out[13:17], chunkIndex)
 	}
 	return out
 }

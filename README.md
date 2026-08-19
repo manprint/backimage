@@ -143,12 +143,34 @@ la CLI. Con il valore predefinito `--runnable`, preferire `zstd`, `gzip` o
 
 La protezione del backup è una passphrase age e **non** coincide con la
 password del registry. La cifratura è attiva per default: scegliere una delle
-seguenti modalità per fornire il segreto:
+seguenti modalità per fornire il segreto.
+
+Prima però: **generare la passphrase, non inventarla.** Il file chiavi viaggia
+dentro l'immagine, quindi chi possiede l'immagine può provare passphrase offline
+senza limiti di tentativi, ed è l'unica difesa che resta. Una frase inventata di
+24 caratteri vale una trentina di bit e cade in ore; 32 caratteri casuali valgono
+~184 bit e non cadono. `backimage genpass` produce la seconda cosa:
+
+```console
+# 32 caratteri da crypto/rand: minuscole, maiuscole, cifre e simboli.
+backimage genpass
+
+# Salvare in un file protetto e usarlo per il backup.
+umask 077
+backimage genpass > backup.pass
+chmod 600 backup.pass
+backimage backup /srv/data --repo ghcr.io/acme/backup --tag daily \
+  --passphrase-file ./backup.pass
+```
+
+`backimage backup` avvisa su stderr se la passphrase fornita è debole; è solo un
+avviso e non blocca nulla. Dettagli e conti in
+[docs/security.md](docs/security.md).
 
 ```console
 # File protetto: non compare nella command line né nella lista dei processi.
 umask 077
-printf '%s\n' 'una-passphrase-lunga-e-unica' > backup.pass
+backimage genpass > backup.pass
 chmod 600 backup.pass
 backimage backup /srv/data --repo ghcr.io/acme/backup --tag daily \
   --passphrase-file ./backup.pass
@@ -839,6 +861,36 @@ Mostra versione, commit, data di build, versione Go e piattaforma.
 backimage version
 backimage --json version
 ```
+
+### `genpass`
+
+Genera una passphrase robusta per un backup, con `crypto/rand` e senza bias di
+modulo. Default 32 caratteri su minuscole, maiuscole, cifre e simboli (~184 bit),
+con almeno un carattere per classe. I glifi ambigui `l I 1 O 0` sono esclusi: una
+chiave si rilegge da uno schermo e un `1` letto come `l` perde il backup
+esattamente come una passphrase dimenticata.
+
+| Flag | Descrizione |
+| --- | --- |
+| `--length` | Numero di caratteri (minimo 16, default 32) |
+| `--count` | Quante passphrase generare |
+| `--no-symbols` | Solo lettere e cifre, per campi che rifiutano la punteggiatura |
+| `--ambiguous` | Riammette i caratteri simili `l I 1 O 0` |
+
+```console
+backimage genpass
+backimage genpass --length 48
+backimage genpass --count 5
+backimage --json genpass
+
+# Uso tipico: salvare in un file protetto e passarlo al backup.
+umask 077
+backimage genpass > backup.pass && chmod 600 backup.pass
+```
+
+La passphrase esce solo su stdout: non viene mai loggata, salvata o inviata a un
+registry. Non esiste recupero, quindi va conservata **prima** di fare un backup
+con essa.
 
 ### `login` e `logout`
 

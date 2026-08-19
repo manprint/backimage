@@ -618,8 +618,25 @@ func sameCDCParams(a, b chunk.CDCParams) bool {
 	return a.Min == b.Min && a.Avg == b.Avg && a.Max == b.Max && a.Polynomial == b.Polynomial
 }
 
+// legacyEnvelopeKey reports whether previous sealed its blobs with the
+// pre-0.2.4 convergent nonce derivation.
+//
+// Such a key must never seal anything again. Those backups derived the nonce
+// from the plaintext digest while encrypting the compressed bytes, so the
+// repository may already hold two different byte strings sealed under one
+// nonce — enough to recover the GHASH authentication key of that DEK. Reusing
+// it would extend a possible compromise to fresh data, so the key is treated
+// as burned and a new one is generated. Cost: the next backup re-uploads its
+// blobs once.
+func legacyEnvelopeKey(previous *dedupBase) bool {
+	return previous.manifest.Encryption.EnvelopeVersion < crypt.EnvelopeVersion
+}
+
 func reuseDedupKey(previous *dedupBase, cfg Config, passphrase []byte) (*crypt.KeyMaterial, bool) {
 	if previous == nil || !previous.manifest.Encryption.Enabled || previous.manifest.Encryption.NonceMode != "convergent" {
+		return nil, false
+	}
+	if legacyEnvelopeKey(previous) {
 		return nil, false
 	}
 	identity := crypt.Identity{Passphrase: passphrase, AgeKeyFile: cfg.AgeIdentity}
@@ -642,6 +659,10 @@ func dedupKeyWarning(previous *dedupBase, cfg Config) string {
 	}
 	if !previous.manifest.Encryption.Enabled || previous.manifest.Encryption.NonceMode != "convergent" {
 		return "dedup: modalita' nonce precedente diversa; generata una nuova chiave"
+	}
+	if legacyEnvelopeKey(previous) {
+		return "dedup: il backup precedente usa la derivazione nonce precedente alla 0.2.4; " +
+			"quella chiave non viene piu' riusata e questo backup ricarica tutti i blob una volta"
 	}
 	if cfg.Passphrase != nil {
 		return "dedup: passphrase diversa: la dedup con i backup precedenti non sara' possibile" //nolint:misspell // Messaggio CLI italiano richiesto dal contratto della fase 10.
@@ -903,7 +924,7 @@ func (b *builder) storeChunk(ck *chunk.Chunk) ([]byte, error) {
 
 	var stored []byte
 	if b.sealer != nil {
-		stored, err = b.sealer.Seal(nil, uint32(ck.Index), b.codec, compressed, ck.PlainSHA)
+		stored, err = b.sealer.Seal(nil, crypt.RoleData, uint32(ck.Index), b.codec, compressed)
 		if err != nil {
 			return nil, fmt.Errorf("seal chunk %d: %w", ck.Index, err)
 		}
@@ -1055,12 +1076,13 @@ func (b *builder) finalize() error {
 	}
 	if b.cfg.Encrypt {
 		m.Encryption = index.EncryptionInfo{
-			Enabled:        true,
-			KDF:            "scrypt-age",
-			AEAD:           "aes256-gcm",
-			NonceMode:      nonceMode(b.cfg.Dedup),
-			KeyFingerprint: keyFingerprint(b.km),
-			Recipients:     b.cfg.Recipients,
+			Enabled:         true,
+			KDF:             "scrypt-age",
+			AEAD:            "aes256-gcm",
+			EnvelopeVersion: crypt.EnvelopeVersion,
+			NonceMode:       nonceMode(b.cfg.Dedup),
+			KeyFingerprint:  keyFingerprint(b.km),
+			Recipients:      b.cfg.Recipients,
 		}
 	}
 	if b.cfg.NoMetadata {

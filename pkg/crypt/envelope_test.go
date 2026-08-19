@@ -99,19 +99,48 @@ func TestParseHeaderBadAEAD(t *testing.T) {
 
 func TestAADBindsChunkIndex(t *testing.T) {
 	h := Header{Version: envelopeVersion, Codec: compress.Zstd, AEAD: aeadAES256GCM, Flags: 0}
-	if bytes.Equal(AAD(h, 0), AAD(h, 1)) {
+	if bytes.Equal(AAD(h, RoleData, 0), AAD(h, RoleData, 1)) {
 		t.Fatal("AAD must differ per chunk index")
 	}
-	if bytes.Equal(AAD(h, 42), AAD(h, 43)) {
+	if bytes.Equal(AAD(h, RoleData, 42), AAD(h, RoleData, 43)) {
 		t.Fatal("AAD must differ per chunk index")
 	}
 	h2 := h
 	h2.Flags = flagConvergent
-	if bytes.Equal(AAD(h, 0), AAD(h2, 0)) {
+	if bytes.Equal(AAD(h, RoleData, 0), AAD(h2, RoleData, 0)) {
 		t.Fatal("AAD must bind flags")
 	}
-	if !bytes.Equal(AAD(h2, 0), AAD(h2, 1)) {
+	if !bytes.Equal(AAD(h2, RoleData, 0), AAD(h2, RoleData, 1)) {
 		t.Fatal("convergent AAD must not bind the movable chunk index")
+	}
+}
+
+func TestAADBindsRole(t *testing.T) {
+	for _, flags := range []uint8{0, flagConvergent} {
+		h := Header{Version: envelopeVersion, Codec: compress.Zstd, AEAD: aeadAES256GCM, Flags: flags}
+		seen := map[string]Role{}
+		for _, role := range []Role{RoleData, RoleIndex, RolePrivate} {
+			key := string(AAD(h, role, 0))
+			if other, dup := seen[key]; dup {
+				t.Fatalf("flags %d: role %s shares its AAD with %s", flags, role, other)
+			}
+			seen[key] = role
+		}
+	}
+}
+
+// TestLegacyAADIsFrozen locks the version 1 layout byte for byte: any drift
+// stops every backup written before 0.2.4 from opening.
+func TestLegacyAADIsFrozen(t *testing.T) {
+	h := Header{Version: envelopeVersionLegacy, Codec: compress.Zstd, AEAD: aeadAES256GCM, Flags: 0}
+	want := append([]byte(envelopeMagic), envelopeVersionLegacy, byte(compress.Zstd), aeadAES256GCM, 0, 0, 0, 0, 9)
+	if got := AAD(h, RoleData, 9); !bytes.Equal(got, want) {
+		t.Fatalf("legacy AAD drifted:\n got %x\nwant %x", got, want)
+	}
+	// The legacy layout names no role, so it cannot tell them apart. That is
+	// the weakness version 2 fixes; reproducing it is the point here.
+	if !bytes.Equal(AAD(h, RoleData, 9), AAD(h, RolePrivate, 9)) {
+		t.Fatal("legacy AAD must stay role-blind to keep opening old blobs")
 	}
 }
 
@@ -137,7 +166,7 @@ func FuzzParseHeader(f *testing.F) {
 		if n < headerEndSize || n > len(data) {
 			t.Fatalf("bad consumed size %d for len %d", n, len(data))
 		}
-		if h.Version != envelopeVersion {
+		if h.Version != envelopeVersion && h.Version != envelopeVersionLegacy {
 			t.Fatalf("freshly parsed header has unsupported version %d", h.Version)
 		}
 		if h.AEAD != aeadNone && n != 24 {

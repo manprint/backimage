@@ -85,6 +85,7 @@ func NewRootCommand() *cobra.Command {
 
 	root.AddCommand(
 		newVersionCommand(),
+		newGenpassCommand(),
 		newLoginCommand(),
 		newBackupCommand(),
 		newLogoutCommand(),

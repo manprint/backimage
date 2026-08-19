@@ -7,7 +7,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-08-19
+
+### Security
+
+- **Riuso di nonce AES-GCM con `--dedup` (critico)**. In modalità convergente il
+  nonce veniva derivato dal digest del chunk *in chiaro* mentre GCM cifrava i
+  byte *compressi*. Due backup che condividono la chiave di repository
+  sigillavano quindi due stringhe di byte diverse sotto lo stesso nonce ogni
+  volta che la forma compressa di un chunk invariato cambiava: bastava un
+  `--compression` o un `--level` diverso, oppure lo stesso codec eseguito con un
+  numero di worker differente, che `klauspost/compress` è libero di inquadrare
+  in modo diverso. Due messaggi AES-GCM sotto la stessa chiave e lo stesso nonce
+  espongono lo XOR dei rispettivi plaintext e la chiave di autenticazione GHASH,
+  cioè la possibilità di forgiare blob autenticati arbitrari con quel DEK.
+
+  Il nonce è ora derivato dai byte che GCM cifra davvero
+  (`HMAC-SHA256(NonceKey, label ‖ role ‖ sha256(payload))`): nonce uguale
+  implica payload uguale, che è esattamente il caso che serve alla
+  deduplicazione, quindi non si perde nulla. La firma di `crypt.Sealer.Seal` non
+  accetta più un digest dal chiamante, così l'errore non è più esprimibile.
+
+- **Chiavi legacy non più riusate**. Una chiave che ha sigillato blob convergenti
+  con la derivazione precedente alla 0.2.4 viene considerata bruciata: `--dedup`
+  genera una chiave nuova invece di riusarla, perché quel DEK può già avere il
+  suo GHASH compromesso. Il manifest pubblica `encryption.envelopeVersion` per
+  permettere la verifica prima di aprire qualsiasi cosa. Conseguenza operativa:
+  il primo backup `--dedup` cifrato dopo l'aggiornamento ricarica tutti i blob
+  una volta, poi la deduplica riprende normalmente.
+
+- **Separazione di dominio nell'AAD**. Fino alla 0.2.3 `index.json.zst`,
+  `private.json.zst` e il chunk dati 0 venivano sigillati con un AAD identico
+  (indice 0), quindi sotto la stessa chiave uno autenticava al posto dell'altro.
+  L'envelope versione 2 autentica il ruolo del blob: uno scambio ora fallisce con
+  `ErrIntegrity` invece di arrivare al parser JSON.
+
+- **`--no-verify` non disattiva più la verifica del plaintext su un backup
+  cifrato**. Da quando i digest del plaintext vivono nel blob privato sigillato
+  (0.2.3) quel controllo non è più un test anti-corruzione barattabile con la
+  velocità: è ciò che rifiuta un chunk spostato tra due backup che condividono la
+  chiave, uno splice che AES-GCM da solo non vede perché la modalità convergente
+  lascia deliberatamente la posizione fuori dai dati autenticati. Su un backup in
+  chiaro `--no-verify` continua a valere come prima.
+
+- **Avviso su passphrase debole**. `backimage backup` stima il lavoro di
+  indovinamento della passphrase e avvisa sotto i 96 bit, indicando
+  `backimage genpass`. È solo un avviso: non blocca nulla e non stampa mai la
+  passphrase. Chi possiede l'immagine possiede anche il file chiavi e può provare
+  le passphrase offline senza limiti di tentativi, quindi la passphrase è
+  l'unica difesa che resta.
+
 ### Added
+
+- **`backimage genpass`**: genera una passphrase robusta con `crypto/rand`, senza
+  bias di modulo (`crypto/rand.Int`, non `%`). Default 32 caratteri su
+  minuscole, maiuscole, cifre e simboli (~184 bit), con almeno un carattere per
+  classe. I glifi ambigui `l I 1 O 0` sono esclusi per default, perché una chiave
+  si rilegge da uno schermo e un `1` letto come `l` perde il backup esattamente
+  come una passphrase dimenticata; `--ambiguous` li riammette. Flag: `--length`,
+  `--count`, `--no-symbols`, `--ambiguous`, più `--json`. La passphrase esce solo
+  su stdout: non viene mai loggata, salvata o inviata a un registry.
+
+- Test che bloccano il trattamento byte-esatto della passphrase su tutte le
+  sorgenti (`--password`, `--passphrase-file`, `--passphrase-stdin`,
+  `BACKIMAGE_PASSPHRASE`): punteggiatura ASCII completa, spazi interni e finali,
+  `\r` incorporato e UTF-8 multibyte passano intatti fino a scrypt, e ogni
+  variante a un byte di distanza viene rifiutata. Nessuna normalizzazione,
+  nessun trim oltre al singolo newline finale di file e stdin.
 
 - Metadati riservati cifrati: un backup cifrato scrive `/backup/private.json.zst`,
   sigillato con la chiave del backup, che contiene percorsi sorgente, host,
@@ -23,6 +89,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   richieste grandi.
 
 ### Changed
+
+- **Envelope dei blob alla versione 2**. Il layout dei byte è identico; cambiano
+  la derivazione del nonce convergente e i dati autenticati, come descritto
+  sopra. La versione 1 continua a essere letta, quindi i backup già in un
+  registry si ripristinano senza modifiche. Un `backimage` precedente alla 0.2.4
+  non legge un backup nuovo: rifiuta i blob con
+  `unsupported blob version 2 (support 1-2)`.
 
 - **Prestazioni**: ogni blob viene caricato in un'unica richiesta HTTP
   streamata invece che in chunk PATCH da 8 MiB. Il chunking costava un round

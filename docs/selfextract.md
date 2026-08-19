@@ -95,4 +95,7 @@ dei nomi utente.
 Eseguire prima `verify --continue` per ottenere tutti gli errori. Un mismatch
 normale termina con exit code 5. `tar --no-verify` salta soltanto il digest del
 plaintext ed è un'ultima risorsa: autenticazione/decompressione possono ancora
-fallire e il tar su stdout può essere parziale fino al chunk corrotto.
+fallire e il tar su stdout può essere parziale fino al chunk corrotto. Su un
+backup **cifrato** il flag non ha effetto da 0.2.4: quel digest arriva dal blob
+privato sigillato e resta l'ultimo anello della catena di integrità (vedi
+[security.md](security.md)).

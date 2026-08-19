@@ -107,7 +107,7 @@ func newMockImageSource(t *testing.T, encrypted bool) (*mockImageSource, []byte)
 		if err != nil {
 			t.Fatal(err)
 		}
-		stored, err = sealer.Seal(nil, 0, codec, plain, ph)
+		stored, err = sealer.Seal(nil, crypt.RoleData, 0, codec, plain)
 		if err != nil {
 			t.Fatal(err)
 		}

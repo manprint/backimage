@@ -103,7 +103,7 @@ func buildFixture(t *testing.T, encrypted bool, chunkBytes int, privateMeta bool
 		ph := sha256.Sum256(chunk)
 		blob := append([]byte(nil), chunk...)
 		if encrypted {
-			blob, err = sealer.Seal(nil, uint32(i), codec, chunk, ph)
+			blob, err = sealer.Seal(nil, crypt.RoleData, uint32(i), codec, chunk)
 			if err != nil {
 				t.Fatal(err)
 			}

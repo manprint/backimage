@@ -66,7 +66,7 @@ func newCommandFixture(t *testing.T, encrypted bool) commandFixture {
 		if err != nil {
 			t.Fatal(err)
 		}
-		stored, err = sealer.Seal(nil, 0, codec, plain.Bytes(), ph)
+		stored, err = sealer.Seal(nil, crypt.RoleData, 0, codec, plain.Bytes())
 		if err != nil {
 			t.Fatal(err)
 		}

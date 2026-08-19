@@ -414,7 +414,7 @@ func (b *streamBuilder) storeChunk(ck *chunk.Chunk) ([]byte, error) {
 	}
 	stored := buf.Bytes()
 	if b.sealer != nil {
-		stored, err = b.sealer.Seal(nil, uint32(ck.Index), b.codec, buf.Bytes(), ck.PlainSHA)
+		stored, err = b.sealer.Seal(nil, crypt.RoleData, uint32(ck.Index), b.codec, buf.Bytes())
 		if err != nil {
 			return nil, fmt.Errorf("seal chunk %d: %w", ck.Index, err)
 		}
@@ -660,12 +660,13 @@ func (b *streamBuilder) manifest(stats scanStats) *index.Manifest {
 	}
 	if enc := start.GetEncryption(); enc.GetEnabled() {
 		m.Encryption = index.EncryptionInfo{
-			Enabled:        true,
-			KDF:            "scrypt-age",
-			AEAD:           "aes256-gcm",
-			NonceMode:      enc.GetNonceMode(),
-			KeyFingerprint: enc.GetKeyFingerprint(),
-			Recipients:     enc.GetRecipients(),
+			Enabled:         true,
+			KDF:             "scrypt-age",
+			AEAD:            "aes256-gcm",
+			EnvelopeVersion: crypt.EnvelopeVersion,
+			NonceMode:       enc.GetNonceMode(),
+			KeyFingerprint:  enc.GetKeyFingerprint(),
+			Recipients:      enc.GetRecipients(),
 		}
 	}
 	return m

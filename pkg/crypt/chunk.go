@@ -18,27 +18,35 @@ type NonceMode uint8
 const (
 	// NonceRandom draws 12 random bytes per chunk. Default.
 	NonceRandom NonceMode = 0
-	// NonceConvergent derives the nonce from the plaintext digest, enabling
+	// NonceConvergent derives the nonce from the sealed payload, enabling
 	// deduplication at the cost of revealing chunk equality. Phase 10.
 	NonceConvergent NonceMode = 1
 )
 
+// nonceLabel domain-separates the convergent nonce derivation. The "v2" is the
+// derivation, not the tool version: it changed in 0.2.4 together with the
+// envelope version.
+const nonceLabel = "backimage/nonce/v2\x00"
+
 // ErrIntegrity is returned when authentication fails. It maps to exit code 5.
 var ErrIntegrity = errors.New("blob authentication failed")
 
-// Sealer encrypts already-compressed chunk payloads.
+// Sealer encrypts already-compressed payloads.
 type Sealer interface {
-	// Seal writes the full stored blob (header + ciphertext) for one chunk.
-	// plainSHA is the digest of the *plaintext* chunk, used in convergent mode.
-	Seal(dst []byte, chunkIndex uint32, codec compress.Codec, compressed []byte, plainSHA [32]byte) ([]byte, error)
+	// Seal writes the full stored blob (header + ciphertext) for one payload.
+	// role names what the blob is and is authenticated; chunkIndex binds the
+	// position of a data chunk in random-nonce mode. payload is exactly what
+	// gets encrypted: nothing outside it may influence the nonce.
+	Seal(dst []byte, role Role, chunkIndex uint32, codec compress.Codec, payload []byte) ([]byte, error)
 	// Overhead returns the number of bytes Seal adds to the payload.
 	Overhead() int
 }
 
 // Opener decrypts stored blobs.
 type Opener interface {
-	// Open returns the compressed payload of one stored blob.
-	Open(dst []byte, chunkIndex uint32, blob []byte) ([]byte, compress.ID, error)
+	// Open returns the compressed payload of one stored blob. role must be the
+	// one the blob was sealed with.
+	Open(dst []byte, role Role, chunkIndex uint32, blob []byte) ([]byte, compress.ID, error)
 }
 
 type sealer struct {
@@ -98,9 +106,38 @@ func gcmFor(key []byte) (cipher.AEAD, error) {
 // Overhead returns the number of bytes Seal adds to the payload.
 func (s *sealer) Overhead() int { return s.overhead }
 
-// Seal writes the full envelope for one chunk as an extension of dst.
+// convergentNonce derives the nonce of a convergent blob from the exact bytes
+// AES-GCM is about to encrypt.
+//
+// Deriving it from anything else is a nonce-reuse bug waiting to happen. Up to
+// 0.2.3 the nonce came from the digest of the *plaintext* chunk while GCM
+// encrypted the *compressed* chunk, so two backups sharing a repository key
+// sealed two different byte strings under one nonce as soon as the compressed
+// form of a chunk changed. That needed no mistake from the user: a different
+// --compression or --level does it, and so does the same codec run with a
+// different worker count, which klauspost/compress is free to frame
+// differently. Two AES-GCM messages under one key and nonce hand an attacker
+// the XOR of their plaintexts and the GHASH authentication key, which is
+// forgery of arbitrary authenticated blobs under that DEK.
+//
+// Keying the nonce on the sealed bytes makes that impossible by construction:
+// equal nonce now means equal payload, which is exactly the case deduplication
+// wants, so nothing is lost.
+func convergentNonce(nonceKey []byte, role Role, payload []byte) []byte {
+	sum := sha256.Sum256(payload)
+	mac := hmac.New(sha256.New, nonceKey)
+	mac.Write([]byte(nonceLabel))
+	mac.Write([]byte{byte(role)})
+	mac.Write(sum[:])
+	return mac.Sum(nil)[:nonceLen]
+}
+
+// Seal writes the full envelope for one payload as an extension of dst.
 // dst must have capacity for the extra bytes to keep the call allocation-free.
-func (s *sealer) Seal(dst []byte, chunkIndex uint32, codec compress.Codec, compressed []byte, plainSHA [32]byte) ([]byte, error) {
+func (s *sealer) Seal(dst []byte, role Role, chunkIndex uint32, codec compress.Codec, payload []byte) ([]byte, error) {
+	if !role.valid() {
+		return dst, fmt.Errorf("unknown blob role %d", uint8(role))
+	}
 	start := len(dst)
 	if s.ae == nil {
 		// Encryption off: header without nonce, plaintext payload.
@@ -112,7 +149,7 @@ func (s *sealer) Seal(dst []byte, chunkIndex uint32, codec compress.Codec, compr
 		}); err != nil {
 			return dst, err
 		}
-		return append(dst, compressed...), nil
+		return append(dst, payload...), nil
 	}
 
 	h := Header{
@@ -130,9 +167,7 @@ func (s *sealer) Seal(dst []byte, chunkIndex uint32, codec compress.Codec, compr
 			return dst, fmt.Errorf("crypto/rand (nonce): %w", err)
 		}
 	case NonceConvergent:
-		mac := hmac.New(sha256.New, s.km.NonceKey)
-		mac.Write(plainSHA[:])
-		copy(nonce[:], mac.Sum(nil))
+		copy(nonce[:], convergentNonce(s.km.NonceKey, role, payload))
 	}
 	h.Nonce = nonce
 
@@ -140,12 +175,15 @@ func (s *sealer) Seal(dst []byte, chunkIndex uint32, codec compress.Codec, compr
 	if _, err := MarshalHeader(dst[start:], h); err != nil {
 		return dst, err
 	}
-	dst = s.ae.Seal(dst, nonce[:], compressed, AAD(h, chunkIndex))
+	dst = s.ae.Seal(dst, nonce[:], payload, AAD(h, role, chunkIndex))
 	return dst, nil
 }
 
 // Open returns the compressed payload of one stored blob.
-func (o *opener) Open(dst []byte, chunkIndex uint32, blob []byte) ([]byte, compress.ID, error) {
+func (o *opener) Open(dst []byte, role Role, chunkIndex uint32, blob []byte) ([]byte, compress.ID, error) {
+	if !role.valid() {
+		return dst, 0, fmt.Errorf("unknown blob role %d", uint8(role))
+	}
 	h, n, err := ParseHeader(blob)
 	if err != nil {
 		return dst, 0, err
@@ -158,7 +196,7 @@ func (o *opener) Open(dst []byte, chunkIndex uint32, blob []byte) ([]byte, compr
 		if o.ae == nil {
 			return dst, 0, errors.New("encrypted blob: key material required")
 		}
-		out, err := o.ae.Open(dst, h.Nonce[:], blob[n:], AAD(h, chunkIndex))
+		out, err := o.ae.Open(dst, h.Nonce[:], blob[n:], AAD(h, role, chunkIndex))
 		if err != nil {
 			return dst, 0, ErrIntegrity
 		}

@@ -259,6 +259,13 @@ func runBackup(cmd *cobra.Command, args []string) error {
 				}
 				return nil, New(KindGeneric, "", "passphrase: %v", err)
 			}
+			// A weak passphrase is the one attack a strong envelope cannot
+			// stop, so say so — and never block: the choice stays the user's,
+			// and refusing would break existing scripts. The message carries
+			// only the verdict, never the passphrase.
+			if warn := crypt.AssessPassphrase(p).Warning(); warn != "" && !opts.Quiet {
+				progress.WriteLine(cmd.ErrOrStderr(), warn)
+			}
 			return p, nil
 		}
 	}

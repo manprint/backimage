@@ -13,7 +13,12 @@ immutati. Rimane un'immagine OCI valida: la deduplica è quindi a granularità d
    tutti i confini successivi come farebbe una soglia fissa.
 3. Se la cifratura è attiva, il client riapre `keys.pass.age` o `keys.age` del
    backup più recente usando la passphrase o `--age-identity`; riusa quella
-   chiave soltanto se era già in modalità convergente.
+   chiave soltanto se era già in modalità convergente **e** se il backup
+   precedente dichiara `encryption.envelopeVersion: 2`. Una chiave che ha
+   sigillato con la derivazione nonce precedente alla 0.2.4 è considerata
+   bruciata (vedi [security.md](security.md)): viene generata una chiave nuova e
+   il backup ricarica tutti i blob **una volta sola**, poi la deduplica riprende
+   normalmente. Il messaggio di progresso lo dice esplicitamente.
 4. Il registry riceve `HEAD` per ogni blob: i layer con digest già presenti non
    vengono caricati. L'output JSON riporta `skippedBlobs`, `skippedBytes` e
    `uploadedBytes`.

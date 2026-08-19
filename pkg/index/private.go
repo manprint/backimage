@@ -2,7 +2,6 @@ package index
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -133,7 +132,7 @@ func WritePrivate(w io.Writer, p *Private, sealer crypt.Sealer) error {
 	if err := writeZstdJSON(&z, p); err != nil {
 		return err
 	}
-	out, err := sealMetadata(z.Bytes(), sealer)
+	out, err := sealMetadata(z.Bytes(), crypt.RolePrivate, sealer)
 	if err != nil {
 		return fmt.Errorf("sealing private metadata: %w", err)
 	}
@@ -153,7 +152,7 @@ func ReadPrivate(r io.Reader, opener crypt.Opener) (*Private, error) {
 	if opener == nil {
 		return nil, crypt.ErrWrongPassphrase
 	}
-	payload, _, err := opener.Open(nil, 0, raw)
+	payload, _, err := opener.Open(nil, crypt.RolePrivate, 0, raw)
 	if err != nil {
 		return nil, fmt.Errorf("opening private metadata: %w", err)
 	}
@@ -173,14 +172,16 @@ func ReadPrivate(r io.Reader, opener crypt.Opener) (*Private, error) {
 	return p, nil
 }
 
-// sealMetadata wraps one small metadata payload in a crypt envelope. The
-// convergent nonce is derived from the payload digest and never from a
-// constant: two backups sharing a repository key would otherwise reuse the
-// same nonce on different metadata, which breaks AES-GCM.
-func sealMetadata(payload []byte, sealer crypt.Sealer) ([]byte, error) {
+// sealMetadata wraps one small metadata payload in a crypt envelope. role tells
+// the envelope which blob this is, so the file index and the private metadata
+// cannot be swapped for each other under the same key. In convergent mode the
+// nonce is derived by crypt from the payload itself and never from a constant:
+// two backups sharing a repository key would otherwise reuse the same nonce on
+// different metadata, which breaks AES-GCM.
+func sealMetadata(payload []byte, role crypt.Role, sealer crypt.Sealer) ([]byte, error) {
 	codec, err := compress.ByID(compress.Zstd)
 	if err != nil {
 		return nil, err
 	}
-	return sealer.Seal(nil, 0, codec, payload, sha256.Sum256(payload))
+	return sealer.Seal(nil, role, 0, codec, payload)
 }

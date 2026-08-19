@@ -27,6 +27,7 @@ backimage archives, compresses, encrypts and stores your files inside a multi-ar
 * [backimage backup]()	 - archive, encrypt and push a backup to an OCI registry
 * [backimage doctor]()	 - check privileges and runtime environment before a backup
 * [backimage find]()	 - search archived paths by glob pattern
+* [backimage genpass]()	 - generate a strong passphrase for a backup
 * [backimage inspect]()	 - show the public metadata of a backup image
 * [backimage listen-remote]()	 - receive encrypted backup streams and publish them to a registry
 * [backimage login]()	 - store registry credentials for backimage
@@ -207,6 +208,65 @@ backimage find IMAGE PATTERN [flags]
       --passphrase-stdin         read the backup passphrase from stdin
       --password ps              backup passphrase inline (visible in shell history and in ps: prefer --passphrase-file)
       --platform string          platform variant to read from the multi-arch image, OS/ARCH (default "linux/amd64")
+```
+
+### Options inherited from parent commands
+
+```
+      --config string          config file (default $XDG_CONFIG_HOME/backimage/config.yaml)
+      --json                   structured JSON output on stdout
+      --no-color               disable ANSI colors (auto-detected)
+  -q, --quiet                  suppress progress output
+      --registry-user string   login to use when a registry holds several accounts (default: the repository namespace); none forces an unauthenticated request
+  -v, --verbose count          log verbosity (repeat: -v debug, -vv trace)
+```
+
+### SEE ALSO
+
+* [backimage]()	 - store backups inside runnable, encrypted OCI images
+
+
+## backimage genpass
+
+generate a strong passphrase for a backup
+
+### Synopsis
+
+generate a strong passphrase for a backup.
+
+Characters are drawn from crypto/rand without modulo bias, and the
+result contains at least one character of every selected class. The
+default is 32 characters over lowercase, uppercase, digits and
+symbols, which is far past the point where the passphrase stops being
+the weakest part of the backup.
+
+The passphrase is printed on stdout and nowhere else: it is never
+logged, stored or sent to a registry. There is no recovery path, so
+save it before making a backup with it.
+
+Ambiguous glyphs (l, I, 1, O, 0) are excluded by default so a key can
+be read off a screen without losing the backup to a misread character.
+
+Examples:
+  backimage genpass
+  backimage genpass --length 48
+  backimage genpass --count 5
+  backimage genpass --no-symbols --ambiguous
+  backimage genpass > key.txt && chmod 600 key.txt
+  backimage genpass | tee key.txt | backimage backup /data --repo R --passphrase-stdin
+
+```
+backimage genpass [flags]
+```
+
+### Options
+
+```
+      --ambiguous    also use the look-alike characters l, I, 1, O and 0
+      --count int    how many passphrases to generate (default 1)
+  -h, --help         help for genpass
+      --length int   number of characters (minimum 16) (default 32)
+      --no-symbols   letters and digits only, for fields that reject punctuation
 ```
 
 ### Options inherited from parent commands
@@ -777,7 +837,7 @@ backimage restore [IMAGE] [flags]
 
 ```
       --cache-size string        maximum size of the downloaded-layer cache, e.g. 512MiB, 4GiB (0 disables it) (default "2GiB")
-      --cpus int                 maximum CPUs used for decompression and decryption (default: half the available CPUs) (default 4)
+      --cpus int                 maximum CPUs used for decompression and decryption (default: half the available CPUs) (default 8)
   -C, --destination string       directory the files are extracted into (with -x) (default ".")
       --exclude strings          skip paths matching this glob (repeatable)
   -x, --extract                  extract the files into --destination instead of writing a tar

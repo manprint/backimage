@@ -377,6 +377,59 @@ func TestDedupRefusesRandomNonceKeyReuse(t *testing.T) {
 	}
 }
 
+// TestDedupRefusesLegacyEnvelopeKeyReuse is the second half of the 0.2.4 nonce
+// fix. A key that sealed convergent blobs with the pre-0.2.4 derivation may
+// already have signed two different byte strings under one nonce somewhere in
+// the repository, which is enough to recover the GHASH authentication key of
+// that DEK. It must never seal anything again, so a fresh key is generated even
+// though the passphrase opens the old key file perfectly.
+func TestDedupRefusesLegacyEnvelopeKeyReuse(t *testing.T) {
+	old, err := crypt.NewKeyMaterial()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer old.Wipe()
+	var wrapped bytes.Buffer
+	if err := crypt.WrapKeys(&wrapped, old, crypt.Recipients{Passphrase: []byte("same passphrase")}); err != nil {
+		t.Fatal(err)
+	}
+	base := func(envelopeVersion int) *dedupBase {
+		return &dedupBase{
+			manifest: &index.Manifest{Encryption: index.EncryptionInfo{
+				Enabled:         true,
+				NonceMode:       "convergent",
+				EnvelopeVersion: envelopeVersion,
+			}},
+			keyFiles: map[string][]byte{"keys.pass.age": wrapped.Bytes()},
+		}
+	}
+	cfg := Config{}
+
+	// 0 is what 0.2.3 and earlier wrote: the field did not exist.
+	for _, legacy := range []int{0, crypt.EnvelopeVersion - 1} {
+		previous := base(legacy)
+		if km, reused := reuseDedupKey(previous, cfg, []byte("same passphrase")); reused || km != nil {
+			km.Wipe()
+			t.Fatalf("envelopeVersion %d: a legacy-derivation key must not be reused", legacy)
+		}
+		if warning := dedupKeyWarning(previous, cfg); !strings.Contains(warning, "0.2.4") {
+			t.Fatalf("envelopeVersion %d: missing legacy-key warning: %q", legacy, warning)
+		}
+	}
+
+	// A key from the current envelope is still reused, or --dedup would upload
+	// everything on every run.
+	previous := base(crypt.EnvelopeVersion)
+	km, reused := reuseDedupKey(previous, cfg, []byte("same passphrase"))
+	if !reused || km == nil {
+		t.Fatal("a current-envelope key must be reused for dedup")
+	}
+	defer km.Wipe()
+	if !bytes.Equal(km.DEK, old.DEK) || !bytes.Equal(km.NonceKey, old.NonceKey) {
+		t.Fatal("reused key material must be the previous one")
+	}
+}
+
 // TestPipelineUploadChunkSizeWiring checks that the CLI knob reaches the
 // pusher: by default the pipeline must cost one PATCH per blob, and asking
 // for a chunk size must actually split the uploads.

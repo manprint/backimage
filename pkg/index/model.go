@@ -93,12 +93,18 @@ type ArchiveInfo struct {
 
 // EncryptionInfo describes how chunks are encrypted.
 type EncryptionInfo struct {
-	Enabled        bool     `json:"enabled"`
-	KDF            string   `json:"kdf"`
-	AEAD           string   `json:"aead"`
-	NonceMode      string   `json:"nonceMode"`
-	KeyFingerprint string   `json:"keyFingerprint,omitempty"`
-	Recipients     []string `json:"recipients"`
+	Enabled bool   `json:"enabled"`
+	KDF     string `json:"kdf"`
+	AEAD    string `json:"aead"`
+	// EnvelopeVersion is the crypt envelope this backup was sealed with. It is
+	// public on purpose: a later --dedup run must be able to tell, before
+	// unwrapping anything, whether the key it is about to reuse ever sealed a
+	// blob with the pre-0.2.4 convergent nonce derivation. Absent (0) means a
+	// backup written by 0.2.3 or earlier.
+	EnvelopeVersion int      `json:"envelopeVersion,omitempty"`
+	NonceMode       string   `json:"nonceMode"`
+	KeyFingerprint  string   `json:"keyFingerprint,omitempty"`
+	Recipients      []string `json:"recipients"`
 }
 
 // ChunkingInfo describes the chunker.
@@ -329,7 +335,7 @@ func WriteIndex(w io.Writer, idx *Index, sealer crypt.Sealer) error {
 	if err := writeIndexCompressed(&z, idx); err != nil {
 		return err
 	}
-	out, err := sealMetadata(z.Bytes(), sealer)
+	out, err := sealMetadata(z.Bytes(), crypt.RoleIndex, sealer)
 	if err != nil {
 		return fmt.Errorf("sealing index: %w", err)
 	}
@@ -387,7 +393,7 @@ func ReadIndex(r io.Reader, opener crypt.Opener) (*Index, error) {
 				return nil, err
 			}
 		}
-		payload, _, err = opener.Open(nil, 0, raw)
+		payload, _, err = opener.Open(nil, crypt.RoleIndex, 0, raw)
 		if err != nil {
 			return nil, fmt.Errorf("opening index envelope: %w", err)
 		}

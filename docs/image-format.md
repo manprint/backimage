@@ -63,9 +63,13 @@ riservati stanno nel blob privato:
 - `manifest.json`: `index.Manifest` — mai cifrato, contiene `layers[]`
   (digest, intervallo chunk), `index` (ref al blob indice), formato, codec e
   le impostazioni di cifratura necessarie prima dello sblocco (`aead`,
-  `nonceMode`). In schema 2 contiene anche `private` (ref al blob privato) e
-  **non** contiene `sources`, `host`, `totals`, `encryption.keyFingerprint` né
-  `encryption.recipients`.
+  `nonceMode`, `envelopeVersion`). In schema 2 contiene anche `private` (ref al
+  blob privato) e **non** contiene `sources`, `host`, `totals`,
+  `encryption.keyFingerprint` né `encryption.recipients`.
+  `encryption.envelopeVersion` è pubblico per necessità: un backup `--dedup`
+  successivo deve poter decidere, prima di aprire qualsiasi cosa, se la chiave
+  che sta per riusare ha mai sigillato con la derivazione nonce precedente alla
+  0.2.4 (vedi [security.md](security.md)). Assente significa envelope v1.
 - `chunks.json`: `index.ChunkTable` — chunk→blob: `i`, path, sha e byte del
   blob **memorizzato** (`ss`, `sb`), che servono a localizzare e verificare i
   chunk senza chiave. In schema 2 `ps` e `pb` (sha e byte del **plaintext**)
@@ -82,6 +86,12 @@ riservati stanno nel blob privato:
 Un backimage che legge un'immagine di schema 1 la restaura come prima; un
 backimage precedente allo schema 2 rifiuta un'immagine nuova con
 `backup creato da un backimage più recente`.
+
+Da 0.2.4 i blob usano l'envelope `BIMGCHK1` **versione 2** (stesso layout di
+byte, nonce convergente derivato dal payload sigillato e ruolo del blob nei dati
+autenticati). La versione 1 continua a essere letta, quindi le immagini già
+pubblicate si ripristinano intatte; un `backimage` precedente alla 0.2.4 rifiuta
+un blob nuovo con `unsupported blob version 2 (support 1-2)`.
 
 ## Media type dei layer
 

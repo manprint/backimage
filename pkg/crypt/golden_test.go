@@ -8,9 +8,11 @@ import (
 // TestGoldenConvergentVector locks the wire format of the convergent-mode
 // envelope to catch accidental format drift across refactors.
 //
-// Deterministic inputs: fixed KeyMaterial, codec=store, chunk index 0,
-// payload "vector", plaintext digest of "vector".
-// Breaking this test intentionally = bump envelopeVersion and re-document.
+// Deterministic inputs: fixed KeyMaterial, codec=store, role=data, chunk
+// index 0, payload "vector". The vector changed once, in 0.2.4, together with
+// the envelope version: the convergent nonce is now derived from the sealed
+// payload and the AAD names the role. Breaking this test intentionally = bump
+// envelopeVersion and re-document.
 func TestGoldenConvergentVector(t *testing.T) {
 	dek, _ := hex.DecodeString("00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff")
 	nonce, _ := hex.DecodeString("ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100")
@@ -20,11 +22,11 @@ func TestGoldenConvergentVector(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	blob, err := s.Seal(nil, 0, testCodec(t), []byte("vector"), sha256Sum([]byte("vector")))
+	blob, err := s.Seal(nil, RoleData, 0, testCodec(t), []byte("vector"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	want, _ := hex.DecodeString("42494d4743484b31010001015268563fc9544ae32ea7cbc61f8801e0437df8b46f6321a679d33d5cfb041a40fa54")
+	want, _ := hex.DecodeString("42494d4743484b3102000101f1d50e175143ea9cd2111471cf9e115b36cb947c49afae148e172e6b969baa973d26")
 	if got := hex.EncodeToString(blob); got != hex.EncodeToString(want) {
 		t.Fatalf("golden vector mismatch:\n got %s\nwant %s", hex.EncodeToString(blob), hex.EncodeToString(want))
 	}
@@ -32,7 +34,7 @@ func TestGoldenConvergentVector(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pt, _, err := o.Open(nil, 0, blob)
+	pt, _, err := o.Open(nil, RoleData, 0, blob)
 	if err != nil || string(pt) != "vector" {
 		t.Fatalf("golden vector must open: %q %v", pt, err)
 	}
