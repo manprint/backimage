@@ -68,12 +68,19 @@ func randomIndex(n int) (int, error) {
 // generatePassphrase draws length characters uniformly from the union of the
 // given classes and guarantees at least one character of each.
 //
-// The guarantee is applied by drawing the whole string first and then, for any
-// class left unused, replacing a character at a random position with one of
-// that class. Positions are chosen without repetition, so the fix never
-// overwrites a character it just placed. The loss of entropy is bounded by the
-// number of classes and is far smaller than the gain in usability: a key that a
-// password field rejects for missing a digit is a key nobody uses.
+// The guarantee holds by construction: one character is drawn from every class,
+// the rest come from the union, and the whole string is then shuffled with a
+// crypto/rand Fisher-Yates. Patching the guarantee in afterwards — drawing
+// everything from the union and then overwriting a position for each missing
+// class — does not work: the overwrite can land on the single character that
+// was satisfying another class and silently destroy it, which is exactly what
+// TestGenpassCoversEveryClass caught. The shuffle matters as much as the draw,
+// or the first len(classes) positions would always hold one character per class
+// in a fixed order.
+//
+// The guarantee costs a little entropy compared to a free draw over the union,
+// but far less than it buys: a key a password field rejects for missing a digit
+// is a key nobody uses.
 func generatePassphrase(length int, classes []genpassClass) (string, error) {
 	if length < genpassMinimum {
 		return "", fmt.Errorf("lunghezza %d troppo corta: minimo %d", length, genpassMinimum)
@@ -90,38 +97,30 @@ func generatePassphrase(length int, classes []genpassClass) (string, error) {
 	}
 	pool := alphabet.String()
 
-	out := make([]byte, length)
-	for i := range out {
+	out := make([]byte, 0, length)
+	for _, c := range classes {
+		idx, err := randomIndex(len(c.chars))
+		if err != nil {
+			return "", err
+		}
+		out = append(out, c.chars[idx])
+	}
+	for len(out) < length {
 		idx, err := randomIndex(len(pool))
 		if err != nil {
 			return "", err
 		}
-		out[i] = pool[idx]
+		out = append(out, pool[idx])
 	}
 
-	// Which positions are still free to be overwritten by the class fix-up.
-	free := make([]int, length)
-	for i := range free {
-		free[i] = i
-	}
-	for _, c := range classes {
-		if strings.ContainsAny(string(out), c.chars) {
-			continue
-		}
-		if len(free) == 0 {
-			return "", fmt.Errorf("lunghezza %d insufficiente per coprire tutte le classi", length)
-		}
-		slot, err := randomIndex(len(free))
+	// Fisher-Yates: without it the class representatives would sit in the first
+	// positions, in class order, for every key this command ever prints.
+	for i := len(out) - 1; i > 0; i-- {
+		j, err := randomIndex(i + 1)
 		if err != nil {
 			return "", err
 		}
-		pos := free[slot]
-		free = append(free[:slot], free[slot+1:]...)
-		pick, err := randomIndex(len(c.chars))
-		if err != nil {
-			return "", err
-		}
-		out[pos] = c.chars[pick]
+		out[i], out[j] = out[j], out[i]
 	}
 	return string(out), nil
 }

@@ -39,20 +39,64 @@ func TestGenpassDefaults(t *testing.T) {
 	}
 }
 
+// TestGenpassCoversEveryClass exercises the guarantee at the tightest length,
+// where the fewest spare positions exist. The first implementation drew the
+// whole string from the union and then overwrote a position per missing class,
+// which could land on the sole character satisfying another class and destroy
+// it; that failed here roughly once every few hundred draws. The guarantee now
+// holds by construction, so any failure is a real regression and not a bad roll.
 func TestGenpassCoversEveryClass(t *testing.T) {
-	// One draw may legitimately miss a class before the fix-up runs, so the
-	// guarantee is checked over many draws.
-	for i := 0; i < 200; i++ {
+	classes := genpassAlphabet(true, false)
+	for i := 0; i < 500; i++ {
+		pass, err := generatePassphrase(genpassMinimum, classes)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, class := range classes {
+			if !strings.ContainsAny(pass, class.chars) {
+				t.Fatalf("draw %d has no %s: %q", i, class.name, pass)
+			}
+		}
+	}
+	// The same through the command, including the default length.
+	for i := 0; i < 50; i++ {
 		out, _, err := runGenpassCmd(t, "genpass", "--length", "16")
 		if err != nil {
 			t.Fatal(err)
 		}
 		pass := strings.TrimRight(out, "\n")
-		for _, class := range genpassAlphabet(true, false) {
+		for _, class := range classes {
 			if !strings.ContainsAny(pass, class.chars) {
-				t.Fatalf("draw %d has no %s: %q", i, class.name, pass)
+				t.Fatalf("command draw %d has no %s: %q", i, class.name, pass)
 			}
 		}
+	}
+}
+
+// TestGenpassShufflesClassRepresentatives guards the other half of the
+// construction. One character per class is drawn first, so without the shuffle
+// position 0 would always be a lowercase letter, position 1 always uppercase,
+// and so on for every key this command prints — a structure worth far more to an
+// attacker than the class guarantee is worth to the user.
+func TestGenpassShufflesClassRepresentatives(t *testing.T) {
+	classes := genpassAlphabet(true, false)
+	firstIsLower := 0
+	const draws = 300
+	for i := 0; i < draws; i++ {
+		pass, err := generatePassphrase(32, classes)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.ContainsAny(pass[:1], classes[0].chars) {
+			firstIsLower++
+		}
+	}
+	// Lowercase is 25 of the 85 characters in the default alphabet, so an
+	// unbiased first position lands there about 29% of the time. Without the
+	// shuffle it would be 100%.
+	if firstIsLower > draws*3/4 {
+		t.Fatalf("first character is a lowercase letter in %d/%d draws: the shuffle is not running",
+			firstIsLower, draws)
 	}
 }
 
