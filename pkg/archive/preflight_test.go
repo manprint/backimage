@@ -85,13 +85,28 @@ func TestPreflightRestore(t *testing.T) {
 	if _, err := os.Stat(dir); err != nil {
 		t.Fatalf("PreflightRestore must create the destination: %v", err)
 	}
-	if len(caps) != 4 {
-		t.Fatalf("PreflightRestore: want 4 capabilities, got %d", len(caps))
+	if len(caps) != 5 {
+		t.Fatalf("PreflightRestore: want 5 capabilities, got %d", len(caps))
 	}
+	var trusted *Capability
 	for i := range caps {
 		if caps[i].Name == "read-all-files" && !caps[i].Available {
 			t.Fatalf("fresh temp dir must be readable: %+v", caps[i])
 		}
+		if caps[i].Name == "set-trusted-xattr" {
+			trusted = &caps[i]
+		}
+	}
+	// trusted.* is advisory: a container without CAP_SYS_ADMIN must still be
+	// allowed to restore, dropping only those attributes.
+	if trusted == nil {
+		t.Fatal("set-trusted-xattr capability missing from report")
+	}
+	if BlockingCapability(*trusted) {
+		t.Fatalf("set-trusted-xattr must be advisory: %+v", *trusted)
+	}
+	if !trusted.Available && trusted.Remedy == "" {
+		t.Fatal("Remedy must never be empty when Available is false")
 	}
 	if _, err := PreflightRestore(context.Background(), ""); err == nil {
 		t.Fatal("empty destination must error")

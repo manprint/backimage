@@ -216,7 +216,10 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 			return res, fmt.Errorf("preflight: %w", perr)
 		}
 		for _, c := range caps {
-			if !c.Available {
+			// Advisory capabilities only reduce what can be captured (trusted.*
+			// extended attributes are invisible without CAP_SYS_ADMIN): they
+			// never block the backup.
+			if !c.Available && archive.BlockingCapability(c) {
 				return res, fmt.Errorf("preflight: %s non disponibile (%s): %s", c.Name, c.Reason, c.Remedy)
 			}
 		}

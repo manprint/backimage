@@ -21,7 +21,10 @@ type Options struct {
 type Stats struct {
 	Files, Dirs, Symlinks, Hardlinks, Devices, Fifos, Skipped int64
 	BytesRaw                                                  int64
-	Errors                                                    []error // populated only when Strict is false
+	XattrsSkipped                                             int64            // extended attributes dropped during a restore
+	Degraded                                                  map[string]int64 // restore only: operations dropped, by class ("owner", "mode", "times", "xattr.trusted", "hardlink", "object")
+	Errors                                                    []error          // populated only when Strict is false
+	Warnings                                                  []string         // non-fatal degradations, one line per distinct cause
 }
 
 // Writer streams a deterministic PAX tar of the given roots.
@@ -63,6 +66,6 @@ type ExtractOptions struct {
 	Includes        []string // if non-empty, only matching paths are extracted
 	Excludes        []string
 	StripComponents int          // remove this many leading path components
-	Strict          bool         // default true
+	Strict          bool         // default true; false tolerates metadata that cannot be applied
 	Progress        func(string) // optional diagnostics for filesystem phases
 }

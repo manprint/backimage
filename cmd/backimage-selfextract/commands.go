@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -182,6 +183,8 @@ func cmdExtract(ctx context.Context, args []string) error {
 	fs.Var(&excludes, "exclude", "exclude glob (repeatable)")
 	cpus := fs.Int("cpus", cpu.Default(), "maximum CPUs used during extraction (default: half available CPUs)")
 	noOwner := fs.Bool("no-preserve-owner", false, "do not restore owner")
+	noXattrs := fs.Bool("no-preserve-xattrs", false, "do not restore extended attributes")
+	strict := fs.Bool("strict", false, "abort the extraction when a metadata operation is refused instead of degrading it")
 	removeLocalImage := fs.Bool("remove-local-image", false, "remove the local Docker image after a successful extraction")
 	overwrite := fs.Bool("overwrite", false, "replace existing files")
 	strip := fs.Int("strip-components", 0, "remove leading path components")
@@ -252,8 +255,8 @@ func cmdExtract(ctx context.Context, args []string) error {
 	report(0)
 	progressReader := progress.NewReader(pr, report)
 	x := archive.NewExtractor(archive.ExtractOptions{
-		PreserveOwner: !*noOwner, PreserveXattrs: true, Overwrite: *overwrite,
-		Includes: xIncludes, Excludes: xExcludes, StripComponents: *strip, Strict: true,
+		PreserveOwner: !*noOwner, PreserveXattrs: !*noXattrs, Overwrite: *overwrite,
+		Includes: xIncludes, Excludes: xExcludes, StripComponents: *strip, Strict: *strict,
 		Progress: func(message string) { progress.WriteLine(stderr, message) },
 	})
 	stats, extractErr := x.Extract(ctx, progressReader, *out)
@@ -284,7 +287,20 @@ func cmdExtract(ctx context.Context, args []string) error {
 		return json.NewEncoder(stdout).Encode(stats)
 	}
 	fmt.Fprintf(stdout, "estratti: %d file, %d directory, %d byte\n", stats.Files, stats.Dirs, stats.BytesRaw)
+	for _, class := range degradedClasses(stats.Degraded) {
+		fmt.Fprintf(stdout, "degradazioni %s: %d\n", class, stats.Degraded[class]) //nolint:misspell // Messaggio CLI italiano.
+	}
 	return nil
+}
+
+// degradedClasses returns the degradation classes in a stable order.
+func degradedClasses(degraded map[string]int64) []string {
+	classes := make([]string, 0, len(degraded))
+	for class := range degraded {
+		classes = append(classes, class)
+	}
+	sort.Strings(classes)
+	return classes
 }
 
 func selectedBytes(entries []index.FileEntry) int64 {

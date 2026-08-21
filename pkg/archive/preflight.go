@@ -13,11 +13,17 @@ import (
 
 // Capability describes one privilege-dependent ability.
 type Capability struct {
-	Name      string // "read-all-files", "chown", "mknod", "set-security-xattr"
+	Name      string // see BlockingCapability for the list
 	Available bool
 	Reason    string // why it is unavailable
 	Remedy    string // exact command the user should run
+	Advisory  bool   // true: missing it degrades metadata, it does not stop the operation
 }
+
+// BlockingCapability reports whether a missing capability must stop the
+// operation instead of only degrading it. Advisory capabilities (today:
+// trusted.* extended attributes) are reported and then skipped at runtime.
+func BlockingCapability(c Capability) bool { return !c.Advisory }
 
 // procStatusPath is overridable in tests to inject a synthetic CapEff.
 var procStatusPath = "/proc/self/status"
@@ -26,6 +32,7 @@ var procStatusPath = "/proc/self/status"
 const (
 	capChown           = 0
 	capDACReadSearch   = 2
+	capSysAdmin        = 21
 	capMknod           = 27
 	capSetfcap         = 31
 	preflightSampleMax = 1000
@@ -67,8 +74,13 @@ func PreflightBackup(ctx context.Context, roots []string) ([]Capability, error) 
 	if len(roots) == 0 {
 		return nil, errors.New("preflight: no roots given")
 	}
-	amRoot := os.Geteuid() == 0
 	eff := readCapEff()
+	// Being uid 0 is not the same as holding every capability: a container
+	// runs as root with a reduced bounding set (no CAP_SYS_ADMIN unless
+	// --privileged). Trust the effective set whenever the kernel exposes it,
+	// and fall back to the uid only when /proc is unreadable.
+	amRoot := os.Geteuid() == 0 && eff == 0
+	capable := func(bit uint) bool { return amRoot || hasCap(eff, bit) }
 
 	// read-all-files: root, CAP_DAC_READ_SEARCH, or a light sample scan.
 	unreadable, example, err := countUnreadable(ctx, roots, preflightSampleMax)
@@ -78,9 +90,7 @@ func PreflightBackup(ctx context.Context, roots []string) ([]Capability, error) 
 	readAll := Capability{Name: "read-all-files",
 		Remedy: "run with sudo, or grant capability: sudo setcap cap_dac_read_search+ep $(which backimage)"}
 	switch {
-	case amRoot:
-		readAll.Available = true
-	case hasCap(eff, capDACReadSearch):
+	case capable(capDACReadSearch):
 		readAll.Available = true
 	case unreadable == 0:
 		readAll.Available = true
@@ -90,26 +100,39 @@ func PreflightBackup(ctx context.Context, roots []string) ([]Capability, error) 
 	}
 
 	chown := Capability{Name: "chown", Remedy: "run as root (sudo backimage)"}
-	if amRoot || hasCap(eff, capChown) {
+	if capable(capChown) {
 		chown.Available = true
 	} else {
 		chown.Reason = "ownership is not preserved without privileges"
 	}
 
 	mknod := Capability{Name: "mknod", Remedy: "run as root (sudo backimage) to restore device nodes"}
-	if amRoot || hasCap(eff, capMknod) {
+	if capable(capMknod) {
 		mknod.Available = true
 	} else {
 		mknod.Reason = "device nodes cannot be created without privileges"
 	}
 
 	sec := Capability{Name: "set-security-xattr", Remedy: "sudo setcap cap_setfcap+ep $(which backimage) or run as root"}
-	if amRoot || hasCap(eff, capSetfcap) {
+	if capable(capSetfcap) {
 		sec.Available = true
 	} else {
 		sec.Reason = "security.capability cannot be written without privileges"
 	}
-	return []Capability{readAll, chown, mknod, sec}, nil
+
+	// Advisory: trusted.* holds overlayfs bookkeeping (trusted.overlay.opaque
+	// and friends), which shows up whenever the archived tree contains a
+	// nested /var/lib/docker. Writing it needs CAP_SYS_ADMIN, which a
+	// container does not get without --privileged; the restore skips those
+	// attributes instead of failing.
+	trusted := Capability{Name: "set-trusted-xattr", Advisory: true,
+		Remedy: "run with --privileged (or --cap-add SYS_ADMIN) to restore trusted.* attributes"}
+	if capable(capSysAdmin) {
+		trusted.Available = true
+	} else {
+		trusted.Reason = "trusted.* extended attributes (overlayfs metadata) cannot be written without CAP_SYS_ADMIN"
+	}
+	return []Capability{readAll, chown, mknod, sec, trusted}, nil
 }
 
 // PreflightRestore reports whether a faithful restore is possible into dest.

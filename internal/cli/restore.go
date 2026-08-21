@@ -198,6 +198,8 @@ func newRestoreCommand() *cobra.Command {
 	f.Int("strip-components", 0, "drop this many leading path components from each restored path (like tar)")
 	f.Int("cpus", cpu.Default(), "maximum CPUs used for decompression and decryption (default: half the available CPUs)")
 	f.Bool("no-preserve-owner", false, "restore files as the current user instead of the archived owner")
+	f.Bool("no-preserve-xattrs", false, "do not restore extended attributes")
+	f.Bool("strict", false, "abort the extraction when any metadata operation is refused, instead of degrading and reporting it")
 	f.Bool("remove-local-image", false, "delete the pulled Docker image once the restore succeeded")
 	f.Bool("overwrite", false, "allow writing over an existing tar file or a non-empty destination")
 	f.Bool("no-verify", false, "skip the plaintext chunk digest check (faster, unsafe)")
@@ -349,15 +351,23 @@ func restoreExtract(cmd *cobra.Command, stream func(io.Writer) error, alreadyFil
 			return usageErrorf("destinazione %s non vuota; usa --overwrite", dest)
 		}
 	}
+	strict := getFlagBool(cmd, "strict")
 	if !getFlagBool(cmd, "no-preserve-owner") {
 		caps, err := archive.PreflightRestore(cmd.Context(), dest)
 		if err != nil {
 			return err
 		}
 		for _, cap := range caps {
-			if !cap.Available {
+			if cap.Available {
+				continue
+			}
+			// A missing privilege only degrades metadata, so it stops the
+			// restore in --strict mode only. Advisory capabilities (trusted.*
+			// xattrs: overlayfs bookkeeping) never stop it.
+			if strict && archive.BlockingCapability(cap) {
 				return &Error{Kind: KindPermission, Msg: cap.Reason, Hint: cap.Remedy}
 			}
+			restoreLog(cmd, "restore: attenzione: "+cap.Reason+" — "+cap.Remedy)
 		}
 	}
 	includes, excludes := getFlagStrings(cmd, "include"), getFlagStrings(cmd, "exclude")
@@ -373,10 +383,12 @@ func restoreExtract(cmd *cobra.Command, stream func(io.Writer) error, alreadyFil
 	}
 	progressReader := progress.NewReader(pr, report)
 	x := archive.NewExtractor(archive.ExtractOptions{
-		PreserveOwner: !getFlagBool(cmd, "no-preserve-owner"), PreserveXattrs: true,
-		Overwrite: getFlagBool(cmd, "overwrite"), Includes: includes, Excludes: excludes,
-		StripComponents: getFlagInt(cmd, "strip-components"), Strict: true,
-		Progress: func(message string) { restoreLog(cmd, message) },
+		PreserveOwner:  !getFlagBool(cmd, "no-preserve-owner"),
+		PreserveXattrs: !getFlagBool(cmd, "no-preserve-xattrs"),
+		Overwrite:      getFlagBool(cmd, "overwrite"), Includes: includes, Excludes: excludes,
+		StripComponents: getFlagInt(cmd, "strip-components"),
+		Strict:          strict,
+		Progress:        func(message string) { restoreLog(cmd, message) },
 	})
 	_, extractErr := x.Extract(cmd.Context(), progressReader, dest)
 	if extractErr == nil {

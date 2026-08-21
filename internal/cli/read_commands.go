@@ -293,8 +293,9 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	checks := make([]doctorCheck, 0, len(caps)+3)
 	failed := false
 	for _, cap := range caps {
-		checks = append(checks, doctorCheck{Name: cap.Name, Available: cap.Available, Required: true, Reason: cap.Reason, Remedy: cap.Remedy})
-		if !cap.Available {
+		required := archive.BlockingCapability(cap)
+		checks = append(checks, doctorCheck{Name: cap.Name, Available: cap.Available, Required: required, Reason: cap.Reason, Remedy: cap.Remedy})
+		if !cap.Available && required {
 			failed = true
 		}
 	}
