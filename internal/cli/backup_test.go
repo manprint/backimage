@@ -156,9 +156,16 @@ func TestBackupOCILayoutSuccessHumanAndJSON(t *testing.T) {
 		}
 		if !asJSON {
 			for _, want := range []string{
-				"backimage restore example.test/team/success:t1",
-				"docker run --rm -v \"$PWD/restore:/restore\"",
+				// The printed commands must be the maximum-fidelity ones:
+				// sudo for the CLI, --privileged plus the socket and the image
+				// reference for the container.
+				"sudo backimage restore example.test/team/success:t1",
+				"docker run --rm --privileged",
+				"-e BACKIMAGE_IMAGE_REF=\"example.test/team/success:t1\"",
+				"-v /var/run/docker.sock:/var/run/docker.sock",
+				"-v \"$PWD/restore:/restore\"",
 				"example.test/team/success:t1 extract --out /restore",
+				"--strict",
 				"Tips:",
 			} {
 				if !strings.Contains(out, want) {
@@ -166,7 +173,10 @@ func TestBackupOCILayoutSuccessHumanAndJSON(t *testing.T) {
 				}
 			}
 			commands := strings.SplitN(out, "Tips:", 2)[0]
-			for _, unwanted := range []string{"--no-preserve-owner", "--remove-local-image", "/var/run/docker.sock", "BACKUP_PASSPHRASE"} {
+			// Tip-only options must stay out of the ready-to-paste commands.
+			// The Docker socket and BACKIMAGE_IMAGE_REF are deliberately in
+			// them, so they are not on this list.
+			for _, unwanted := range []string{"--no-preserve-owner", "--remove-local-image", "BACKUP_PASSPHRASE"} {
 				if strings.Contains(commands, unwanted) {
 					t.Fatalf("recovery command contains tip-only option %q: %q", unwanted, commands)
 				}

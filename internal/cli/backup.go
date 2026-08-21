@@ -83,21 +83,40 @@ func recoveryInstructions(ref string, encrypted, runnable bool) string {
 		dockerPassphrase = " -e BACKIMAGE_PASSPHRASE=\"$BACKUP_PASSPHRASE\"" //nolint:gosec // Command suggestion, not a credential.
 	}
 
+	// Both commands are printed in their maximum-fidelity form: ownership,
+	// device nodes, ACLs and the trusted.* extended attributes (overlayfs
+	// metadata) are only writable as root with CAP_SYS_ADMIN, so the CLI form
+	// carries sudo and the container form carries --privileged. The Docker
+	// socket and the image reference are always included so that adding
+	// --remove-local-image needs no extra plumbing.
 	var out strings.Builder
-	fmt.Fprint(&out, "\n\ncomandi per recuperare i dati:\n")
-	fmt.Fprintf(&out, "  backimage:\n    %sbackimage restore %s --extract --destination ./restore%s\n", appPrefix, ref, appPassphrase)
+	fmt.Fprint(&out, "\n\ncomandi per recuperare i dati (fedeltà massima):\n")
+	fmt.Fprintf(&out, "  backimage:\n    %ssudo backimage restore %s --extract --destination ./restore%s\n", appPrefix, ref, appPassphrase)
 	if runnable {
-		fmt.Fprintf(&out, "  docker run:\n    docker run --rm%s -v \"$PWD/restore:/restore\" %s extract --out /restore\n", dockerPassphrase, ref)
+		fmt.Fprint(&out, "  docker run:\n    docker run --rm --privileged \\\n")
+		if dockerPassphrase != "" {
+			fmt.Fprint(&out, "      -e BACKIMAGE_PASSPHRASE=\"$BACKUP_PASSPHRASE\" \\\n") //nolint:gosec // Command suggestion, not a credential.
+		}
+		fmt.Fprintf(&out, "      -e BACKIMAGE_IMAGE_REF=\"%s\" \\\n", ref)
+		fmt.Fprint(&out, "      -v /var/run/docker.sock:/var/run/docker.sock \\\n")
+		fmt.Fprint(&out, "      -v \"$PWD/restore:/restore\" \\\n")
+		fmt.Fprintf(&out, "      %s extract --out /restore\n", ref)
 	} else {
 		fmt.Fprint(&out, "  docker run: non disponibile (backup creato con --runnable=false)\n")
 	}
+	fmt.Fprint(&out, "\nPerché privilegi: owner/gruppi, device node, ACL e xattr trusted.* (metadati overlayfs)\n") //nolint:misspell // Messaggio CLI italiano.
+	fmt.Fprint(&out, "sono applicabili solo come root e con CAP_SYS_ADMIN. Senza sudo / --privileged\n")
+	fmt.Fprint(&out, "l'estrazione riesce comunque, ma quei metadati vengono degradati e il riepilogo\n") //nolint:misspell // Messaggio CLI italiano.
+	fmt.Fprint(&out, "finale del restore lo dichiara per classe.\n")
 	fmt.Fprint(&out, "\nTips:\n")
+	fmt.Fprint(&out, "  - Per provare che il ripristino è fedele al 100%, aggiungi --strict: si ferma al primo metadato\n")
+	fmt.Fprint(&out, "    non applicabile invece di degradarlo.\n")                                                                       //nolint:misspell // Messaggio CLI italiano.
 	fmt.Fprint(&out, "  - Se non vuoi ripristinare ownership e gruppi, aggiungi --no-preserve-owner al comando backimage o a extract.\n") //nolint:misspell // Messaggio CLI italiano.
 	fmt.Fprint(&out, "  - Per limitare la CPU, aggiungi --cpus N al comando backimage o a extract.\n")                                    //nolint:misspell // Messaggio CLI italiano.
 	fmt.Fprint(&out, "  - Per estrarre solo una parte, aggiungi --include GLOB e/o --exclude GLOB.\n")
-	fmt.Fprint(&out, "  - Per rimuovere l'immagine Docker dopo un'estrazione riuscita, aggiungi --remove-local-image. Con docker run servono anche\n")
-	fmt.Fprintf(&out, "    -e BACKIMAGE_IMAGE_REF=\"%s\" e -v /var/run/docker.sock:/var/run/docker.sock.\n", ref)
-	fmt.Fprint(&out, "  - Se la directory di destinazione non è vuota, aggiungi --overwrite.\n")
+	fmt.Fprint(&out, "  - Per rimuovere l'immagine Docker dopo un'estrazione riuscita, aggiungi --remove-local-image:\n") //nolint:misspell // Messaggio CLI italiano.
+	fmt.Fprint(&out, "    il socket Docker e BACKIMAGE_IMAGE_REF sono già nel comando docker run qui sopra.\n")           //nolint:misspell // Messaggio CLI italiano.
+	fmt.Fprint(&out, "  - Se la directory di destinazione non è vuota, aggiungi --overwrite.\n")                          //nolint:misspell // Messaggio CLI italiano.
 	return out.String()
 }
 
