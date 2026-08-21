@@ -52,6 +52,7 @@ mutable noise for backup workloads.
 | user.* / system.* xattrs | ✅ | ✅ (`com.apple.ResourceFork` included) | ❌ (alternate data streams) |
 | POSIX ACLs | ✅ (`system.posix_acl_*`) | ❌ (NFSv4 ACLs are not xattr-backed) | n/a (owner ACLs) |
 | security.capability | ✅ (root/CAP_SETFCAP) | n/a | n/a |
+| trusted.* xattrs (overlayfs) | archived always, restored only with CAP_SYS_ADMIN | n/a | n/a |
 | hardlinks | ✅ | ✅ | ✅ (reflinks fallback) |
 | symlinks | ✅ | ✅ | ❌ (dangling allowed) |
 | devices / fifos | ✅ (root) | ✅ | n/a |
@@ -71,6 +72,38 @@ After all entries:
 7. re-apply mode and timestamps to ALL directories, deepest-first (writing
    into a directory changes its mtime; a 0500 directory is not writable until
    it is fully populated)
+
+## Extended attributes that cannot be restored
+
+A restore never aborts because of an attribute the destination cannot hold.
+Two families are skipped with a warning, even in strict mode, and counted in
+`Stats.XattrsSkipped`:
+
+- `trusted.*` refused with `EPERM`/`EACCES`. Writing that namespace requires
+  `CAP_SYS_ADMIN` in the initial user namespace, which a container started
+  without `--privileged` never has. What lives there in practice is overlayfs
+  bookkeeping (`trusted.overlay.opaque`, `.redirect`, `.origin`), produced by
+  archiving a tree that contains a nested `/var/lib/docker`. It describes the
+  layering of the source filesystem, not user data.
+- any namespace the destination filesystem refuses outright (`EOPNOTSUPP` on
+  tmpfs/NFS/vfat, `EINVAL` for a prefix the kernel does not know).
+
+`security.*`, `system.*` (ACLs) and `user.*` are degraded the same way by
+default, and counted separately per namespace; `--strict` turns any of them
+back into a hard failure whose error names the remediation.
+
+## Degradation classes (restore)
+
+Without `--strict`, every metadata operation is best effort. `Stats.Degraded`
+counts what was dropped, by class: `owner`, `mode`, `times`, `xattr.<ns>`,
+`hardlink` (materialised as an independent copy) and `object` (an entry that
+could not be created at all, also counted in `Stats.Skipped` and listed in
+`Stats.Errors`).
+
+These abort regardless of the policy, because degrading them would hide a real
+problem: `ENOSPC`, `EDQUOT`, `EROFS`, `EIO`, `ENOMEM`, `EMFILE`, `ENFILE`, a
+truncated archive, a non-empty destination without `Overwrite`, and an
+unsupported typeflag.
 
 ## Other documented behaviours
 

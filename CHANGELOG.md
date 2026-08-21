@@ -7,6 +7,72 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Il restore abortiva a metà estrazione su un metadato non applicabile
+  (grave)**. Estraendo un backup che contiene un `/var/lib/docker` annidato, il
+  tar porta gli attributi di servizio di overlayfs
+  (`trusted.overlay.opaque`, `.redirect`, `.origin`). Scrivere quel namespace
+  richiede `CAP_SYS_ADMIN` nell'user namespace iniziale, che un container
+  avviato senza `--privileged` non ha: `Lsetxattr` restituiva `EPERM` e, dato
+  che il restore girava sempre in modalità strict senza alcun flag per
+  degradare, l'estrazione moriva in corsa (`errore: setxattr
+  trusted.overlay.opaque: operation not permitted`) lasciando una destinazione
+  parziale. I dati archiviati erano integri — ogni chunk aveva superato la
+  verifica del digest — ma non erano estraibili senza privilegi.
+
+  Lo stesso abort valeva per ogni altro metadato rifiutato dalla destinazione:
+  `lchown` di file di altri utenti in un restore non-root, `chmod`/`utimes` su
+  entry non possedute, ACL e `security.*` su filesystem che non li supportano,
+  device node senza `CAP_MKNOD`, hardlink non ricreabili (questi ultimi non
+  passavano nemmeno dalla gestione dei permessi: qualsiasi errore di
+  `os.Link` era fatale).
+
+### Changed
+
+- **L'estrazione ora degrada per default invece di abortire.** Owner/gruppo,
+  permessi, timestamp, ACL, attributi estesi e hardlink sono best effort: ciò
+  che il kernel rifiuta viene contato per classe in `Stats.Degraded`,
+  segnalato una volta sola e riepilogato alla fine
+  (`degradazioni: owner=… xattr.trusted=…`). Il contenuto dei file viene
+  sempre scritto e verificato. Un hardlink non ricreabile diventa una copia
+  indipendente invece di un errore. Le entry che non è stato possibile creare
+  sono contate in `Stats.Skipped`, elencate in `Stats.Errors` e annunciate con
+  un `ATTENZIONE` esplicito nel riepilogo.
+
+  Restano fatali le condizioni che non sono degradazioni: `ENOSPC`, `EDQUOT`,
+  `EROFS`, `EIO`, `ENOMEM`, `EMFILE`, `ENFILE`, archivio troncato,
+  destinazione già popolata senza `--overwrite`, typeflag non supportato.
+
+- Il preflight non deduce più le capability dall'uid: root in un container ha
+  un bounding set ridotto, quindi il set effettivo letto da
+  `/proc/self/status` ha la precedenza e l'uid resta solo come fallback.
+- Le capability advisory non bloccano più né backup né restore né `doctor`:
+  segnalano solo che qualcosa non verrà preservato.
+
+### Added
+
+- `restore --extract` e `extract` dell'immagine auto-estraente accettano
+  `--strict` (ripristina l'abort al primo metadato rifiutato) e
+  `--no-preserve-xattrs`.
+- Gli errori di privilegio in modalità strict riportano il rimedio esatto
+  (`--strict`, `--no-preserve-owner`, `--cap-add`), non più solo la syscall
+  fallita.
+- Il preflight riporta la capability advisory `set-trusted-xattr`: senza
+  `CAP_SYS_ADMIN` gli attributi `trusted.*` non sono né leggibili in backup né
+  scrivibili in restore.
+- Il riepilogo di fine backup stampa i comandi di ripristino nella forma a
+  fedeltà massima: `sudo backimage restore …` e `docker run --rm --privileged`
+  con `BACKIMAGE_IMAGE_REF` e il socket Docker già inclusi, più la spiegazione
+  di quali metadati richiedono privilegi e il suggerimento `--strict` per
+  dimostrare che il ripristino è fedele.
+- README: nuova sezione «Backup e restore in fedeltà massima» con i parametri
+  obbligatori di backup e restore, la prova periodica di ripristino e l'elenco
+  di ciò che nessuno strumento può ripristinare.
+- `extract` stampa le degradazioni per classe (`degradato owner: 1234`);
+  `Stats.Degraded`, `Stats.Warnings` e `Stats.XattrsSkipped` sono esposti anche
+  in `--json`.
+
 ## [0.2.4] - 2026-08-19
 
 ### Security

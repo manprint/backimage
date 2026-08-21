@@ -76,3 +76,32 @@ flag globale `--json`; gli errori restano su stderr e conservano l'exit code.
 | `restore --extract` come root su Linux | sì | sì | sì | sì | sì |
 | `--no-preserve-owner` non-root | no | sì | se consentiti | sì | no |
 | bind mount Docker Desktop | non garantito | parziale | non garantiti | parziale | no |
+
+### Politica di degradazione (default)
+
+L'estrazione non si interrompe mai per un metadato che la destinazione non può
+applicare. Owner/gruppo, permessi, timestamp, ACL, attributi estesi e hardlink
+sono **best effort**: quello che il kernel rifiuta viene contato per classe,
+segnalato una volta sola e riportato nel riepilogo finale
+(`degradazioni: owner=… xattr.trusted=…`). Il contenuto dei file viene sempre
+scritto e verificato per digest.
+
+Casi tipici in un dump di host reale:
+
+| Situazione | Effetto |
+|---|---|
+| `trusted.*` (overlayfs) senza `CAP_SYS_ADMIN` | attributi ignorati |
+| file di altri utenti, restore non-root | owner = utente corrente |
+| `security.*` su destinazione senza SELinux | attributi ignorati |
+| destinazione senza xattr (vfat, NFS, alcuni bind mount) | attributi ignorati |
+| hardlink non ricreabile | materializzato come copia indipendente |
+| device node senza `CAP_MKNOD` | oggetto non creato, contato in `Skipped` |
+
+Si fermano invece sempre, perché non sono degradazioni: destinazione piena o in
+sola lettura (`ENOSPC`, `EDQUOT`, `EROFS`, `EIO`), archivio troncato,
+destinazione già popolata senza `--overwrite`, entry di tipo non supportato.
+
+`--strict` ripristina il comportamento intransigente: la prima operazione
+rifiutata ferma l'estrazione e l'errore riporta il rimedio esatto.
+`--no-preserve-xattrs` non tenta nemmeno gli attributi estesi;
+`--no-preserve-owner` non tenta owner e gruppo.

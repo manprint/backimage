@@ -847,6 +847,7 @@ backimage restore [IMAGE] [flags]
       --jobs int                 number of concurrent layer downloads (default 3)
       --local-repo               read the image from the local Docker daemon instead of a registry
       --no-preserve-owner        restore files as the current user instead of the archived owner
+      --no-preserve-xattrs       do not restore extended attributes
       --no-verify                skip the plaintext chunk digest check (faster, unsafe)
       --oci-layout string        read the image from this local OCI layout directory
   -o, --output string            write the archive to this tar file; - means stdout
@@ -857,6 +858,7 @@ backimage restore [IMAGE] [flags]
       --platform string          platform variant to read from the multi-arch image, OS/ARCH (default "linux/amd64")
       --remove-local-image       delete the pulled Docker image once the restore succeeded
       --repo string              image reference (alias for positional IMAGE)
+      --strict                   abort the extraction when any metadata operation is refused, instead of degrading and reporting it
       --strip-components int     drop this many leading path components from each restored path (like tar)
 ```
 

@@ -661,8 +661,14 @@ Per scrivere su una directory dell'host, usare un bind mount:
 ```console
 mkdir -p ./restore
 docker pull docker.io/demoarchiveuser/mindhunters:mindhunters-test
-docker run --rm \
+
+# Fedeltà massima: --privileged serve per ownership, device, ACL e per gli
+# xattr trusted.* (metadati overlayfs). Senza, l'estrazione riesce comunque
+# ma quei metadati vengono degradati e il riepilogo finale lo dichiara.
+docker run --rm --privileged \
   -e BACKIMAGE_PASSPHRASE="$BACKUP_PASSPHRASE" \
+  -e BACKIMAGE_IMAGE_REF="docker.io/demoarchiveuser/mindhunters:mindhunters-test" \
+  -v /var/run/docker.sock:/var/run/docker.sock \
   -v "$PWD/restore:/restore" \
   docker.io/demoarchiveuser/mindhunters:mindhunters-test \
   extract --out /restore
@@ -675,13 +681,13 @@ docker run --rm -v "$PWD/restore:/restore" \
 
 Tips:
 
+- aggiungi `--strict` a `extract` per fermarti al primo metadato non
+  applicabile invece di degradarlo: è la prova che il ripristino è fedele;
 - aggiungi `--no-preserve-owner` a `extract` se non vuoi ripristinare ownership
   e gruppi;
 - aggiungi `--cpus N` a `extract` per limitare la CPU;
-- per `--remove-local-image`, aggiungi a `docker run`:
-  `-e BACKIMAGE_IMAGE_REF="docker.io/demoarchiveuser/mindhunters:mindhunters-test"`,
-  `-v /var/run/docker.sock:/var/run/docker.sock` e a `extract`
-  `--remove-local-image`;
+- `--remove-local-image` non richiede altro: `BACKIMAGE_IMAGE_REF` e il socket
+  Docker sono già nel comando qui sopra;
 - aggiungi `--include GLOB`, `--exclude GLOB` o `--overwrite` quando servono.
 
 Si può anche estrarre un tar e affidare la materializzazione agli strumenti
@@ -750,7 +756,8 @@ leggibile dal processo privilegiato.
 | `/etc` o `/var/lib` con dati di sistema | `sudo backimage backup /etc/myapp /var/lib/myapp ...` | Include i file protetti e i relativi metadati |
 | Preflight dei privilegi non disponibile | `--allow-degraded` | Continua senza il preflight strict; non concede accesso ai file illeggibili |
 | Ripristino in una directory dell'utente | `backimage restore --extract -C ./restore --no-preserve-owner ...` | L'utente conserva i file; ownership originale non applicata |
-| Ripristino fedele del sistema Linux | `backimage restore -o system.tar ...` poi `sudo tar -xpf ...` | Preserva ownership numerica, mode, ACL/xattr e device quando supportati |
+| Ripristino fedele del sistema Linux | `sudo backimage restore --extract --strict ...` (oppure `-o system.tar` e poi `sudo tar -xpf ...`) | Preserva ownership numerica, mode, ACL/xattr e device; con `--strict` un metadato non applicabile è un errore invece di una degradazione |
+| Ripristino di un dump con `/var/lib/docker` dentro | `docker run --privileged ... extract` | Gli xattr `trusted.*` di overlayfs richiedono `CAP_SYS_ADMIN`; senza vengono ignorati e contati |
 
 Esempi:
 
@@ -792,6 +799,137 @@ preservazione dell'owner nei metadati archiviati;
 per ownership, ACL, xattr, setuid/setgid, device e FIFO usare root su un
 filesystem che li supporti. Vedere [FIDELITY](docs/FIDELITY.md) per la matrice
 completa di fedeltà per sistema operativo e metodo di estrazione.
+
+## Backup e restore in fedeltà massima
+
+Questa sezione è la ricetta completa per **non perdere nulla**: né contenuti né
+metadati. Vale per i casi difficili — dump di `/var/lib/docker`, volumi con
+database, alberi con file di utenti diversi e permessi eterogenei.
+
+Il principio è che la fedeltà dipende da due condizioni separate:
+
+1. **in backup** il processo deve poter *leggere* tutto: contenuti, ownership,
+   ACL, attributi estesi (compresi i `trusted.*`, invisibili senza
+   `CAP_SYS_ADMIN`), device e FIFO;
+2. **in restore** il processo deve poter *scrivere* tutto quello che è stato
+   letto, su un filesystem che lo supporti.
+
+Se una delle due manca, il backup resta utilizzabile ma qualcosa viene
+degradato. La differenza è che il backup ti **blocca** (meglio fallire che
+archiviare a metà), mentre il restore **degrada e lo dichiara** (meglio avere i
+dati che nessun dato) — a meno di `--strict`.
+
+### Parametri del backup
+
+| Parametro | Valore per la fedeltà massima | Perché |
+| --- | --- | --- |
+| esecuzione | `sudo` / root | legge file non leggibili all'utente, attraversa directory `0700`, legge ACL e xattr, vede gli attributi `trusted.*` |
+| `--allow-degraded` | **da non usare** | senza il flag il preflight blocca se qualcosa non è leggibile e il walk si ferma al primo file illeggibile invece di archiviare un albero incompleto |
+| `--passphrase-file` | file `0600` leggibile da root | la passphrase non finisce né nella history né in `ps`; `--password` sì, quindi non va usato |
+| `--numeric-owner` | consigliato se il restore avviene su un altro host | conserva UID/GID senza dipendere dal database utenti locale |
+| `--one-file-system` | consigliato per gli alberi di sistema | non attraversa i mount: evita di inghiottire `/proc`, `/sys`, NFS e bind mount annidati |
+| `--exclude` | pseudo-filesystem e cache | `'proc/**'`, `'sys/**'`, `'run/**'`, socket e cache non hanno senso in un archivio |
+| `--dedup` | **da non usare** | la deduplicazione è convergente: rivela l'uguaglianza dei chunk fra backup che condividono la chiave. Vedere [dedup](docs/dedup.md) e [security](docs/security.md) |
+| `--runnable` | `true` (default) | l'immagine si estrae da sola con `docker run`, senza CLI sull'host di destinazione |
+| `--platform` | includere l'architettura dell'host di ripristino | il self-extractor deve poter girare dove serve |
+| `--timestamp` | consigliato | un tag per esecuzione: nessun backup precedente viene sovrascritto |
+| `--temp-dir` | directory accessibile a root con spazio libero | lo spool non deve finire su una `TMPDIR` piccola o non scrivibile dal processo privilegiato |
+
+`--compression` e `--compression-level` non influiscono sulla fedeltà: sono
+solo spazio contro tempo.
+
+**Coerenza dei dati.** Nessun archiviatore la garantisce da solo: copiare i
+file di un database in scrittura produce file coerenti byte per byte ma un
+database potenzialmente incoerente. Prima del backup fermare il servizio,
+oppure usare uno snapshot (LVM, btrfs, ZFS) e archiviare lo snapshot, oppure
+affiancare un dump logico (`pg_dump`, `mysqldump`, `sqlite3 .backup`).
+
+```console
+# 1. Passphrase forte, salvata solo in un file leggibile da root.
+backimage genpass --length 40 | sudo tee /root/secrets/backup.pass >/dev/null
+sudo chmod 600 /root/secrets/backup.pass
+
+# 2. Backup fedele: root, nessun --allow-degraded, cifrato, un tag per esecuzione.
+sudo backimage backup /var/lib/docker/volumes/seafile-dind \
+  --repo docker.io/acme/backup --tag seafile --timestamp \
+  --passphrase-file /root/secrets/backup.pass \
+  --numeric-owner --one-file-system \
+  --temp-dir /var/tmp/backimage
+
+# 3. Verifica integrale: scarica e ricalcola il digest di ogni chunk.
+sudo backimage verify docker.io/acme/backup:seafile-20260821T031500Z \
+  --continue --passphrase-file /root/secrets/backup.pass
+```
+
+`verify --quick` controlla solo i metadati pubblici e i digest dei layer: per la
+verifica completa non va usato.
+
+### Parametri del restore
+
+| Parametro | Valore per la fedeltà massima | Perché |
+| --- | --- | --- |
+| esecuzione CLI | `sudo` | `lchown`, `mknod`, ACL e `security.*` richiedono root |
+| esecuzione container | `docker run --privileged` | oltre a root serve `CAP_SYS_ADMIN` per gli xattr `trusted.*` (metadati overlayfs di un `/var/lib/docker` archiviato); in alternativa `--cap-add SYS_ADMIN` |
+| destinazione | filesystem Linux nativo (ext4, xfs, btrfs) | tmpfs, NFS, vfat, exFAT e i bind mount di Docker Desktop rifiutano xattr, ACL, device o hardlink |
+| `--strict` | consigliato per la prova di fedeltà | l'estrazione si ferma al primo metadato non applicabile invece di degradarlo: è così che dimostri che il ripristino è fedele al 100% |
+| `--overwrite` | se la destinazione non è vuota | senza il flag l'estrazione si rifiuta di sovrascrivere |
+| `--no-preserve-owner` | **da non usare** in questo scenario | serve solo per ripristini non privilegiati in una directory dell'utente |
+| spazio libero | ≥ dimensione dichiarata dal manifest, con margine | i file sparsi vengono riscritti densi e un hardlink non ricreabile diventa una copia |
+
+```console
+# Con la CLI installata.
+printf '%s\n' "$BACKUP_PASSPHRASE" | sudo backimage restore \
+  docker.io/acme/backup:seafile-20260821T031500Z \
+  --extract --destination /srv/restore --overwrite --strict --passphrase-stdin
+
+# Senza CLI sull'host di destinazione: il self-extractor dell'immagine.
+mkdir -p ./restore
+docker run --rm --privileged \
+  -e BACKIMAGE_PASSPHRASE="$BACKUP_PASSPHRASE" \
+  -e BACKIMAGE_IMAGE_REF="docker.io/acme/backup:seafile-20260821T031500Z" \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v "$PWD/restore:/restore" \
+  docker.io/acme/backup:seafile-20260821T031500Z \
+  extract --out /restore --overwrite --strict
+```
+
+Il socket Docker e `BACKIMAGE_IMAGE_REF` servono solo a `--remove-local-image`,
+ma stanno già nel comando: aggiungere quel flag non richiede altro.
+
+Senza `sudo` o senza `--privileged` l'estrazione **riesce comunque**: owner,
+permessi, timestamp, ACL, xattr e hardlink non applicabili vengono degradati,
+contati per classe e riepilogati alla fine
+(`degradazioni: owner=812 xattr.trusted=15043`). I contenuti dei file sono
+sempre scritti e verificati per digest. Con `--strict`, invece, la prima
+operazione rifiutata ferma l'estrazione e l'errore riporta il rimedio.
+
+### Prova periodica di ripristino
+
+Un backup non verificato non è un backup. La prova completa è:
+
+```console
+sudo backimage verify IMAGE --continue --passphrase-file /root/secrets/backup.pass
+sudo backimage restore IMAGE --extract --destination /srv/drill --overwrite --strict \
+  --passphrase-file /root/secrets/backup.pass
+sudo diff -r --no-dereference /percorso/originale /srv/drill/percorso/originale
+```
+
+Se `--strict` non produce errori, ogni metadato archiviato è stato riapplicato.
+
+### Cosa non è ripristinabile, con nessuno strumento
+
+- `ctime`: non è scrivibile da userspace; nessun archiviatore lo ripristina.
+- `atime`: la CLI non lo archivia, per mantenere gli archivi deterministici.
+- etichette MAC: `security.selinux` viene riapplicato solo se la destinazione
+  ha SELinux con una policy compatibile; altrimenti serve `restorecon`.
+- file sparsi: vengono riscritti densi, quindi occupano più spazio
+  dell'originale.
+- il numero di inode condivisi da un hardlink, quando la destinazione non
+  consente di ricrearlo: il contenuto è identico, l'inode no.
+
+La matrice completa per sistema operativo e metodo di estrazione è in
+[FIDELITY](docs/FIDELITY.md); la politica di degradazione del restore è
+documentata in [restore](docs/restore.md).
 
 ## Uso rapido
 
@@ -1001,6 +1139,8 @@ Flag restore:
 | `--strip-components N` | `0` | Rimuove componenti iniziali dei path |
 | `--cpus N` | metà dei CPU disponibili | Limita i CPU usati durante il restore |
 | `--no-preserve-owner` | `false` | Non preserva ownership |
+| `--no-preserve-xattrs` | `false` | Non tenta gli attributi estesi |
+| `--strict` | `false` | Ferma l'estrazione al primo metadato non applicabile invece di degradarlo e contarlo |
 | `--remove-local-image` | `false` | Rimuove l'immagine Docker locale dopo un restore riuscito |
 | `--overwrite` | `false` | Sovrascrive output esistenti |
 | `--no-verify` | `false` | Salta verifica digest plaintext |
@@ -1774,6 +1914,10 @@ può osservare il registry quali chunk sono uguali tra backup.
 - Usare `repo rm` e `repo prune` solo dopo un `--dry-run`; sono operazioni
   distruttive lato registry.
 - `--no-verify` e `--insecure-no-auth` sono eccezioni operative, non default.
+- Per la fedeltà massima: backup come root **senza** `--allow-degraded`, restore
+  con `sudo` (CLI) o `docker run --privileged` (immagine), `--strict` per
+  dimostrare che nessun metadato è stato degradato. Ricetta completa in
+  [Backup e restore in fedeltà massima](#backup-e-restore-in-fedeltà-massima).
 
 ## Sviluppo e qualità
 

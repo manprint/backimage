@@ -79,6 +79,12 @@ stdout.
 
 ## Fedeltà del ripristino
 
+`extract` degrada per default i metadati che la destinazione rifiuta (owner,
+permessi, timestamp, xattr, hardlink) invece di abortire, e li riporta per
+classe su stdout (`degradazioni owner: 1234`). `--strict` ripristina l'abort al
+primo rifiuto, `--no-preserve-xattrs` salta gli attributi estesi. Dettaglio
+della politica in `docs/restore.md`.
+
 | Metodo | Ownership | xattr/ACL | Device | Portabile |
 |---|---:|---:|---:|---:|
 | `tar` + `sudo tar xpf --xattrs --acls --numeric-owner` su Linux | sì | sì | sì | sì |
