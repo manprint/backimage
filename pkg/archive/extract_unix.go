@@ -24,10 +24,25 @@ type extractor struct {
 	warnings []string
 	warned   map[string]bool
 	degraded map[string]int64
+	examples map[string]string
 }
 
 func extractorFor(opts ExtractOptions) Extractor {
-	return &extractor{opts: opts, warned: make(map[string]bool), degraded: make(map[string]int64)}
+	return &extractor{
+		opts:     opts,
+		warned:   make(map[string]bool),
+		degraded: make(map[string]int64),
+		examples: make(map[string]string),
+	}
+}
+
+// note records one degradation of class, keeping the first real failure as the
+// evidence reported at the end of the extraction.
+func (x *extractor) note(class string, err error) {
+	x.degraded[class]++
+	if err != nil && x.examples[class] == "" {
+		x.examples[class] = err.Error()
+	}
 }
 
 // warn records a non-fatal degradation once per distinct cause: the same
@@ -56,7 +71,7 @@ func (x *extractor) degrade(class, key, message string, err error) error {
 	if x.opts.Strict {
 		return err
 	}
-	x.degraded[class]++
+	x.note(class, err)
 	x.warn(key, message)
 	return nil
 }
@@ -161,7 +176,7 @@ func (x *extractor) Extract(ctx context.Context, r io.Reader, dest string) (stat
 			}
 			stats.Skipped++
 			stats.Errors = append(stats.Errors, err)
-			x.degraded["object"]++
+			x.note("object", err)
 			x.warn("object-skipped", "alcune entry non sono state create: la prima è "+err.Error()+
 				" (elenco completo in Stats.Errors / --json)")
 			continue
@@ -205,33 +220,14 @@ func (x *extractor) Extract(ctx context.Context, r io.Reader, dest string) (stat
 		}
 	}
 	stats.Degraded = x.degraded
+	stats.DegradedExamples = x.examples
 	if x.opts.Progress != nil {
 		x.opts.Progress("restore: filesystem: finalizzazione completata")
-		x.opts.Progress("restore: " + summarize(stats))
+		for _, line := range stats.FidelityLines() {
+			x.opts.Progress("restore: " + line)
+		}
 	}
 	return stats, nil
-}
-
-// summarize renders the one line that says what was lost, loudly when objects
-// are missing and quietly when only metadata was degraded.
-func summarize(stats Stats) string {
-	if len(stats.Degraded) == 0 {
-		return "nessuna degradazione: contenuti e metadati ripristinati integralmente"
-	}
-	classes := make([]string, 0, len(stats.Degraded))
-	for class := range stats.Degraded {
-		classes = append(classes, class)
-	}
-	sort.Strings(classes)
-	parts := make([]string, 0, len(classes))
-	for _, class := range classes {
-		parts = append(parts, fmt.Sprintf("%s=%d", class, stats.Degraded[class]))
-	}
-	line := "degradazioni: " + strings.Join(parts, " ") + " (dettaglio negli avvisi sopra)"
-	if stats.Skipped > 0 {
-		return fmt.Sprintf("ATTENZIONE: %d entry NON estratte. %s", stats.Skipped, line)
-	}
-	return "contenuto dei file integro, " + line
 }
 
 func stripComponents(name string, count int) (string, bool) {
@@ -468,7 +464,7 @@ func (x *extractor) createOne(ctx context.Context, dest, target string, hdr *tar
 					// Tolerated even in strict mode: nothing could have been
 					// preserved here on this destination.
 					x.warn(key, message)
-					x.degraded["xattr."+ns]++
+					x.note("xattr."+ns, fmt.Errorf("setxattr %q %s: %w", target, rest, err))
 					stats.XattrsSkipped++
 					continue
 				}

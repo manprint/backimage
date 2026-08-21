@@ -454,7 +454,59 @@ func (b *Backup) StreamTar(ctx context.Context, dst io.Writer, verify bool) erro
 		}
 		b.reportProgress(fmt.Sprintf("restore: chunk %d/%d: controllato e scritto", i+1, len(b.Chunks.Chunks)))
 	}
+	b.reportIntegrity(len(b.Chunks.Chunks), len(b.Chunks.Chunks), verify)
 	return nil
+}
+
+// reportIntegrity states, as audit evidence, how much of the backup was read
+// back and whether every chunk matched the digest recorded when it was made.
+func (b *Backup) reportIntegrity(used, total int, verified bool) {
+	if verified {
+		b.reportProgress(fmt.Sprintf(
+			"restore: integrità: %d/%d chunk letti e verificati (dimensione e digest plaintext coincidono con quelli registrati nel backup)",
+			used, total))
+		return
+	}
+	b.reportProgress(fmt.Sprintf(
+		"restore: integrità: %d/%d chunk letti, digest plaintext NON verificati (--no-verify attivo su un backup non cifrato)",
+		used, total))
+}
+
+// plainChunkBytes decrypts, decompresses and (when asked) verifies one chunk,
+// returning its plaintext. It is the single place where a chunk turns into
+// bytes, shared by the selective and the partial restore.
+func (b *Backup) plainChunkBytes(ctx context.Context, chunkIndex int, verify bool) ([]byte, error) {
+	b.reportProgress(fmt.Sprintf("restore: chunk %d/%d: lettura blob, decrittazione e preparazione decompressione",
+		chunkIndex+1, len(b.Chunks.Chunks)))
+	r, err := b.PlainChunk(ctx, chunkIndex)
+	if err != nil {
+		return nil, err
+	}
+	data, err := io.ReadAll(r)
+	closeErr := r.Close()
+	if err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		clear(data)
+		return nil, err
+	}
+	c := b.Chunks.Chunks[chunkIndex]
+	if int64(len(data)) != c.Pb {
+		clear(data)
+		return nil, fmt.Errorf("%w: chunk %d plaintext size mismatch", crypt.ErrIntegrity, chunkIndex)
+	}
+	if verify {
+		b.reportProgress(fmt.Sprintf("restore: chunk %d/%d: verifica digest", chunkIndex+1, len(b.Chunks.Chunks)))
+		h := sha256.Sum256(data)
+		if !digestMatches(c.Ps, h[:]) {
+			clear(data)
+			return nil, fmt.Errorf("%w: chunk %d plaintext digest mismatch", crypt.ErrIntegrity, chunkIndex)
+		}
+	}
+	b.reportProgress(fmt.Sprintf("restore: chunk %d/%d: controllato e pronto per la selezione",
+		chunkIndex+1, len(b.Chunks.Chunks)))
+	return data, nil
 }
 
 type byteRange struct{ start, end int64 }
@@ -515,41 +567,19 @@ func (b *Backup) StreamSelectedTar(ctx context.Context, idx *index.Index, select
 	}
 
 	cacheIndex := -1
+	used := 0
 	var cache []byte
 	defer clear(cache)
 	load := func(chunkIndex int) ([]byte, error) {
 		if chunkIndex == cacheIndex {
 			return cache, nil
 		}
+		used++
 		clear(cache)
-		b.reportProgress(fmt.Sprintf("restore: chunk %d/%d: lettura blob, decrittazione e preparazione decompressione", chunkIndex+1, len(b.Chunks.Chunks)))
-		r, err := b.PlainChunk(ctx, chunkIndex)
+		data, err := b.plainChunkBytes(ctx, chunkIndex, verify)
 		if err != nil {
 			return nil, err
 		}
-		data, err := io.ReadAll(r)
-		closeErr := r.Close()
-		if err == nil {
-			err = closeErr
-		}
-		if err != nil {
-			clear(data)
-			return nil, err
-		}
-		c := b.Chunks.Chunks[chunkIndex]
-		if int64(len(data)) != c.Pb {
-			clear(data)
-			return nil, fmt.Errorf("%w: chunk %d plaintext size mismatch", crypt.ErrIntegrity, chunkIndex)
-		}
-		if verify {
-			b.reportProgress(fmt.Sprintf("restore: chunk %d/%d: verifica digest", chunkIndex+1, len(b.Chunks.Chunks)))
-			h := sha256.Sum256(data)
-			if !digestMatches(c.Ps, h[:]) {
-				clear(data)
-				return nil, fmt.Errorf("%w: chunk %d plaintext digest mismatch", crypt.ErrIntegrity, chunkIndex)
-			}
-		}
-		b.reportProgress(fmt.Sprintf("restore: chunk %d/%d: controllato e pronto per la selezione", chunkIndex+1, len(b.Chunks.Chunks)))
 		cacheIndex, cache = chunkIndex, data
 		return cache, nil
 	}
@@ -578,8 +608,11 @@ func (b *Backup) StreamSelectedTar(ctx context.Context, idx *index.Index, select
 			off += n
 		}
 	}
-	_, err := dst.Write(make([]byte, 1024))
-	return err
+	if _, err := dst.Write(make([]byte, 1024)); err != nil {
+		return err
+	}
+	b.reportIntegrity(used, len(b.Chunks.Chunks), verify)
+	return nil
 }
 
 // VerifyResult summarises an integrity pass.

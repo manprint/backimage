@@ -594,8 +594,19 @@ func TestExtractHeterogeneousTreeNeverFails(t *testing.T) {
 	if len(stats.Warnings) == 0 {
 		t.Error("degradations must be reported as warnings")
 	}
-	if s := summarize(stats); !strings.Contains(s, "ATTENZIONE") {
-		t.Errorf("summary must be loud when entries are missing: %q", s)
+	// The audit evidence must name the verdict, every degraded class and a
+	// real example for each: this is what an operator reads after a restore.
+	lines := strings.Join(stats.FidelityLines(), "\n")
+	if !strings.Contains(lines, "esito NON 1:1") {
+		t.Errorf("verdict missing from the evidence: %q", lines)
+	}
+	for _, want := range []string{"differenza owner", "differenza xattr.trusted", "entry NON estratte"} {
+		if !strings.Contains(lines, want) {
+			t.Errorf("evidence missing %q: %q", want, lines)
+		}
+	}
+	if !strings.Contains(lines, "operation not permitted") {
+		t.Errorf("evidence must carry a real failure as example: %q", lines)
 	}
 }
 

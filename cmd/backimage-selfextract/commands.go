@@ -8,7 +8,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -185,6 +184,7 @@ func cmdExtract(ctx context.Context, args []string) error {
 	noOwner := fs.Bool("no-preserve-owner", false, "do not restore owner")
 	noXattrs := fs.Bool("no-preserve-xattrs", false, "do not restore extended attributes")
 	strict := fs.Bool("strict", false, "abort the extraction when a metadata operation is refused instead of degrading it")
+	keepGoing := fs.Bool("continue", false, "do not stop at the first damaged chunk: extract every entry that verifies and report the ones lost")
 	removeLocalImage := fs.Bool("remove-local-image", false, "remove the local Docker image after a successful extraction")
 	overwrite := fs.Bool("overwrite", false, "replace existing files")
 	strip := fs.Int("strip-components", 0, "remove leading path components")
@@ -229,24 +229,36 @@ func cmdExtract(ctx context.Context, args []string) error {
 			return usageErrorf("%v", err)
 		}
 	}
+	if *keepGoing && idx == nil {
+		// The partial recovery maps damaged chunks to entries, so it needs the
+		// file index even without filters.
+		idx, err = b.Index(ctx)
+		if err != nil {
+			return err
+		}
+	}
 	pr, pw := io.Pipe()
 	streamErr := make(chan error, 1)
+	var partial recovery.PartialReport
 	go func() {
 		var err error
-		if idx != nil {
+		switch {
+		case *keepGoing:
+			partial, err = b.StreamTarPartial(ctx, idx, pw, true)
+		case selected != nil:
 			err = b.StreamSelectedTar(ctx, idx, selected, pw, true)
-		} else {
+		default:
 			err = b.StreamTar(ctx, pw, true)
 		}
 		_ = pw.CloseWithError(err)
 		streamErr <- err
 	}()
 	xIncludes, xExcludes := []string(includes), []string(excludes)
-	if idx != nil {
+	if selected != nil {
 		xIncludes, xExcludes = nil, nil // the tar stream is already filtered
 	}
 	total := b.Manifest.Totals.BytesRaw
-	if idx != nil {
+	if selected != nil {
 		total = selectedBytes(selected)
 	}
 	report := func(done int64) {
@@ -287,20 +299,22 @@ func cmdExtract(ctx context.Context, args []string) error {
 		return json.NewEncoder(stdout).Encode(stats)
 	}
 	fmt.Fprintf(stdout, "estratti: %d file, %d directory, %d byte\n", stats.Files, stats.Dirs, stats.BytesRaw)
-	for _, class := range degradedClasses(stats.Degraded) {
-		fmt.Fprintf(stdout, "degradazioni %s: %d\n", class, stats.Degraded[class]) //nolint:misspell // Messaggio CLI italiano.
+	// Audit evidence on stdout as well as in the log: the verdict, and every
+	// difference with its count and a real example.
+	for _, line := range stats.FidelityLines() {
+		fmt.Fprintln(stdout, line)
+	}
+	if *keepGoing {
+		for _, line := range partial.Summary() {
+			progress.WriteLine(stderr, "restore: "+line)
+			fmt.Fprintln(stdout, line)
+		}
+		if partial.Skipped > 0 {
+			return withCode(exitIntegrity, fmt.Errorf(
+				"recupero parziale: %d entry non recuperate dai chunk danneggiati %v", partial.Skipped, partial.BadChunks))
+		}
 	}
 	return nil
-}
-
-// degradedClasses returns the degradation classes in a stable order.
-func degradedClasses(degraded map[string]int64) []string {
-	classes := make([]string, 0, len(degraded))
-	for class := range degraded {
-		classes = append(classes, class)
-	}
-	sort.Strings(classes)
-	return classes
 }
 
 func selectedBytes(entries []index.FileEntry) int64 {

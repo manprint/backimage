@@ -200,6 +200,7 @@ func newRestoreCommand() *cobra.Command {
 	f.Bool("no-preserve-owner", false, "restore files as the current user instead of the archived owner")
 	f.Bool("no-preserve-xattrs", false, "do not restore extended attributes")
 	f.Bool("strict", false, "abort the extraction when any metadata operation is refused, instead of degrading and reporting it")
+	f.Bool("continue", false, "do not stop at the first damaged chunk: restore every entry that verifies and report the ones lost")
 	f.Bool("remove-local-image", false, "delete the pulled Docker image once the restore succeeded")
 	f.Bool("overwrite", false, "allow writing over an existing tar file or a non-empty destination")
 	f.Bool("no-verify", false, "skip the plaintext chunk digest check (faster, unsafe)")
@@ -262,18 +263,33 @@ func runRestore(cmd *cobra.Command, args []string) error {
 			return usageErrorf("nessuna voce selezionata su %d; usa `backimage ls %s`", len(idx.Entries), refText)
 		}
 	}
+	keepGoing := getFlagBool(cmd, "continue")
+	if keepGoing && idx == nil {
+		// The partial recovery works from the file index: it is what maps a
+		// damaged chunk to the entries that live in it.
+		idx, err = b.Index(ctx)
+		if err != nil {
+			return err
+		}
+	}
+	var partial recovery.PartialReport
 	stream := func(w io.Writer) error {
-		if idx != nil {
+		if keepGoing {
+			var perr error
+			partial, perr = b.StreamTarPartial(ctx, idx, w, !getFlagBool(cmd, "no-verify"))
+			return perr
+		}
+		if selected != nil {
 			return b.StreamSelectedTar(ctx, idx, selected, w, !getFlagBool(cmd, "no-verify"))
 		}
 		return b.StreamTar(ctx, w, !getFlagBool(cmd, "no-verify"))
 	}
 	if getFlagBool(cmd, "extract") {
 		total := b.Manifest.Totals.BytesRaw
-		if idx != nil {
+		if selected != nil {
 			total = selectedBytes(selected)
 		}
-		err = restoreExtract(cmd, stream, idx != nil, restoreProgress(cmd, total))
+		err = restoreExtract(cmd, stream, selected != nil, restoreProgress(cmd, total))
 	} else {
 		log("restore: ricostruzione tar in corso")
 		err = restoreTar(cmd, refText, stream)
@@ -286,6 +302,17 @@ func runRestore(cmd *cobra.Command, args []string) error {
 			return &Error{Kind: KindIntegrity, Msg: "verifica restore fallita", Err: err}
 		}
 		return err
+	}
+	// Audit evidence of a partial recovery, and a non-zero exit: data is
+	// missing, however much was salvaged.
+	if keepGoing {
+		for _, line := range partial.Summary() {
+			log("restore: " + line)
+		}
+		if partial.Skipped > 0 {
+			return &Error{Kind: KindIntegrity, Msg: fmt.Sprintf(
+				"recupero parziale: %d entry non recuperate dai chunk danneggiati %v", partial.Skipped, partial.BadChunks)}
+		}
 	}
 	imageRemoved := false
 	if getFlagBool(cmd, "remove-local-image") {

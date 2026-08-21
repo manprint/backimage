@@ -2,7 +2,9 @@ package archive
 
 import (
 	"context"
+	"fmt"
 	"io"
+	"sort"
 )
 
 // Options controls archiving behaviour.
@@ -21,10 +23,56 @@ type Options struct {
 type Stats struct {
 	Files, Dirs, Symlinks, Hardlinks, Devices, Fifos, Skipped int64
 	BytesRaw                                                  int64
-	XattrsSkipped                                             int64            // extended attributes dropped during a restore
-	Degraded                                                  map[string]int64 // restore only: operations dropped, by class ("owner", "mode", "times", "xattr.trusted", "hardlink", "object")
-	Errors                                                    []error          // populated only when Strict is false
-	Warnings                                                  []string         // non-fatal degradations, one line per distinct cause
+	XattrsSkipped                                             int64             // extended attributes dropped during a restore
+	Degraded                                                  map[string]int64  // restore only: operations dropped, by class ("owner", "mode", "times", "xattr.trusted", "hardlink", "object")
+	DegradedExamples                                          map[string]string // one real failure per degraded class, as evidence
+	Errors                                                    []error           // populated only when Strict is false
+	Warnings                                                  []string          // non-fatal degradations, one line per distinct cause
+}
+
+// FidelityLines renders the audit evidence of a restore: either the single
+// line that states the extraction was 1:1, or the verdict followed by one line
+// per difference, with its count and a real example. The caller logs them
+// verbatim; this is the only place that decides what "1:1" means.
+func (s Stats) FidelityLines() []string {
+	objects := s.Files + s.Dirs + s.Symlinks + s.Hardlinks + s.Devices + s.Fifos
+	if len(s.Degraded) == 0 && s.Skipped == 0 {
+		// Scoped to what the extractor received: a partial recovery upstream
+		// may have dropped entries before they ever reached this stream, and
+		// only its own report can account for those.
+		return []string{fmt.Sprintf(
+			"esito 1:1 sulle entry ricevute: %d oggetti ripristinati (%d file, %d directory, %d symlink, %d hardlink, %d device, %d fifo); "+
+				"contenuti, permessi, owner, timestamp e attributi estesi applicati integralmente; nessuna differenza",
+			objects, s.Files, s.Dirs, s.Symlinks, s.Hardlinks, s.Devices, s.Fifos)}
+	}
+	lines := []string{fmt.Sprintf(
+		"esito NON 1:1 sulle entry ricevute: %d oggetti ripristinati, %d entry non create, %d differenze di metadati per classe:",
+		objects, s.Skipped, totalDegraded(s.Degraded))}
+	classes := make([]string, 0, len(s.Degraded))
+	for class := range s.Degraded {
+		classes = append(classes, class)
+	}
+	sort.Strings(classes)
+	for _, class := range classes {
+		line := fmt.Sprintf("  differenza %s: %d", class, s.Degraded[class])
+		if example := s.DegradedExamples[class]; example != "" {
+			line += " (es. " + example + ")"
+		}
+		lines = append(lines, line)
+	}
+	if s.Skipped > 0 {
+		lines = append(lines, fmt.Sprintf(
+			"  %d entry NON estratte: elenco completo in Stats.Errors (--json)", s.Skipped))
+	}
+	return lines
+}
+
+func totalDegraded(degraded map[string]int64) int64 {
+	var total int64
+	for _, n := range degraded {
+		total += n
+	}
+	return total
 }
 
 // Writer streams a deterministic PAX tar of the given roots.
