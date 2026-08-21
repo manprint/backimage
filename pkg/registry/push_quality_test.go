@@ -55,14 +55,14 @@ func TestPusherHTTPStatusBranches(t *testing.T) {
 	root := strings.TrimSuffix(p.base, "/v2/me/repo")
 	for path, want := range map[string]bool{"/ok": true, "/accept": true, "/missing": false} {
 		p.base = root + path + "/x"
-		got, err := p.blobExists("sha256:x")
+		got, _, err := p.blobExists("sha256:x")
 		if err != nil || got != want {
 			t.Fatalf("blobExists(%s) = %v, %v", path, got, err)
 		}
 	}
 	for _, path := range []string{"/unauth", "/error"} {
 		p.base = root + path + "/x"
-		if _, err := p.blobExists("sha256:x"); err == nil {
+		if _, _, err := p.blobExists("sha256:x"); err == nil {
 			t.Fatalf("blobExists(%s) should fail", path)
 		}
 	}

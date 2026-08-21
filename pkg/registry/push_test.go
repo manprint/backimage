@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -65,6 +66,13 @@ type fakeRegistry struct {
 	patchTE      []string // Transfer-Encoding of every PATCH received
 	maxPatchBody int      // when > 0, larger PATCH bodies answer 413
 	unauthPatch  int      // first N PATCH answer 401 to exercise the replay
+
+	// Post-publish sabotage, to exercise the read-back verification: once a
+	// manifest has been PUT, the registry starts lying about what it holds.
+	published          bool
+	dropAfterPublish   bool // HEAD of a blob answers 404
+	resizeAfterPublish bool // HEAD of a blob answers a wrong Content-Length
+	tamperManifest     bool // GET of a manifest answers a mutated body
 }
 
 func newFakeRegistry() *fakeRegistry {
@@ -173,16 +181,54 @@ func (f *fakeRegistry) server() *httptest.Server {
 			digest := rest[strings.LastIndex(rest, "blobs/")+6:]
 			f.mu.Lock()
 			_, ok := f.blobs[digest]
+			if f.published && f.dropAfterPublish {
+				ok = false
+			}
 			f.mu.Unlock()
 			if ok {
+				f.mu.Lock()
+				size := len(f.blobs[digest])
+				if f.published && f.resizeAfterPublish {
+					size++
+				}
+				f.mu.Unlock()
+				w.Header().Set("Content-Length", strconv.Itoa(size))
+				w.Header().Set("Docker-Content-Digest", digest)
 				w.WriteHeader(http.StatusOK)
 			} else {
 				w.WriteHeader(http.StatusNotFound)
 			}
+		// Read-back of a published manifest: the post-push verification
+		// fetches every manifest by digest and rehashes the body.
+		case strings.Contains(rest, "manifests/") && (r.Method == http.MethodGet || r.Method == http.MethodHead):
+			f.mu.Lock()
+			stored, ok := f.manifests[rest]
+			f.mu.Unlock()
+			if !ok {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			cut := strings.Index(stored, ":")
+			mediaType, body := stored[:cut], stored[cut+1:]
+			f.mu.Lock()
+			tamper := f.published && f.tamperManifest
+			f.mu.Unlock()
+			if tamper && r.Method == http.MethodGet {
+				body += " "
+			}
+			sum := sha256.Sum256([]byte(body))
+			w.Header().Set("Content-Type", mediaType)
+			w.Header().Set("Docker-Content-Digest", "sha256:"+hex.EncodeToString(sum[:]))
+			if r.Method == http.MethodHead {
+				w.WriteHeader(http.StatusOK)
+				return
+			}
+			w.Write([]byte(body))
 		case strings.Contains(rest, "manifests/") && r.Method == http.MethodPut:
 			body, _ := io.ReadAll(r.Body)
 			f.mu.Lock()
 			f.manifests[strings.TrimPrefix(rest, "manifests/")] = r.Header.Get("Content-Type") + ":" + string(body)
+			f.published = true
 			f.mu.Unlock()
 			w.WriteHeader(http.StatusCreated)
 		case rest == "token":

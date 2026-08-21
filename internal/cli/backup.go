@@ -108,9 +108,14 @@ func recoveryInstructions(ref string, encrypted, runnable bool) string {
 	fmt.Fprint(&out, "sono applicabili solo come root e con CAP_SYS_ADMIN. Senza sudo / --privileged\n")
 	fmt.Fprint(&out, "l'estrazione riesce comunque, ma quei metadati vengono degradati e il riepilogo\n") //nolint:misspell // Messaggio CLI italiano.
 	fmt.Fprint(&out, "finale del restore lo dichiara per classe.\n")
+	fmt.Fprint(&out, "\nVerifiche del ripristino:\n")
+	fmt.Fprintf(&out, "  - Prima di estrarre, rileggi e ricontrolla l'immagine pubblicata:\n    %sbackimage verify %s --continue%s\n", appPrefix, ref, appPassphrase)
+	fmt.Fprint(&out, "    Ricalcola il digest di ogni chunk (traffico pari al backup); --quick controlla solo i metadati.\n")  //nolint:misspell // Messaggio CLI italiano.
+	fmt.Fprint(&out, "  - L'estrazione verifica da sé il digest in chiaro di ogni chunk e dichiara l'esito: cerca le righe\n") //nolint:misspell // Messaggio CLI italiano.
+	fmt.Fprint(&out, "    \"integrità: N/N chunk letti e verificati\" e \"esito 1:1\". Non aggiungere --no-verify.\n")         //nolint:misspell // Messaggio CLI italiano.
+	fmt.Fprint(&out, "  - Aggiungi --strict per pretendere la fedeltà totale: la prima operazione di metadati rifiutata\n")    //nolint:misspell // Messaggio CLI italiano.
+	fmt.Fprint(&out, "    ferma l'estrazione invece di essere degradata, conteggiata e riportata fra le differenze.\n")        //nolint:misspell // Messaggio CLI italiano.
 	fmt.Fprint(&out, "\nTips:\n")
-	fmt.Fprint(&out, "  - Per provare che il ripristino è fedele al 100%, aggiungi --strict: si ferma al primo metadato\n")
-	fmt.Fprint(&out, "    non applicabile invece di degradarlo.\n")                                                                       //nolint:misspell // Messaggio CLI italiano.
 	fmt.Fprint(&out, "  - Se non vuoi ripristinare ownership e gruppi, aggiungi --no-preserve-owner al comando backimage o a extract.\n") //nolint:misspell // Messaggio CLI italiano.
 	fmt.Fprint(&out, "  - Per limitare la CPU, aggiungi --cpus N al comando backimage o a extract.\n")                                    //nolint:misspell // Messaggio CLI italiano.
 	fmt.Fprint(&out, "  - Per estrarre solo una parte, aggiungi --include GLOB e/o --exclude GLOB.\n")
@@ -167,6 +172,7 @@ func newBackupCommand() *cobra.Command {
 	f.Bool("one-file-system", false, "do not cross mount points")
 	f.Bool("numeric-owner", false, "do not resolve user/group names")
 	f.Bool("allow-degraded", false, "continue despite unreadable files")
+	f.String("verify-after-push", "quick", "read back the published image: quick (blob and manifest digests, no download), full (re-download every layer and recompute each stored digest), off")
 	f.Int("jobs", 3, "number of concurrent blob uploads")
 	f.String("upload-chunk-size", "0", "split each blob upload into HTTP chunks of this size, e.g. 32MiB; 0 sends one request per blob (fastest, use a value only for a registry that refuses large bodies)")
 	f.StringSlice("platform", []string{"linux/amd64", "linux/arm64"}, "self-extract platforms (repeatable)")
@@ -347,6 +353,10 @@ func runBackup(cmd *cobra.Command, args []string) error {
 	oneFS := getFlagBool(cmd, "one-file-system")
 	numOwner := getFlagBool(cmd, "numeric-owner")
 	degraded := getFlagBool(cmd, "allow-degraded")
+	verifyAfterPush := getFlagString(cmd, "verify-after-push")
+	if !backup.ValidVerifyAfterPush(verifyAfterPush) {
+		return usageErrorf("--verify-after-push: valori ammessi quick, full, off")
+	}
 	noMeta := getFlagBool(cmd, "no-metadata")
 	dryRun := getFlagBool(cmd, "dry-run")
 	jobs := getFlagInt(cmd, "jobs")
@@ -374,6 +384,7 @@ func runBackup(cmd *cobra.Command, args []string) error {
 		OneFileSystem:   oneFS,
 		NumericOwner:    numOwner,
 		AllowDegraded:   degraded,
+		VerifyAfterPush: verifyAfterPush,
 		NoMetadata:      noMeta,
 		Runnable:        runnable,
 		Platforms:       platforms,

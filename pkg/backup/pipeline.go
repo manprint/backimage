@@ -88,6 +88,13 @@ type Config struct {
 	// platforms are built without an executable (Runnable must be false).
 	SelfExtract func(goarch string) ([]byte, error)
 
+	// VerifyAfterPush is what gets read back once the image is published:
+	// "quick" (default) proves presence, size and digest of every blob and
+	// manifest without downloading data; "full" re-downloads every data layer
+	// and recomputes the stored digest of each chunk in streaming, writing
+	// nothing to disk; "off" publishes without reading anything back.
+	VerifyAfterPush string
+
 	Progress func(string) // optional diagnostics
 	Created  string       // RFC3339; empty = wall clock
 }
@@ -1157,6 +1164,12 @@ func (b *builder) finalize() error {
 	}
 
 	b.chunkTable = &index.ChunkTable{SchemaVersion: index.SchemaVersion, Chunks: b.rows}
+	// Audit evidence of what the backup itself computed: two digests per chunk
+	// (plaintext and stored) plus one digest per layer are what every later
+	// verification compares against.
+	b.report(fmt.Sprintf(
+		"integrità: registrati %d chunk con digest in chiaro e digest memorizzato, su %d layer dati; %s",
+		len(b.rows), len(b.layers), sealedNote(b.cfg.Encrypt)))
 
 	// An encrypted backup publishes no description of its plaintext: source
 	// paths, host, totals and the per-chunk plaintext digests and sizes move
@@ -1420,6 +1433,10 @@ func (b *builder) pushRegistry(ctx context.Context, idx v1.ImageIndex, images ma
 		Jobs:       b.cfg.Jobs,
 		ChunkSize:  b.cfg.UploadChunkSize,
 		MaxRetries: 5,
+		Verify:     registry.VerifyQuick,
+	}
+	if b.cfg.VerifyAfterPush == VerifyPushOff {
+		opts.Verify = registry.VerifyOff
 	}
 	if b.cfg.Resume {
 		opts.Checkpoint = registry.NewCheckpointStore(b.cfg.CheckpointDir)
@@ -1464,6 +1481,23 @@ func (b *builder) pushRegistry(ctx context.Context, idx v1.ImageIndex, images ma
 				if b.cfg.Progress != nil {
 					b.cfg.Progress("upload: manifest e indice OCI pubblicati")
 				}
+			case "size-mismatch":
+				// The registry already had a blob with this digest but a
+				// different length: it is re-uploaded rather than trusted.
+				if b.cfg.Progress != nil {
+					b.cfg.Progress(fmt.Sprintf("upload: blob %s presente con dimensione diversa: reinvio", pr.Blob))
+				}
+			case "verifying":
+				if b.cfg.Progress != nil {
+					b.cfg.Progress("push: verifica rapida: rilettura di blob e manifest dal registry")
+				}
+			case "verified":
+				// Audit evidence: exactly what was re-read from the registry.
+				if b.cfg.Progress != nil {
+					b.cfg.Progress(fmt.Sprintf(
+						"push: verifica rapida superata: %d blob confermati (presenza, dimensione, digest) e %d manifest riletti e ricalcolati; il tag risolve al digest pubblicato",
+						pr.Completed, pr.Total))
+				}
 			default:
 				completedBlobs++
 				if pr.Skipped || pr.Event == "skipped" {
@@ -1503,7 +1537,79 @@ func (b *builder) pushRegistry(ctx context.Context, idx v1.ImageIndex, images ma
 	err = registry.Push(ctx, ref, images, idx, kc, opts)
 	close(pch)
 	<-done
-	return err
+	if err != nil {
+		return err
+	}
+	return b.verifyPushedFull(ctx, ref, kc)
+}
+
+// Post-push read-back levels.
+const (
+	VerifyPushQuick = "quick"
+	VerifyPushFull  = "full"
+	VerifyPushOff   = "off"
+)
+
+// ValidVerifyAfterPush reports whether level names a known read-back level.
+func ValidVerifyAfterPush(level string) bool {
+	switch level {
+	case "", VerifyPushQuick, VerifyPushFull, VerifyPushOff:
+		return true
+	}
+	return false
+}
+
+// verifyPushedFull re-downloads what was just published and recomputes every
+// stored digest. The quick level lives inside the push itself (it reuses the
+// upload token); this one needs the chunk table, so it opens the image again
+// as a reader would. Nothing is written to disk: the cache is disabled and
+// each data layer is verified in one streaming pass.
+func (b *builder) verifyPushedFull(ctx context.Context, ref name.Reference, kc registry.Keychain) error {
+	if b.cfg.VerifyAfterPush != VerifyPushFull {
+		return nil
+	}
+	b.report("push: verifica completa: rilettura in streaming dei layer dal registry (nessun file temporaneo)")
+	src, err := restore.FromRegistry(ctx, ref, kc, restore.SourceOptions{
+		Platform: firstPlatform(b.cfg.Platforms),
+		// Negative disables the on-disk layer cache: the verification is a
+		// single sequential pass, so caching would only cost disk.
+		CacheSize: -1,
+	})
+	if err != nil {
+		return fmt.Errorf("verifica completa: apertura sorgente: %w", err)
+	}
+	defer src.Close()
+	report, err := restore.VerifyStoredSource(ctx, src, false, b.report)
+	if err != nil {
+		return fmt.Errorf("verifica completa: %w", err)
+	}
+	b.report(fmt.Sprintf(
+		"push: verifica completa superata: %d layer riletti, digest compresso coincidente; %d/%d chunk con digest memorizzato coincidente; %.1f MiB riletti dal registry", //nolint:misspell // Messaggio in italiano.
+		report.Layers, report.Chunks, len(b.chunkTable.Chunks), float64(report.Bytes)/(1<<20)))
+	return nil
+}
+
+// sealedNote explains where the plaintext digests live, since on an encrypted
+// backup they are not readable without the key.
+func sealedNote(encrypted bool) string {
+	if encrypted {
+		return "i digest in chiaro sono sigillati nel blob privato (AES-256-GCM), non leggibili senza la chiave"
+	}
+	return "i digest sono pubblici (backup non cifrato)"
+}
+
+// report forwards one diagnostic line when the caller asked for progress.
+func (b *builder) report(message string) {
+	if b.cfg.Progress != nil {
+		b.cfg.Progress(message)
+	}
+}
+
+func firstPlatform(platforms []string) string {
+	if len(platforms) > 0 {
+		return platforms[0]
+	}
+	return "linux/amd64"
 }
 
 func checkpointID(cfg Config) string {

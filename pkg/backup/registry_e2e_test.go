@@ -3,6 +3,8 @@ package backup
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -11,6 +13,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -98,11 +101,27 @@ func (m *memReg) server() *httptest.Server {
 			w.Header().Set("Location", "/v2/"+rest+"uploads/"+id)
 			w.WriteHeader(http.StatusAccepted)
 		case strings.Contains(rest, "blobs/") && r.Method == http.MethodHead:
-			if _, ok := m.blobs[rest[strings.LastIndex(rest, "blobs/")+len("blobs/"):]]; ok {
+			digest := rest[strings.LastIndex(rest, "blobs/")+len("blobs/"):]
+			if blob, ok := m.blobs[digest]; ok {
+				w.Header().Set("Content-Length", strconv.Itoa(len(blob)))
+				w.Header().Set("Docker-Content-Digest", digest)
 				w.WriteHeader(http.StatusOK)
 			} else {
 				w.WriteHeader(http.StatusNotFound)
 			}
+		// The post-push verification resolves the tag with a HEAD.
+		case strings.Contains(rest, "manifests/") && r.Method == http.MethodHead:
+			ident := rest[strings.LastIndex(rest, "manifests/")+len("manifests/"):]
+			stored, ok := m.manifests[ident]
+			if !ok {
+				w.WriteHeader(http.StatusNotFound)
+				return
+			}
+			parts := strings.SplitN(stored, "|", 2)
+			sum := sha256.Sum256([]byte(parts[1]))
+			w.Header().Set("Content-Type", parts[0])
+			w.Header().Set("Docker-Content-Digest", "sha256:"+hex.EncodeToString(sum[:]))
+			w.WriteHeader(http.StatusOK)
 		case strings.Contains(rest, "manifests/") && r.Method == http.MethodPut:
 			b, _ := io.ReadAll(r.Body)
 			m.manifests[rest[strings.LastIndex(rest, "manifests/")+len("manifests/"):]] = r.Header.Get("Content-Type") + "|" + string(b)

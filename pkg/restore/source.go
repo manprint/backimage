@@ -27,8 +27,6 @@ import (
 	"github.com/manprint/backimage/pkg/registry"
 )
 
-const defaultCacheBytes int64 = 2 << 30
-
 // metadataNames is the closed set of files read from the metadata layer.
 var metadataNames = map[string]bool{
 	"manifest.json":   true,
@@ -174,8 +172,11 @@ func newImageSource(img v1.Image, opts SourceOptions) (*imageSource, error) {
 	if img == nil {
 		return nil, errors.New("nil OCI image")
 	}
+	// A negative size means "never keep a layer on disk"; the CLI documents 0
+	// as the way to ask for that, so map it here instead of silently falling
+	// back to the default cache.
 	if opts.CacheSize == 0 {
-		opts.CacheSize = defaultCacheBytes
+		opts.CacheSize = -1
 	}
 	if opts.CacheDir == "" {
 		base, err := os.UserCacheDir()

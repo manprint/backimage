@@ -47,6 +47,14 @@ func NewBlobClient(ctx context.Context, ref name.Reference, provider Provider, c
 }
 
 func (c *BlobClient) Exists(digest string) (bool, error) {
+	ok, _, err := c.p.blobExists(digest)
+	return ok, err
+}
+
+// ExistsWithSize also reports the size the registry attributes to the blob
+// (-1 when the answer carries no Content-Length), so a caller can refuse a
+// stored blob whose size disagrees with what it means to publish.
+func (c *BlobClient) ExistsWithSize(digest string) (bool, int64, error) {
 	return c.p.blobExists(digest)
 }
 

@@ -3,6 +3,8 @@ package registry
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -49,11 +51,31 @@ type PushOptions struct {
 	// switches the running push over on its own.
 	ChunkSize  int64
 	MaxRetries int // per blob attempt budget, default 5
+	// Verify decides what is re-read from the registry once everything has
+	// been published. VerifyQuick, the default, proves presence, size and
+	// digest of every blob and manifest without downloading any data.
+	Verify     VerifyLevel
 	Checkpoint CheckpointStore
 	ID         string // deterministic checkpoint id
 	Manifest   []byte // manifest.json bytes carried by the checkpoint
 	Progress   chan<- Progress
 }
+
+// VerifyLevel selects the post-push read-back performed by Push.
+type VerifyLevel int
+
+const (
+	// VerifyQuick re-reads only metadata: one HEAD per blob (presence, size
+	// and, when the registry sends it, Docker-Content-Digest) plus a GET of
+	// every manifest whose body is rehashed, and the tag resolution. Costs a
+	// few KB and no disk. It is the default because it closes the two holes a
+	// push otherwise leaves open: a blob skipped because the registry said it
+	// already existed, and a blob skipped because a checkpoint said so — in
+	// both cases nothing had ever confirmed what the registry really holds.
+	VerifyQuick VerifyLevel = iota
+	// VerifyOff publishes without reading anything back.
+	VerifyOff
+)
 
 // blobTask is one blob to make present on the registry.
 type blobTask struct {
@@ -374,6 +396,16 @@ func (p *pusher) run() error {
 		return err
 	}
 	p.reportPhase("published")
+	if p.opts.Verify != VerifyOff {
+		p.reportPhase("verifying")
+		blobs, manifests, err := p.verifyPushed()
+		if err != nil {
+			return err
+		}
+		// Completed/Total carry the evidence the caller logs: how many blobs
+		// and manifests were actually re-read, not just that a phase ran.
+		p.reportCounts("verified", int64(blobs), int64(manifests))
+	}
 	if p.opts.Checkpoint != nil && p.opts.ID != "" {
 		if derr := p.opts.Checkpoint.Delete(p.opts.ID); derr != nil {
 			_ = derr // failing to clean the checkpoint is not fatal
@@ -432,6 +464,18 @@ func (p *pusher) reportEvent(t blobTask, event string, skipped, fromCheckpoint b
 	}
 }
 
+// reportCounts emits a phase event carrying two tallies, used as the audit
+// evidence of the post-push verification.
+func (p *pusher) reportCounts(event string, completed, total int64) {
+	if p.opts.Progress == nil {
+		return
+	}
+	select {
+	case p.opts.Progress <- Progress{Event: event, Completed: completed, Total: total}:
+	case <-p.ctx.Done():
+	}
+}
+
 func (p *pusher) reportPhase(event string) {
 	if p.opts.Progress == nil {
 		return
@@ -448,9 +492,17 @@ func (p *pusher) executeBlob(t blobTask) error {
 		return nil
 	}
 	p.reportEvent(t, "checking", false, false)
-	ok, err := p.blobExists(t.digest)
+	ok, size, err := p.blobExists(t.digest)
 	if err != nil {
 		return fmt.Errorf("checking blob %s: %w", t.digest, err)
+	}
+	// A blob whose stored size disagrees with ours is not the blob we mean to
+	// publish, whatever its digest claims: re-upload instead of trusting it.
+	// Compared only when the registry actually reported a length: some
+	// answer a HEAD with Content-Length: 0, and no blob we publish is empty.
+	if ok && size > 0 && size != t.size {
+		p.reportEvent(t, "size-mismatch", false, false)
+		ok = false
 	}
 	if ok {
 		if err := p.markDone(t.digest); err != nil {
@@ -470,27 +522,37 @@ func (p *pusher) executeBlob(t blobTask) error {
 	return nil
 }
 
-func (p *pusher) blobExists(digest string) (bool, error) {
+// blobExists reports whether the registry already holds digest, and the size
+// it reports for it (-1 when the answer carries no Content-Length).
+func (p *pusher) blobExists(digest string) (bool, int64, error) {
 	req, err := http.NewRequestWithContext(p.ctx, http.MethodHead, p.base+"/blobs/"+digest, nil)
 	if err != nil {
-		return false, err
+		return false, -1, err
 	}
 	resp, err := p.client.Do(req)
 	if err != nil {
-		return false, err
+		return false, -1, err
 	}
 	defer resp.Body.Close()
 	_, cnl := io.Copy(io.Discard, resp.Body)
 	_ = cnl
 	switch resp.StatusCode {
 	case http.StatusOK, http.StatusAccepted:
-		return true, nil
+		size := int64(-1)
+		if resp.ContentLength >= 0 {
+			size = resp.ContentLength
+		}
+		if got := resp.Header.Get("Docker-Content-Digest"); got != "" && got != digest {
+			return false, -1, &httpError{code: resp.StatusCode, msg: fmt.Sprintf(
+				"registry %s: blob %s answered digest %s", p.ref.Context().RegistryStr(), digest, got)}
+		}
+		return true, size, nil
 	case http.StatusNotFound:
-		return false, nil
+		return false, -1, nil
 	case http.StatusUnauthorized:
-		return false, &httpError{code: http.StatusUnauthorized, msg: fmt.Sprintf("registry %s: unauthorized", p.ref.Context().RegistryStr())}
+		return false, -1, &httpError{code: http.StatusUnauthorized, msg: fmt.Sprintf("registry %s: unauthorized", p.ref.Context().RegistryStr())}
 	default:
-		return false, &httpError{code: resp.StatusCode, msg: fmt.Sprintf("registry %s: HEAD answered %d", p.ref.Context().RegistryStr(), resp.StatusCode)}
+		return false, -1, &httpError{code: resp.StatusCode, msg: fmt.Sprintf("registry %s: HEAD answered %d", p.ref.Context().RegistryStr(), resp.StatusCode)}
 	}
 }
 
@@ -715,6 +777,107 @@ func (p *pusher) putFinal(loc, digest string) error {
 	}
 	if resp.StatusCode != http.StatusCreated && resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusNoContent {
 		return &httpError{code: resp.StatusCode, msg: fmt.Sprintf("finalize upload answered %d", resp.StatusCode)}
+	}
+	return nil
+}
+
+// verifyPushed re-reads what was just published. Nothing here downloads a
+// data layer: a blob is proven by its HEAD (presence, size, and the digest the
+// registry itself attributes to it), a manifest by fetching its body and
+// rehashing it, and the tag by the digest it resolves to. Registries are
+// required to validate the digest of a blob when the upload is finalised, so
+// this pass is about what the registry *kept*, not about the transfer.
+func (p *pusher) verifyPushed() (int, int, error) {
+	blobs := 0
+	for _, t := range p.tasks {
+		if err := p.ctx.Err(); err != nil {
+			return blobs, 0, err
+		}
+		ok, size, err := p.blobExists(t.digest)
+		if err != nil {
+			return blobs, 0, fmt.Errorf("verifica blob %s: %w", t.digest, err)
+		}
+		if !ok {
+			return blobs, 0, fmt.Errorf("verifica: il registry non conserva il blob %s appena pubblicato", t.digest)
+		}
+		if size > 0 && size != t.size {
+			return blobs, 0, fmt.Errorf("verifica: blob %s conservato con %d byte invece di %d", t.digest, size, t.size) //nolint:misspell // Messaggio in italiano.
+		}
+		blobs++
+	}
+	digests := make([]string, 0, len(p.staged))
+	for d := range p.staged {
+		digests = append(digests, d)
+	}
+	sort.Strings(digests)
+	manifests := 0
+	for _, d := range digests {
+		if err := p.verifyManifest(d, p.staged[d]); err != nil {
+			return blobs, manifests, err
+		}
+		manifests++
+	}
+	if err := p.verifyTag(); err != nil {
+		return blobs, manifests, err
+	}
+	return blobs, manifests, nil
+}
+
+// verifyManifest fetches one manifest by digest and rehashes the body: the
+// digest is recomputed locally, so a registry that rewrites or truncates a
+// manifest cannot pass.
+func (p *pusher) verifyManifest(digest string, m rawManifest) error {
+	req, err := http.NewRequestWithContext(p.ctx, http.MethodGet, p.base+"/manifests/"+digest, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Accept", string(m.mediaType))
+	resp, err := p.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("verifica manifest %s: %w", digest, err)
+	}
+	if resp.StatusCode != http.StatusOK {
+		return &httpError{code: resp.StatusCode, msg: fmt.Sprintf("verifica manifest %s: risposta %d", digest, resp.StatusCode)}
+	}
+	sum := sha256.Sum256(body)
+	got := "sha256:" + hex.EncodeToString(sum[:])
+	if got != digest {
+		return fmt.Errorf("verifica manifest %s: il body scaricato ha digest %s", digest, got)
+	}
+	if !bytes.Equal(body, m.body) {
+		return fmt.Errorf("verifica manifest %s: il body scaricato differisce da quello pubblicato", digest)
+	}
+	return nil
+}
+
+// verifyTag proves that the caller's reference resolves to the index we
+// published, not to an older or concurrent one.
+func (p *pusher) verifyTag() error {
+	ident := p.ref.Identifier()
+	req, err := http.NewRequestWithContext(p.ctx, http.MethodHead, p.base+"/manifests/"+ident, nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Accept", string(p.tagged.mediaType))
+	resp, err := p.client.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	_, cnl := io.Copy(io.Discard, resp.Body)
+	_ = cnl
+	if resp.StatusCode != http.StatusOK {
+		return &httpError{code: resp.StatusCode, msg: fmt.Sprintf("verifica tag %s: risposta %d", ident, resp.StatusCode)}
+	}
+	// Not every registry sends the header on a HEAD; when it does it must
+	// name the index we tagged.
+	if got := resp.Header.Get("Docker-Content-Digest"); got != "" && got != p.taggedDigest {
+		return fmt.Errorf("verifica tag %s: risolve a %s invece di %s", ident, got, p.taggedDigest)
 	}
 	return nil
 }
