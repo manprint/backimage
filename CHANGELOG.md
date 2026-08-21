@@ -30,6 +30,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- `--cache-size 0` disabilita davvero la cache dei layer scaricati, come già
+  documentava l'help: prima veniva silenziosamente riportata al default di
+  2 GiB (solo un valore negativo la disattivava).
+
 - **L'estrazione ora degrada per default invece di abortire.** Owner/gruppo,
   permessi, timestamp, ACL, attributi estesi e hardlink sono best effort: ciò
   che il kernel rifiuta viene contato per classe in `Stats.Degraded`,
@@ -52,6 +56,40 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **Verifica di ciò che è stato pubblicato (`--verify-after-push`)**. Il registry
+  è obbligato dalla spec OCI a ricalcolare il digest di un blob quando l'upload
+  viene finalizzato, quindi una corruzione in transito fa già fallire il push.
+  Restavano però due casi che nessuno confermava: un blob saltato perché il
+  registry dichiarava di averlo già, e un blob saltato perché lo diceva il
+  checkpoint. Ora, per default (`quick`), dopo la pubblicazione si rileggono
+  una `HEAD` per blob (presenza, dimensione, `Docker-Content-Digest`), una
+  `GET` per manifest con ricalcolo locale del digest sul body, e la risoluzione
+  del tag: pochi KB, zero disco. Con `full` ogni data layer viene riscaricato
+  in streaming e si ricalcolano tre digest indipendenti — quello compresso del
+  layer, quello del blob e quello memorizzato di ogni chunk — senza scrivere
+  nulla su disco e senza bisogno della chiave. `off` disattiva la rilettura.
+
+- **Un blob remoto di dimensione diversa non viene più creduto**. Se il
+  registry dichiara di avere già un blob con quel digest ma con un'altra
+  lunghezza, viene reinviato invece di essere saltato.
+
+- **Recupero parziale (`restore --continue`, `extract --continue`)**. Un chunk
+  danneggiato fermava tutto: lo stream è sequenziale, quindi un errore al chunk
+  393 di 520 perdeva anche i 127 chunk sani successivi. Ora il restore può
+  lavorare sull'indice dei file: ricostruisce ogni entry i cui byte stanno in
+  chunk che superano la verifica, salta le altre, elenca i percorsi perduti e i
+  chunk responsabili, e chiude con l'exit code di integrità. Una entry è scritta
+  solo se completa, così un record tar troncato non può rompere quelle
+  successive.
+
+- **Evidenze verificabili nei log, per backup e per restore**. Il backup
+  dichiara quanti chunk ha registrato con quali digest e cosa ha riletto dal
+  registry; il restore dichiara quanti chunk ha verificato e se l'esito è 1:1.
+  Quando non lo è, elenca le differenze per classe (`owner`, `mode`, `times`,
+  `xattr.<namespace>`, `hardlink`, `object`) con conteggio e un esempio reale
+  per ciascuna. Gli stessi dati sono in `--json` (`Degraded`,
+  `DegradedExamples`, `Warnings`, `Skipped`, `Errors`).
+
 - `restore --extract` e `extract` dell'immagine auto-estraente accettano
   `--strict` (ripristina l'abort al primo metadato rifiutato) e
   `--no-preserve-xattrs`.
@@ -61,6 +99,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Il preflight riporta la capability advisory `set-trusted-xattr`: senza
   `CAP_SYS_ADMIN` gli attributi `trusted.*` non sono né leggibili in backup né
   scrivibili in restore.
+- Il riepilogo di fine backup elenca anche le verifiche disponibili sul
+  ripristino: `backimage verify --continue` prima di estrarre, le righe di
+  evidenza da cercare nel log del restore (`integrità: N/N chunk letti e
+  verificati`, `esito 1:1`), e `--strict` per pretendere la fedeltà totale.
 - Il riepilogo di fine backup stampa i comandi di ripristino nella forma a
   fedeltà massima: `sudo backimage restore …` e `docker run --rm --privileged`
   con `BACKIMAGE_IMAGE_REF` e il socket Docker già inclusi, più la spiegazione

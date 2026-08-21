@@ -117,6 +117,7 @@ backimage backup <PATH...> --repo IMAGE [flags]
       --tls-pin string             remote server certificate SHA-256 fingerprint, hex only (drop the SHA256: prefix printed by the server)
       --udp                        use QUIC instead of TCP for --remote
       --upload-chunk-size string   split each blob upload into HTTP chunks of this size, e.g. 32MiB; 0 sends one request per blob (fastest, use a value only for a registry that refuses large bodies) (default "0")
+      --verify-after-push string   read back the published image: quick (blob and manifest digests, no download), full (re-download every layer and recompute each stored digest), off (default "quick")
 ```
 
 ### Options inherited from parent commands
@@ -837,6 +838,7 @@ backimage restore [IMAGE] [flags]
 
 ```
       --cache-size string        maximum size of the downloaded-layer cache, e.g. 512MiB, 4GiB (0 disables it) (default "2GiB")
+      --continue                 do not stop at the first damaged chunk: restore every entry that verifies and report the ones lost
       --cpus int                 maximum CPUs used for decompression and decryption (default: half the available CPUs) (default 8)
   -C, --destination string       directory the files are extracted into (with -x) (default ".")
       --exclude strings          skip paths matching this glob (repeatable)

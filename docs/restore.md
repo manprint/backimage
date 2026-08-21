@@ -105,3 +105,51 @@ destinazione già popolata senza `--overwrite`, entry di tipo non supportato.
 rifiutata ferma l'estrazione e l'errore riporta il rimedio esatto.
 `--no-preserve-xattrs` non tenta nemmeno gli attributi estesi;
 `--no-preserve-owner` non tenta owner e gruppo.
+
+## Evidenze prodotte dal restore
+
+Ogni estrazione lascia nel log tre righe verificabili:
+
+```text
+restore: integrità: 520/520 chunk letti e verificati (dimensione e digest plaintext
+         coincidono con quelli registrati nel backup)
+restore: esito 1:1 sulle entry ricevute: 13 oggetti ripristinati (4 file, 6 directory,
+         1 symlink, 1 hardlink, 0 device, 1 fifo); contenuti, permessi, owner, timestamp
+         e attributi estesi applicati integralmente; nessuna differenza
+```
+
+Se qualcosa non è stato applicato, la seconda riga diventa un elenco di
+differenze con conteggio e un esempio reale per classe:
+
+```text
+restore: esito NON 1:1 sulle entry ricevute: 4821 oggetti ripristinati, 3 entry non create,
+         15855 differenze di metadati per classe:
+restore:   differenza owner: 812 (es. lchown "/restore/db/data.mdb": operation not permitted)
+restore:   differenza xattr.trusted: 15043 (es. setxattr "/restore/overlay2/l" trusted.overlay.opaque: operation not permitted)
+restore:   3 entry NON estratte: elenco completo in Stats.Errors (--json)
+```
+
+Le classi sono `owner`, `mode`, `times`, `xattr.<namespace>`, `hardlink` e
+`object`. Con `--json` gli stessi dati sono in `Degraded`, `DegradedExamples`,
+`Warnings`, `XattrsSkipped`, `Skipped` ed `Errors`.
+
+## Recupero parziale: `--continue`
+
+Senza il flag, un chunk danneggiato ferma tutto: lo stream è sequenziale,
+quindi un errore al chunk 393 di 520 perde anche i 127 chunk sani successivi.
+
+Con `--continue` il restore lavora sull'indice dei file invece che sullo
+stream: ricostruisce ogni entry i cui byte stanno in chunk che superano la
+verifica, salta le altre e le elenca.
+
+```text
+restore: ATTENZIONE: recupero parziale: 2 entry ricostruite, 5 NON recuperabili
+         perché ricadono nei chunk danneggiati [0]
+restore:   causa: blob authentication failed: chunk 0 plaintext digest mismatch
+restore:   percorsi perduti: src5, src5/file6.txt, src5/file5.txt, src5/file4.txt, src5/file3.txt
+```
+
+L'exit code resta quello di integrità (5) anche quando il recupero ha salvato
+qualcosa: i dati mancanti sono un fallimento, per quanto parziale. Una entry è
+scritta solo se completa — un record tar troncato romperebbe tutte le entry
+successive.

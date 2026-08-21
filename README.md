@@ -903,6 +903,16 @@ contati per classe e riepilogati alla fine
 sempre scritti e verificati per digest. Con `--strict`, invece, la prima
 operazione rifiutata ferma l'estrazione e l'errore riporta il rimedio.
 
+### Quello che la verifica non copre
+
+Un backup verificato è integro, non sopravvivibile: se il repository viene
+cancellato (GC, retention, `repo prune`, account chiuso) non c'è digest che
+aiuti. La risposta è una **seconda copia indipendente** su un altro registry,
+non una percentuale di ridondanza dentro l'immagine — che morirebbe insieme al
+repository che la contiene. Il flag dedicato è previsto per una prossima
+release; il ragionamento completo e come farlo a mano nel frattempo sono in
+[backup](docs/backup.md#ridondanza-e-copie-multiple-todo-prossima-release).
+
 ### Prova periodica di ripristino
 
 Un backup non verificato non è un backup. La prova completa è:
@@ -1086,6 +1096,7 @@ Flag:
 | `--one-file-system` | `false` | Non attraversa mount point |
 | `--numeric-owner` | `false` | Non risolve nomi utente/gruppo |
 | `--allow-degraded` | `false` | Disattiva il preflight strict delle capability; non concede privilegi |
+| `--verify-after-push` | `quick` | Rilettura post-push: `quick` (digest di blob e manifest, nessun download), `full` (riscarica ogni layer in streaming e ricalcola i digest memorizzati), `off` |
 | `--jobs N` | `3` | Upload paralleli |
 | `--upload-chunk-size N` | `0` | Spezza ogni upload in chunk HTTP; `0` invia un blob per richiesta (più veloce) |
 | `--platform OS/ARCH` | `linux/amd64,linux/arm64` | Piattaforme auto-estraenti; ripetibile |
@@ -1141,6 +1152,7 @@ Flag restore:
 | `--no-preserve-owner` | `false` | Non preserva ownership |
 | `--no-preserve-xattrs` | `false` | Non tenta gli attributi estesi |
 | `--strict` | `false` | Ferma l'estrazione al primo metadato non applicabile invece di degradarlo e contarlo |
+| `--continue` | `false` | Non si ferma al primo chunk danneggiato: ricostruisce le entry verificabili ed elenca quelle perdute |
 | `--remove-local-image` | `false` | Rimuove l'immagine Docker locale dopo un restore riuscito |
 | `--overwrite` | `false` | Sovrascrive output esistenti |
 | `--no-verify` | `false` | Salta verifica digest plaintext |
