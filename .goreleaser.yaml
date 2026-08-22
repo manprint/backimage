@@ -42,7 +42,9 @@ archives:
       - goos: windows
         formats: [zip]
     files:
-      - README.md
+      # Both READMEs: README.md is the English guide, README.it.md the Italian
+      # one. docs/** carries the extended handbook and the technical reference.
+      - README*.md
       - LICENSE*
       - docs/**
 
