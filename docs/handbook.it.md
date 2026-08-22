@@ -979,7 +979,12 @@ backimage backup /srv/data --repo ghcr.io/team/dumps --tag daily-2 \
 backimage inspect ghcr.io/team/dumps:daily --layers
 backimage ls ghcr.io/team/dumps:daily --long \
   --passphrase-file /run/secrets/backup
-backimage verify ghcr.io/team/dumps:daily
+# --quick controlla metadati e digest dei layer e non richiede la passphrase;
+# la verifica integrale ricalcola il digest in chiaro di ogni chunk e quindi
+# per un backup cifrato la passphrase serve (altrimenti esce con codice 4).
+backimage verify ghcr.io/team/dumps:daily --quick
+backimage verify ghcr.io/team/dumps:daily \
+  --passphrase-file /run/secrets/backup
 
 # Restore come tar o direttamente su disco.
 backimage restore ghcr.io/team/dumps:daily \
@@ -1199,8 +1204,10 @@ layer; `--files` sblocca l’immagine e include l’indice dei file. Per un back
 cifrato sorgenti e totali arrivano dai metadati cifrati: compaiono solo se si
 passa una passphrase o un’identità age. `ls` elenca
 path (con `-l` dettagli); `find` applica un glob. `verify --quick` controlla
-solo i metadati pubblici, mentre la modalità normale verifica anche i layer;
-`--continue` raccoglie tutti gli errori di integrità.
+solo i metadati pubblici e i digest dei layer, e non richiede la passphrase; la
+modalità normale ricalcola il digest in chiaro di ogni chunk, quindi per un
+backup cifrato la passphrase è obbligatoria e senza di essa il comando esce con
+codice 4. `--continue` raccoglie tutti gli errori di integrità.
 
 ### `repo`
 
