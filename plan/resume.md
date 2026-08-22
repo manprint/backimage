@@ -4,8 +4,13 @@
 > Una sotto-fase è verde solo se `make check` esce 0 **e** tutte le voci della sua Definition of Done sono spuntate.
 
 Stato progetto: **IN CORSO**
-Versione corrente: `0.0.0`
-Ultima fase completata: 04
+Ultimo tag pubblicato: `v0.3.0` (2026-08-21). `CHANGELOG.md` porta una sezione
+`0.3.1` non ancora taggata (pre-release `v0.3.1-dev.1` dal branch `dev`).
+Ultima fase con **gate superato**: 07 (milestone v0.1.0).
+Fasi con lavoro consegnato e gate ancora aperto: 01, 08, 09, 10, 11, 13 — la
+ragione di ciascuna è in "Blocchi aperti" in fondo a questo file. Le voci
+spuntate qui sotto sono le sotto-fasi verificate; il gate di fase è un'altra
+cosa e non va spuntato per estensione.
 
 ---
 
@@ -136,6 +141,16 @@ Ultima fase completata: 04
 - [ ] 12.5 Test di accettazione finale end-to-end
 - [ ] **Gate fase 12 — MILESTONE v1.0.0**
 
+## Fase 13 — `repo prune`: ambito e raggruppamento per regex
+- [x] 13.1 Core puro: `Policy.Scope`/`GroupBy`, `Plan`, `PlanFor`/`Select` su `partition` condiviso, `CompileTagPattern` con full match implicito
+- [x] 13.2 Flag `--tag-regex` / `--group-by-regex` con validazione prima di ogni chiamata di rete
+- [x] 13.3 Output verificabile: ambito, dettaglio per gruppo, conteggio dei match (testo + JSON retrocompatibile)
+- [x] 13.4 Anteprima read-only `repo tags --tag-regex` / `--group-by-regex`, stesso matcher del prune
+- [x] 13.5 Pre-check dei manifest condivisi e cancellazione per digest (chiude la cancellazione parziale a metà loop)
+- [x] 13.6 Documentazione: `docs/cli.md` rigenerato, `docs/registries.md`, README, CHANGELOG `0.4.0`
+- [x] 13.7 Revisione del README contro l'implementazione: corretto `--exclude` non ricorsivo (`internal/pathglob` condiviso da backup/restore/ls/find), validazione dei pattern malformati, README riscritto in inglese + `README.it.md`, vecchio README conservato in `docs/handbook.it.md`, corretti `docs/registries.md` (multi-account) e `docs/security.md` (codici di uscita)
+- [ ] **Gate fase 13** — G1–G8 verdi (41 test nuovi: 15 sul core retention, 22 sulla CLI, 4 su pathglob/archive; e2e con 15 asserzioni), G7 = 97,6% su `retention.go`, GS-13.1..13.7 verdi, GS-12.2/12.3 verdi; resta **G11** (revisione indipendente del percorso distruttivo: `pruneDelete`, `sharedManifestConflicts`, `pruneDigests`) e `proto-check`/GS-08.9 bloccato dall'assenza di `protoc` in ambiente. Dettaglio in `plan/phase_13.md`, sezione "Esito dell'esecuzione".
+
 ---
 
 ## Log
@@ -153,6 +168,7 @@ Ultima fase completata: 04
 | 2026-08-09 | 08.1–08.9 (parziale) | (worktree, da committare) | G1–G10, GS-08.1, GS-08.3–GS-08.6, GS-08.8–GS-08.9 | protocollo protobuf e framing 4 MiB, TLS/mTLS/pin, ACL/quote/token refresh, registry diskless, ripresa e2e reale; manca GS-08.2 no-full-layer-spool e compressione server-side reale |
 | 2026-08-09 | 09.1–09.5 (parziale) | (worktree, da committare) | G1–G6, G7 (85,3% transport), G8, GS-09.1–GS-09.3 | QUIC TLS1.3/ALPN, UDP+also-TCP, e2e registry/restart/crossed transports; harness creato e smoke reale, campagna netem 4 GiB non eseguita senza root |
 | 2026-08-10 | 08.7 (streaming v2) | (worktree, da committare) | G1–G7 (85,4% su transport+protocol+server), G8 (`phase_08.sh` + `phase_08_stream.sh`), G10 | protocollo v2: `StreamStart/StreamAck/StreamEnd/StreamProgress`, pipeline (chunk/compress/seal/layer/dedup/push) sul server, indice file ricostruito dal tar con parità di offset/digest verso `archive.Writer`; client senza spool (picco 4 KiB su backup da 4 GiB, RSS ~19 MiB senza cifratura, ~280 MiB con scrypt), spool server 2× layer e ripulito; `--server-side-compress` ora coerente; e2e TCP+QUIC con restore verificato |
+| 2026-08-22 | 13.1–13.6 | (worktree, da committare) | G1–G8, G7 (97,6% su `retention.go`), GS-13.1–GS-13.7, GS-12.2, GS-12.3 | fase 13 implementata; `--tag-regex` (ambito) e `--group-by-regex` (partizione per gruppi di cattura) con **full match implicito** — una regex non è mai una regola di cancellazione e i tag esclusi non consumano gli slot di `--keep-last`; anteprima read-only su `repo tags` che condivide `partition` con il prune; cancellazione passata da `DeleteTag` per tag a `DeleteManifest` per digest distinto, con pre-check fail-fast sui manifest condivisi (chiude la cancellazione parziale a metà loop e l'`ListTags` per tag); output invariato byte per byte senza i nuovi flag; e2e su `registry:2` con delete abilitata. Resta G11 (revisione indipendente) |
 | 2026-08-09 | 10.1–10.5 | (worktree, da committare) | G7 (92,6% chunk), G8, GS-10.1, GS-10.4–GS-10.5, GS-10.7 | CDC Rabin con polinomio fisso, layer content-addressed/content-defined, DEK convergente riusata solo con manifest compatibile, metriche HEAD e `repo stats`; e2e 4 GiB: 4.304.158.550 → 1.043.787.983 B (24,25%), verify+restore di t1/t2 OK; manca soltanto revisione Opus GS-10.3/G11 |
 
 ---
@@ -170,3 +186,23 @@ Ultima fase completata: 04
 - Fase 10: la revisione crittografica indipendente richiesta dal piano (Opus,
   G11/GS-10.3) non può essere auto-certificata dal codice. Il gate resta aperto
   fino a quella revisione.
+- Fase 11: il gate resta aperto per gli adapter vendor, `repo ls` e il
+  deliverable `docs/retention.md`, che non esiste. La fase 13 ha esteso
+  `repo prune` e `repo tags` ma non copre nulla di questo elenco.
+- Fase 13: G11 aperto per lo stesso motivo della fase 10 — il percorso
+  distruttivo (`pruneDelete`, `sharedManifestConflicts`, `pruneDigests`) chiede
+  una revisione indipendente che il codice non può rilasciare a sé stesso.
+- **Radice `/` non supportata (aperto, non corretto).** `backimage backup /`
+  produce nomi archiviati `//etc`, `//home`: `filepath.Base("/")` è `/` e
+  `pkg/archive/writer.go` non normalizza la radice. Conseguenze verificate: le
+  esclusioni non intercettano quelle voci e il restore di quell'immagine non
+  estrae nulla, terminando con `fatal error: all goroutines are asleep -
+  deadlock!` (riproducibile con `unshare -Ur chroot`). Servono due correzioni
+  separate: normalizzare la radice nel writer, e chiudere/drenare il lato
+  lettore della pipe in `internal/cli/restore.go` quando l'estrattore termina
+  prima di consumare il flusso. Documentato come limite noto in entrambi i
+  README nel frattempo.
+- Trasversale: `make check` non esce 0 in questo ambiente perché `proto-check`
+  (GS-08.9) richiede `protoc` e `protoc-gen-go`, assenti. Verificato che il
+  target falliva identicamente su albero pulito: è un limite d'ambiente, non una
+  regressione. Tutti gli altri target di `make check` sono verdi.

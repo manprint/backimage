@@ -7,6 +7,134 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-08-22
+
+### Added
+
+- **`repo prune --tag-regex`: retention su un sottoinsieme di tag.** Restringe
+  il prune ai tag che corrispondono al pattern; tutti gli altri non vengono mai
+  toccati e non consumano gli slot di `--keep-last` né i bucket di calendario.
+  Serve a un repository che ospita famiglie di backup diverse, dove
+  `--keep-last 3` da solo significherebbe "3 in tutto il repository".
+- **`repo prune --group-by-regex`: retention indipendente per gruppo.**
+  Partiziona i tag sui gruppi di cattura del pattern e applica le regole dentro
+  ogni gruppo, così `--keep-last 3` diventa "3 per famiglia" in un solo
+  passaggio. Richiede almeno un gruppo di cattura: senza, ogni tag sarebbe un
+  gruppo a sé e la regola conserverebbe tutto in silenzio.
+- **`repo tags --tag-regex` e `--group-by-regex`: anteprima read-only.** Sono
+  gli stessi selettori di `prune`, valutati dallo stesso codice (`Policy.Select`
+  condivide con `Policy.PlanFor` il passo di partizionamento), su un comando che
+  non può eliminare nulla.
+- Il piano del prune riporta l'ambito e il dettaglio per gruppo, in testo e in
+  JSON (`scope`, `groupBy`, `groups`), inclusi i gruppi che non perdono nulla.
+  Zero corrispondenze viene segnalato come tale, con la spiegazione
+  dell'ancoraggio, invece di passare per un successo silenzioso.
+
+### Fixed
+
+- **Il prune poteva fermarsi a metà lasciando il registry in uno stato
+  intermedio.** La cancellazione OCI avviene per digest, e due tag possono
+  condividere un manifest (due dump identici di sorgenti diverse). Il vecchio
+  loop chiamava `DeleteTag` un tag per volta e scopriva il conflitto solo
+  arrivandoci: i tag precedenti erano già stati cancellati e il comando usciva
+  in errore. Ora l'intero piano viene verificato prima della prima richiesta e,
+  in caso di conflitto, il comando rifiuta elencando i tag coinvolti senza
+  inviare nessuna DELETE.
+- Conseguenza dello stesso cambio: quando *tutti* i tag di un manifest sono
+  nell'insieme da eliminare, il manifest viene rimosso senza richiedere
+  `--force`, mentre prima `DeleteTag(force=false)` rifiutava anche quel caso
+  legittimo.
+- Se una DELETE fallisce a metà piano — cosa che il pre-check non può escludere,
+  perché una sequenza di richieste HTTP non è atomica — l'errore dice ora fino a
+  dove il comando è arrivato (`N manifest su M erano già stati eliminati`).
+  Prima riportava solo l'errore di rete, lasciando indeterminato lo stato del
+  repository.
+
+### Changed
+
+- Il percorso di cancellazione di `repo prune` passa da una `DeleteTag` per tag
+  a una `DeleteManifest` per digest distinto. Su un registry che disabilita la
+  DELETE l'errore arriva quindi una volta sola invece di una per tag, e cade
+  l'`ListTags` che `DeleteTag` rieseguiva ad ogni chiamata (50 tag da eliminare
+  costavano 50 listing). `repo rm` è invariato.
+
+### Fixed — `--exclude` non escludeva i sottoalberi annidati (grave)
+
+- **`backup --exclude` con `**` archiviava i file annidati che il pattern
+  diceva di escludere.** Il filtro passava per `filepath.Match`, dove `**` è un
+  carattere jolly di *un solo* segmento: `--exclude 'alice/.cache/**'` eliminava
+  `alice/.cache/cookies.db` ma lasciava nell'archivio
+  `alice/.cache/chromium/Default/Cookies`. Su uno strumento di backup significa
+  archiviare dati che l'operatore aveva chiesto di lasciare fuori. Il prefisso
+  letterale (`--exclude 'alice/.cache'`) funzionava già; era la forma con glob a
+  dare una falsa ricorsione.
+- Tutti i comandi che filtrano path archiviati (`backup --exclude`,
+  `restore --include/--exclude`, `ls`, `find`) usano ora **lo stesso** matcher,
+  il nuovo `internal/pathglob`: `*` e `?` restano dentro un segmento, `**` ne
+  attraversa un numero qualsiasi, zero compreso, e `dir/**` copre `dir` stessa.
+  Prima `ls` e `find` erano ricorsivi e `backup` no, con la stessa sintassi.
+- Un pattern malformato in `--exclude` è ora un errore d'uso invece di essere
+  ignorato in silenzio. `path.Match` risponde «nessuna corrispondenza» a un
+  pattern che non riesce a compilare, quindi un typo si leggeva come «niente da
+  escludere» e i dati venivano archiviati comunque.
+- `TestWriterSkippedSocketAndExcluded` asseriva su nomi archiviati che non
+  possono esistere (i path sono radicati sul basename della sorgente): passava a
+  vuoto ed è il motivo per cui il difetto non era stato intercettato.
+
+### Changed — documentazione riorganizzata
+
+- `README.md` è ora una guida operativa sintetica in **inglese**: cosa fa lo
+  strumento, installazione, primo backup, poi una sezione per comando con
+  esempi eseguibili, codici di uscita, variabili d'ambiente e limiti noti. Da
+  2028 righe a 385.
+- `README.it.md` è la stessa guida in italiano.
+- Il vecchio README integrale è conservato come
+  [`docs/handbook.it.md`](docs/handbook.it.md): nulla è stato eliminato, le
+  ricette lunghe (certificati TLS, `compose.yml`, multi-account, fedeltà
+  massima) sono lì.
+
+### Fixed — inesattezze nella documentazione
+
+- I nomi archiviati partono dal **basename** della sorgente
+  (`pkg/archive/writer.go`): per `/home/alice` le voci sono `alice/...`. Gli
+  esempi di `--exclude` usavano `home/alice/.cache/**`, che non corrisponde a
+  nulla. Documentata anche la collisione fra due sorgenti con lo stesso
+  basename, che il backup rifiuta.
+- `docs/registries.md` affermava che più account sullo stesso registry
+  richiedono file separati via `BACKIMAGE_AUTH_FILE`. Non è vero da quando
+  esistono le chiavi `host#username` e `--registry-user`.
+- `docs/security.md` elencava solo i codici di uscita 0, 4 e 5. La tabella
+  riporta ora tutti e otto i valori di `internal/cli/errors.go`.
+- La cifra «~184 bit» per `genpass` era il massimo, non il tipico: il valore
+  reale oscilla con i caratteri ripetuti (campo `bits` di `genpass --json`).
+- L'affermazione «un backup da 50 GiB gira con ~1 GiB libero» non era
+  dimostrata: `plan/resume.md` registra la campagna come non eseguita.
+  Sostituita con la proprietà architetturale e con la misura reale (picco di
+  spool sul client 4 KiB su un backup da 4 GiB).
+- L'avviso di passphrase debole è soppresso da `--quiet`: ora è detto.
+
+### Known issues
+
+- **Una radice `/` singola non è supportata.** `backimage backup /` produce nomi
+  archiviati `//etc`, `//home` — il basename di `/` è `/` — quindi le esclusioni
+  non li intercettano e il restore di quell'immagine non riesce, terminando con
+  un deadlock del processo. Documentato in entrambi i README e nel manuale:
+  elencare i sottoalberi (`backimage backup /etc /var/lib /home`). La
+  correzione richiede di normalizzare la radice e di sistemare la propagazione
+  dell'errore nella pipeline di restore, ed è rinviata a una fase dedicata.
+
+### Notes
+
+- Un pattern deve corrispondere al **tag intero**: `db_` non seleziona nulla,
+  `db_.*` seleziona `db_1`. Con la semantica *unanchored* di Go, `db` avrebbe
+  selezionato anche `app_db_1` e `mydb_1`, allargando in silenzio
+  un'operazione irreversibile. Sintassi RE2: nessun lookahead né backreference,
+  `(?i)` per ignorare le maiuscole.
+- Una regex non è mai una regola di cancellazione: `--tag-regex` senza
+  `--keep-last`/`--keep-within`/`--keep-tag` non elimina nulla.
+- L'output di `prune` e di `repo tags` senza i nuovi flag è invariato, campo per
+  campo, rispetto a 0.3.0.
+
 ## [0.3.0] - 2026-08-21
 
 ### Fixed
