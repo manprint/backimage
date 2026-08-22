@@ -657,6 +657,19 @@ Examples:
   backimage repo prune ghcr.io/me/dumps --delete-older-than 12h \
     --keep-last 2 --keep-tag 'release-*' --yes
 
+  # of the database backups keep the 3 newest; leave every other tag alone
+  backimage repo prune ghcr.io/me/dumps --tag-regex 'db_.*' --keep-last 3 --dry-run
+
+  # keep the 3 newest of every family (db_*, app_*, ...) in one pass
+  backimage repo prune ghcr.io/me/dumps --group-by-regex '([a-z]+)_.*' \
+    --keep-last 3 --dry-run
+
+A regex only narrows what the rules reach: it never selects a tag for
+deletion by itself, so --tag-regex without a retention rule deletes
+nothing. The pattern must match the whole tag: 'db_' selects nothing,
+'db_.*' selects db_1. Preview a selection with `repo tags --tag-regex`,
+which cannot delete anything.
+
 Always run with --dry-run first: deletions cannot be undone.
 
 ```
@@ -668,10 +681,12 @@ backimage repo prune REPO [flags]
 ```
       --delete-older-than duration   delete backups older than this age; inverse wording of --keep-within, same rule (units: s, m, h, d (days), w (weeks); e.g. 90m, 12h, 3d, 2w)
       --dry-run                      list what would be deleted and exit without touching the registry
+      --group-by-regex string        partition tags by the capture group(s) of this regex, e.g. '([a-z]+)_.*'; retention rules then apply independently inside each group (whole-tag match, at least one capture group)
   -h, --help                         help for prune
       --keep-last int                keep the N newest backups regardless of age (0 = rule disabled)
       --keep-tag strings             glob pattern of tag names to keep, e.g. 'release-*' (repeatable)
       --keep-within duration         keep backups newer than this age (units: s, m, h, d (days), w (weeks); e.g. 90m, 12h, 3d, 2w)
+      --tag-regex string             restrict the operation to tag names matching this regex; the pattern must match the whole tag, and non-matching tags are never touched
       --yes                          required to actually delete: without it the command refuses to run
 ```
 
@@ -781,6 +796,17 @@ Columns: tag, manifest digest, creation time (RFC3339, UTC). A dash
 means the image carries no creation timestamp; `prune` never removes
 such a tag. Use --json for machine-readable output.
 
+--tag-regex and --group-by-regex are the very selectors `prune` uses,
+evaluated by the same code: run them here first to see exactly which
+tags a prune would consider, with no way to delete anything.
+
+Examples:
+  # which tags would `prune --tag-regex` act on?
+  backimage repo tags ghcr.io/me/dumps --tag-regex 'db_.*'
+
+  # which groups would `prune --group-by-regex` see?
+  backimage repo tags ghcr.io/me/dumps --group-by-regex '([a-z]+)_.*'
+
 ```
 backimage repo tags REPO [flags]
 ```
@@ -788,7 +814,9 @@ backimage repo tags REPO [flags]
 ### Options
 
 ```
-  -h, --help   help for tags
+      --group-by-regex string   partition tags by the capture group(s) of this regex, e.g. '([a-z]+)_.*'; retention rules then apply independently inside each group (whole-tag match, at least one capture group)
+  -h, --help                    help for tags
+      --tag-regex string        restrict the operation to tag names matching this regex; the pattern must match the whole tag, and non-matching tags are never touched
 ```
 
 ### Options inherited from parent commands
