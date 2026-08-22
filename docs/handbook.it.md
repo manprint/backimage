@@ -2001,9 +2001,9 @@ backimage backup /srv/data --repo ghcr.io/team/dumps --tag daily --timestamp \
 
 | Variabile/percorso | Funzione |
 | --- | --- |
-| `BACKIMAGE_PASSPHRASE` | Passphrase per immagini auto-estraenti e CLI |
+| `BACKIMAGE_PASSPHRASE` | Passphrase per l'immagine auto-estraente e per i comandi di lettura della CLI (`restore`, `ls`, `find`, `inspect`, `verify`). **`backup` non la legge**: usare `--passphrase-file` o `--passphrase-stdin` |
 | `BACKIMAGE_AUTH_FILE` | File credenziali custom |
-| `BACKIMAGE_<FLAG>` | Valore di default per un flag locale o globale ereditato da `listen-remote` (`--bind-address` → `BACKIMAGE_BIND_ADDRESS`, `--json` → `BACKIMAGE_JSON`); la CLI esplicita prevale |
+| `BACKIMAGE_<FLAG>` | Valore di default per un flag locale di `listen-remote` o per un flag di root che quel comando eredita (`--bind-address` → `BACKIMAGE_BIND_ADDRESS`, `--json` → `BACKIMAGE_JSON`); solo `listen-remote` legge l'ambiente (`applyEnvDefaults` è agganciato al suo `PreRunE`), e la CLI esplicita prevale |
 | `XDG_CONFIG_HOME` | Base per `backimage/auth.json` e config |
 | `XDG_CACHE_HOME` | Cache layer e checkpoint; cache restore default 2 GiB |
 | `TMPDIR` | Spool se non è impostato `--temp-dir` |

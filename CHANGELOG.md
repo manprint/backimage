@@ -112,6 +112,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Sostituita con la proprietà architetturale e con la misura reale (picco di
   spool sul client 4 KiB su un backup da 4 GiB).
 - L'avviso di passphrase debole è soppresso da `--quiet`: ora è detto.
+- `BACKIMAGE_PASSPHRASE` era documentata come «passphrase per la CLI». La
+  leggono i comandi di lettura (`restore`, `ls`, `find`, `inspect`, `verify`) e
+  l'immagine auto-estraente, ma **non** `backup`, che senza
+  `--passphrase-file`/`--passphrase-stdin` esce con «cifratura attiva ma nessuna
+  passphrase o destinatario age».
+- `BACKIMAGE_<FLAG>` vale solo per `listen-remote` (`applyEnvDefaults` è
+  agganciato al suo `PreRunE`), non per tutti i comandi.
+- La verifica integrale di un backup cifrato richiede la passphrase: ricalcola il
+  digest in chiaro di ogni chunk. Il blocco «uso rapido» mostrava
+  `backimage verify IMAGE` senza passphrase, che esce con codice 4.
+- L'argomento `PATH` di `ls` e il pattern di `find` sono confrontati con il nome
+  archiviato, non con quello sul filesystem: dopo un backup di `/var/log` le voci
+  sono `log/...`, quindi `ls IMAGE var/log` non elencava nulla.
 
 ### Known issues
 

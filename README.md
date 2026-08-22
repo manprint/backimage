@@ -337,9 +337,9 @@ shell history and in `ps`.
 
 | Variable | Effect |
 | --- | --- |
-| `BACKIMAGE_PASSPHRASE` | passphrase for the CLI and for the self-extracting image |
+| `BACKIMAGE_PASSPHRASE` | passphrase for the read commands (`restore`, `ls`, `find`, `inspect`, `verify`) and for the self-extracting image. **`backup` does not read it**: pass `--passphrase-file` or `--passphrase-stdin` |
 | `BACKIMAGE_AUTH_FILE` | credential file to use instead of the default |
-| `BACKIMAGE_<FLAG>` | default for a flag, e.g. `BACKIMAGE_BIND_ADDRESS`, `BACKIMAGE_JSON`; an explicit flag wins |
+| `BACKIMAGE_<FLAG>` | default for a `listen-remote` flag, e.g. `BACKIMAGE_BIND_ADDRESS`, `BACKIMAGE_WORK_DIR`, and the root flags it inherits such as `BACKIMAGE_JSON`. Only that command reads the environment, and an explicit flag always wins |
 | `XDG_CONFIG_HOME` | base for `backimage/auth.json` |
 | `XDG_CACHE_HOME` | layer cache and resumable upload checkpoints |
 | `TMPDIR` | spool, unless `--temp-dir` is given |

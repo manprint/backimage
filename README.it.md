@@ -344,9 +344,9 @@ nella history della shell e in `ps`.
 
 | Variabile | Effetto |
 | --- | --- |
-| `BACKIMAGE_PASSPHRASE` | passphrase per la CLI e per l'immagine auto-estraente |
+| `BACKIMAGE_PASSPHRASE` | passphrase per i comandi di lettura (`restore`, `ls`, `find`, `inspect`, `verify`) e per l'immagine auto-estraente. **`backup` non la legge**: usare `--passphrase-file` o `--passphrase-stdin` |
 | `BACKIMAGE_AUTH_FILE` | file credenziali da usare invece del default |
-| `BACKIMAGE_<FLAG>` | default di un flag, es. `BACKIMAGE_BIND_ADDRESS`, `BACKIMAGE_JSON`; il flag esplicito prevale |
+| `BACKIMAGE_<FLAG>` | default di un flag di `listen-remote`, es. `BACKIMAGE_BIND_ADDRESS`, `BACKIMAGE_WORK_DIR`, e dei flag di root che quel comando eredita come `BACKIMAGE_JSON`. Solo quel comando legge l'ambiente, e il flag esplicito prevale sempre |
 | `XDG_CONFIG_HOME` | base per `backimage/auth.json` |
 | `XDG_CACHE_HOME` | cache dei layer e checkpoint di upload riprendibili |
 | `TMPDIR` | spool, se non è dato `--temp-dir` |
