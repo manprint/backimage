@@ -138,13 +138,18 @@ preferibile prendere il `tar` ed estrarlo sull'host.
 ```console
 backimage inspect ghcr.io/me/dumps:daily                      # metadati pubblici, senza passphrase
 backimage inspect ghcr.io/me/dumps:daily --layers --json
-backimage ls   ghcr.io/me/dumps:daily var/log -l --passphrase-file ./pass
+backimage ls   ghcr.io/me/dumps:daily data/logs -l --passphrase-file ./pass
 backimage find ghcr.io/me/dumps:daily '**/*.conf' --passphrase-file ./pass
 ```
 
 Layout, compressione e impostazioni di cifratura sono pubblici. I path sorgente,
 l'host e l'elenco dei file stanno nei metadati cifrati e richiedono quindi la
 passphrase. Leggere l'indice non scarica alcun layer di dati.
+
+L'argomento `PATH` di `ls` e il pattern di `find` sono confrontati con il nome
+**archiviato**, che parte dal basename della sorgente: dopo `backimage backup
+/srv/data` le voci sono `data/...`, quindi il path da chiedere è `data/logs`, non
+`/srv/data/logs`.
 
 ### `verify` — prima di fidarsi
 

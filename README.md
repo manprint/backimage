@@ -137,13 +137,18 @@ metadata classes were degraded. On Docker Desktop for macOS and Windows, prefer
 ```console
 backimage inspect ghcr.io/me/dumps:daily                      # public metadata, no passphrase
 backimage inspect ghcr.io/me/dumps:daily --layers --json
-backimage ls   ghcr.io/me/dumps:daily var/log -l --passphrase-file ./pass
+backimage ls   ghcr.io/me/dumps:daily data/logs -l --passphrase-file ./pass
 backimage find ghcr.io/me/dumps:daily '**/*.conf' --passphrase-file ./pass
 ```
 
 Layout, compression and encryption settings are public. Source paths, host and
 the file list live in the encrypted metadata, so they need the passphrase.
 Reading the index downloads no data layer.
+
+The `PATH` argument of `ls` and the pattern of `find` are matched against the
+**archived** name, which starts at the source basename — after `backimage backup
+/srv/data` the entries are `data/...`, so the path to ask for is `data/logs`, not
+`/srv/data/logs`.
 
 ### `verify` — before you trust it
 
