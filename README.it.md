@@ -133,6 +133,23 @@ overlayfs). Senza, l'estrazione riesce comunque e il riepilogo dichiara quali
 classi di metadati sono state degradate. Su Docker Desktop per macOS e Windows è
 preferibile prendere il `tar` ed estrarlo sull'host.
 
+L'estrattore incorporato accetta cinque comandi, e `info` è quello che si ottiene
+senza alcun argomento:
+
+```console
+docker run --rm IMAGE                        # info: metadati pubblici, senza passphrase
+docker run --rm -e BACKIMAGE_PASSPHRASE=... IMAGE list -l
+docker run --rm -e BACKIMAGE_PASSPHRASE=... IMAGE verify
+docker run --rm -i -e BACKIMAGE_PASSPHRASE=... IMAGE tar > backup.tar
+docker run --rm --privileged -e BACKIMAGE_PASSPHRASE=... \
+  -v "$PWD/restore:/restore" IMAGE extract --out /restore
+```
+
+`extract` accetta anche `--include`, `--exclude`, `--strip-components`,
+`--overwrite`, `--strict`, `--no-preserve-owner` e `--cpus`. `tar` scrive dati
+binari su stdout, quindi va sempre reindirizzato. Su Linux prendere il `tar` e
+scompattarlo come root è la via più fedele di tutte.
+
 ### `inspect`, `ls`, `find` — guardare prima di ripristinare
 
 ```console

@@ -132,6 +132,23 @@ xattrs). Without it the extraction still succeeds and the summary states which
 metadata classes were degraded. On Docker Desktop for macOS and Windows, prefer
 `tar` and extract on the host.
 
+The embedded extractor takes five commands, and `info` is what you get with no
+arguments at all:
+
+```console
+docker run --rm IMAGE                        # info: public metadata, no passphrase
+docker run --rm -e BACKIMAGE_PASSPHRASE=... IMAGE list -l
+docker run --rm -e BACKIMAGE_PASSPHRASE=... IMAGE verify
+docker run --rm -i -e BACKIMAGE_PASSPHRASE=... IMAGE tar > backup.tar
+docker run --rm --privileged -e BACKIMAGE_PASSPHRASE=... \
+  -v "$PWD/restore:/restore" IMAGE extract --out /restore
+```
+
+`extract` also accepts `--include`, `--exclude`, `--strip-components`,
+`--overwrite`, `--strict`, `--no-preserve-owner` and `--cpus`. `tar` writes
+binary data to stdout, so always redirect it. On Linux, taking the `tar` and
+unpacking it as root is the most faithful route of all.
+
 ### `inspect`, `ls`, `find` — look before you restore
 
 ```console
