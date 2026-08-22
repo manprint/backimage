@@ -1,4 +1,9 @@
-# backimage
+# Manuale operativo (italiano)
+
+> Questo è il manuale esteso, in italiano. Il punto di ingresso sono
+> [`README.md`](../README.md) (inglese) e [`README.it.md`](../README.it.md)
+> (italiano): lì si trovano le istruzioni sintetiche per ogni comando. Qui
+> stanno gli approfondimenti, i casi limite e le ricette lunghe.
 
 `backimage` archivia, comprime e cifra file dentro immagini OCI multi-arch.
 L’immagine risultante è anche un programma auto-estraente: per un restore
@@ -79,8 +84,10 @@ Le modalità di output di `backup` sono:
 | spazio su disco del client | indipendente dalla dimensione del backup | uno spool per layer concorrente |
 | il server vede il plaintext | **sì** | no |
 
-Con `stream` il client invia solo il flusso tar: un backup da 50 GiB gira con
-~1 GiB libero perché non esiste né l'archivio completo né un layer locale. Il
+Con `stream` il client invia solo il flusso tar: non esiste né l'archivio
+completo né un layer locale, quindi lo spazio richiesto sul client non cresce
+con la dimensione del backup (misurato: picco di spool 4 KiB su un backup da
+4 GiB). Il
 server assembla un layer per volta (serve circa `2 × --max-layer-size` di spazio
 temporaneo) e lo carica in streaming nel registry.
 
@@ -148,8 +155,10 @@ seguenti modalità per fornire il segreto.
 Prima però: **generare la passphrase, non inventarla.** Il file chiavi viaggia
 dentro l'immagine, quindi chi possiede l'immagine può provare passphrase offline
 senza limiti di tentativi, ed è l'unica difesa che resta. Una frase inventata di
-24 caratteri vale una trentina di bit e cade in ore; 32 caratteri casuali valgono
-~184 bit e non cadono. `backimage genpass` produce la seconda cosa:
+24 caratteri vale una trentina di bit e cade in ore; i 32 caratteri casuali di
+`genpass` valgono circa 180 bit (il campo `bits` di `genpass --json` riporta il
+valore esatto, che varia con i caratteri ripetuti) e non cadono. `backimage
+genpass` produce la seconda cosa:
 
 ```console
 # 32 caratteri da crypto/rand: minuscole, maiuscole, cifre e simboli.
@@ -164,8 +173,8 @@ backimage backup /srv/data --repo ghcr.io/acme/backup --tag daily \
 ```
 
 `backimage backup` avvisa su stderr se la passphrase fornita è debole; è solo un
-avviso e non blocca nulla. Dettagli e conti in
-[docs/security.md](docs/security.md).
+avviso, non blocca nulla, ed è soppresso da `--quiet`. Dettagli e conti in
+[docs/security.md](security.md).
 
 ```console
 # File protetto: non compare nella command line né nella lista dei processi.
@@ -451,10 +460,12 @@ backimage backup ./compose.yaml ./nginx.conf ./database.sql \
 backimage backup /var/lib/myapp /etc/myapp/app.conf ./README.md \
   --repo ghcr.io/acme/backup --tag mixed
 
-# 5. Cartella con esclusioni ripetibili.
+# 5. Cartella con esclusioni ripetibili. I pattern sono relativi al nome
+#    archiviato, che parte dal *basename* della sorgente: per /home/alice le
+#    voci sono alice/..., non home/alice/...
 backimage backup /home/alice \
-  --exclude 'home/alice/.cache/**' \
-  --exclude 'home/alice/Downloads/*.iso' \
+  --exclude 'alice/.cache/**' \
+  --exclude 'alice/Downloads/*.iso' \
   --repo ghcr.io/acme/backup --tag home
 ```
 
@@ -463,11 +474,16 @@ nulla. `--dry-run` non scrive sul registry; `--one-file-system` impedisce a una
 directory che contiene mount point di attraversare altri filesystem:
 
 ```console
-backimage backup / --one-file-system \
-  --exclude 'proc/**' --exclude 'sys/**' --exclude 'dev/**' \
+backimage backup /etc /var/lib /home --one-file-system \
+  --exclude 'lib/docker/**' \
   --repo ghcr.io/acme/backup --tag host \
   --dry-run --json
 ```
+
+**Non passare `/` come radice unica.** Il nome archiviato parte dal basename
+della sorgente e per `/` quel basename è `/`, quindi le voci diventano `//proc`,
+`//etc` e simili: l'esclusione non le intercetta e il restore di quell'immagine
+non riesce. Elencare i sottoalberi da salvare, come nell'esempio qui sopra.
 
 I path passati sono anche la base dei nomi archiviati: usare `backimage ls` o
 `backimage find` per controllare l'indice prima di un ripristino selettivo.
@@ -639,7 +655,7 @@ sorgente, host, numero di file e byte totali stanno nel blob cifrato
 `private.json.zst`, insieme all'indice dei file. `inspect` li mostra solo se
 riceve la passphrase o l'identità age (le stesse opzioni di `--files`), e le
 label OCI dell'immagine non li pubblicano affatto. Vedi
-[docs/security.md](docs/security.md) per l'elenco completo di cosa resta
+[docs/security.md](security.md) per l'elenco completo di cosa resta
 visibile senza chiave.
 
 ```console
@@ -797,7 +813,7 @@ il restore, `--no-preserve-owner` è la scelta pratica per un utente non-root;
 `--allow-degraded` è invece un'opzione del backup e non disabilita la
 preservazione dell'owner nei metadati archiviati;
 per ownership, ACL, xattr, setuid/setgid, device e FIFO usare root su un
-filesystem che li supporti. Vedere [FIDELITY](docs/FIDELITY.md) per la matrice
+filesystem che li supporti. Vedere [FIDELITY](FIDELITY.md) per la matrice
 completa di fedeltà per sistema operativo e metodo di estrazione.
 
 ## Backup e restore in fedeltà massima
@@ -829,7 +845,7 @@ dati che nessun dato) — a meno di `--strict`.
 | `--numeric-owner` | consigliato se il restore avviene su un altro host | conserva UID/GID senza dipendere dal database utenti locale |
 | `--one-file-system` | consigliato per gli alberi di sistema | non attraversa i mount: evita di inghiottire `/proc`, `/sys`, NFS e bind mount annidati |
 | `--exclude` | pseudo-filesystem e cache | `'proc/**'`, `'sys/**'`, `'run/**'`, socket e cache non hanno senso in un archivio |
-| `--dedup` | **da non usare** | la deduplicazione è convergente: rivela l'uguaglianza dei chunk fra backup che condividono la chiave. Vedere [dedup](docs/dedup.md) e [security](docs/security.md) |
+| `--dedup` | **da non usare** | la deduplicazione è convergente: rivela l'uguaglianza dei chunk fra backup che condividono la chiave. Vedere [dedup](dedup.md) e [security](security.md) |
 | `--runnable` | `true` (default) | l'immagine si estrae da sola con `docker run`, senza CLI sull'host di destinazione |
 | `--platform` | includere l'architettura dell'host di ripristino | il self-extractor deve poter girare dove serve |
 | `--timestamp` | consigliato | un tag per esecuzione: nessun backup precedente viene sovrascritto |
@@ -911,7 +927,7 @@ aiuti. La risposta è una **seconda copia indipendente** su un altro registry,
 non una percentuale di ridondanza dentro l'immagine — che morirebbe insieme al
 repository che la contiene. Il flag dedicato è previsto per una prossima
 release; il ragionamento completo e come farlo a mano nel frattempo sono in
-[backup](docs/backup.md#ridondanza-e-copie-multiple-todo-prossima-release).
+[backup](backup.md#ridondanza-e-copie-multiple-todo-prossima-release).
 
 ### Prova periodica di ripristino
 
@@ -938,8 +954,8 @@ Se `--strict` non produce errori, ogni metadato archiviato è stato riapplicato.
   consente di ricrearlo: il contenuto è identico, l'inode no.
 
 La matrice completa per sistema operativo e metodo di estrazione è in
-[FIDELITY](docs/FIDELITY.md); la politica di degradazione del restore è
-documentata in [restore](docs/restore.md).
+[FIDELITY](FIDELITY.md); la politica di degradazione del restore è
+documentata in [restore](restore.md).
 
 ## Uso rapido
 
@@ -1198,13 +1214,16 @@ backimage repo prune REPO [flags]
 
 - `stats` mostra tag, blob unici/condivisi e storage effettivo.
 - `tags` elenca tag, digest e data di creazione (`-` se l'immagine non ha
-  timestamp).
+  timestamp). Accetta `--tag-regex` e `--group-by-regex`: sono gli stessi
+  selettori di `prune`, valutati dallo stesso codice, e servono a vedere su
+  quali tag agirebbe un prune senza poter eliminare nulla.
 - `caps` mostra le capacità lifecycle dell’adapter del registry.
 - `rm` elimina un manifest; è sempre richiesto `--yes`, e `--force` consente
   di eliminare un tag ancora referenziato.
 - `prune` applica retention. Flag: `--keep-last N`,
   `--keep-within DURATION`, `--delete-older-than DURATION`,
-  `--keep-tag GLOB` (ripetibile), `--dry-run`, `--yes`.
+  `--keep-tag GLOB` (ripetibile), `--tag-regex REGEX`,
+  `--group-by-regex REGEX`, `--dry-run`, `--yes`.
 
 #### Durate: unità accettate
 
@@ -1241,6 +1260,78 @@ da backimage) non viene rimosso per errore.
 `--keep-within` e `--delete-older-than` sono la stessa regola detta al
 contrario: `--keep-within 3d` ≡ `--delete-older-than 3d`. Indicarle entrambe è
 un errore d'uso, per non lasciare dubbi su quale prevalga.
+
+#### Retention per famiglia: `--tag-regex` e `--group-by-regex`
+
+Un repository può ospitare famiglie di backup diverse — `db_1..db_N` accanto ad
+`app_1..app_N` — e in quel caso `--keep-last 3` da solo significa "3 in tutto il
+repository", non "3 per famiglia". I due selettori servono a questo.
+
+| Flag | Significato |
+| --- | --- |
+| `--tag-regex REGEX` | restringe il prune ai tag che corrispondono; gli altri non vengono mai toccati |
+| `--group-by-regex REGEX` | partiziona i tag sui gruppi di cattura e applica le regole **dentro ogni gruppo** |
+
+```console
+# Dei backup del database tieni i 3 più recenti; ogni altro tag resta dov'è.
+backimage repo prune ghcr.io/team/dumps --tag-regex 'db_.*' --keep-last 3 --dry-run
+
+# Tieni i 3 più recenti di ogni famiglia (db_*, app_*, ...) in un solo passaggio.
+backimage repo prune ghcr.io/team/dumps --group-by-regex '([a-z]+)_.*' \
+  --keep-last 3 --dry-run
+```
+
+```text
+regole attive: mantieni i 3 più recenti
+gruppi: 2 (--group-by-regex "([a-z]+)_.*")
+2 tag da eliminare (dry-run, nessuna modifica al registry), 6 conservati:
+  gruppo "app" — 4 tag: 3 conservati, 1 da eliminare
+    app_1	2026-08-01T13:00:00Z	sha256:1d0e...
+  gruppo "db" — 4 tag: 3 conservati, 1 da eliminare
+    db_1	2026-08-01T12:00:00Z	sha256:7be7...
+ripetere senza --dry-run e con --yes per applicare.
+```
+
+Tre proprietà da tenere a mente, perché sono le uniche che evitano una
+cancellazione sbagliata:
+
+1. **Una regex non è una regola di cancellazione.** Restringe soltanto ciò che
+   le regole possono raggiungere: `--tag-regex 'db_.*'` da solo, senza
+   `--keep-last` o `--keep-within`, non elimina nulla.
+2. **Il pattern deve corrispondere al tag intero.** `db_` non seleziona niente,
+   `db_.*` seleziona `db_1`. È una scelta deliberata: con la semantica
+   *unanchored* di Go, `db` avrebbe selezionato anche `app_db_1` e `mydb_1`,
+   allargando in silenzio un'operazione irreversibile. La sintassi è RE2 (nessun
+   lookahead né backreference); per ignorare le maiuscole si usa `(?i)`.
+3. **Ciò che il selettore esclude non consuma slot.** I tag fuori ambito o non
+   raggruppabili sono conservati e non contano né per `--keep-last` né per le
+   regole di calendario. Un tag senza data di creazione resta conservato come
+   sempre.
+
+`--group-by-regex` richiede almeno un gruppo di cattura: senza, ogni tag
+diventerebbe un gruppo a sé e `--keep-last` li conserverebbe tutti in silenzio.
+I due selettori si combinano — prima l'ambito, poi il raggruppamento al suo
+interno — e ogni pattern viene compilato **prima** di aprire la connessione al
+registry, così un errore di sintassi non costa un round trip.
+
+Per verificare una selezione senza rischi si usa `repo tags`, che non può
+eliminare nulla:
+
+```console
+backimage repo tags ghcr.io/team/dumps --tag-regex 'db_.*'
+backimage repo tags ghcr.io/team/dumps --group-by-regex '([a-z]+)_.*'
+```
+
+#### Manifest condivisi
+
+Due tag possono puntare allo **stesso** manifest: due dump identici di sorgenti
+diverse producono la stessa immagine. Poiché la cancellazione OCI avviene per
+digest, eliminare uno dei due eliminerebbe anche l'altro. `prune` verifica
+l'intero piano prima della prima richiesta e, se un manifest da eliminare è
+ancora referenziato da un tag che la policy conserva, **rifiuta senza eliminare
+nulla**, elencando i tag coinvolti. Quando invece tutti i tag di un manifest
+sono nell'insieme da eliminare, il manifest viene rimosso con una sola richiesta
+e non serve `--force`.
 
 Esempi:
 
@@ -1941,13 +2032,13 @@ make embed       # helper auto-estraenti embedded
 make e2e         # suite end-to-end
 ```
 
-La documentazione tecnica dettagliata è in [`docs/`](docs/):
-[backup](docs/backup.md), [restore](docs/restore.md),
-[registries](docs/registries.md), [dedup](docs/dedup.md),
-[compression](docs/compression.md), [remote](docs/remote.md),
-[formato immagine](docs/image-format.md), [sicurezza](docs/security.md) e
-[riferimento generato della CLI](docs/cli.md).
+La documentazione tecnica dettagliata è in [`docs/`]():
+[backup](backup.md), [restore](restore.md),
+[registries](registries.md), [dedup](dedup.md),
+[compression](compression.md), [remote](remote.md),
+[formato immagine](image-format.md), [sicurezza](security.md) e
+[riferimento generato della CLI](cli.md).
 
 ## Licenza
 
-Vedere [`LICENSE`](LICENSE).
+Vedere [`LICENSE`](../LICENSE).

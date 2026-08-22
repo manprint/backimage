@@ -304,11 +304,18 @@ Conseguenze operative della modalità `stream`:
 
 ## Exit codes CLI (contratto)
 
+La mappatura completa è in `internal/cli/errors.go` (`Kind` → codice):
+
 | Codice | Significato |
 |---|---|
 | 0 | successo |
-| 4 | passphrase mancante/sbagliata (`ErrPassphrase`/`ErrWrongPassphrase`) |
-| 5 | integrità fallita (`ErrIntegrity`) — dati manomessi |
+| 1 | errore generico (`KindGeneric`) |
+| 2 | errore d'uso (`KindUsage`) |
+| 3 | privilegi insufficienti (`KindPermission`) |
+| 4 | passphrase mancante/sbagliata (`KindPassphrase`, `ErrPassphrase`/`ErrWrongPassphrase`) |
+| 5 | integrità fallita (`KindIntegrity`, `ErrIntegrity`) — dati manomessi |
+| 6 | errore di rete o del registry (`KindNetwork`) |
+| 7 | interrotto (`KindInterrupted`) |
 
 ## Recoverability
 

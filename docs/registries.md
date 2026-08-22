@@ -5,8 +5,9 @@ token bearer con refresh proattivo, upload `POST` → `PATCH` a chunk → `PUT`,
 manifest OCI per piattaforma e image index multi-architettura.
 
 Per la guida utente end-to-end, con esempi di Docker Hub, login multipli e
-restore, vedere la sezione [Autenticazione dei registry](../README.md#autenticazione-dei-registry)
-nel README. Questa pagina raccoglie i dettagli tecnici del comportamento.
+restore, vedere [`README.md`](../README.md) per la sintesi e
+[handbook.it.md](handbook.it.md#autenticazione-dei-registry) per le ricette
+complete. Questa pagina raccoglie i dettagli tecnici del comportamento.
 
 ## Autenticazione
 
@@ -32,12 +33,27 @@ permessi 0600 e viene rifiutato se leggibile da gruppo o altri. I tre alias
 `--token` salva un bearer token già pronto; dopo un 401 la richiesta viene
 ritentata una sola volta.
 
-Lo store contiene una sola credenziale per registry canonico: un nuovo login
-allo stesso registry sostituisce il precedente. `backimage login --list` mostra
-solo i registry configurati (`--json` produce JSON); `backimage logout REGISTRY`
-rimuove l'intero login del registry. Il logout non è disponibile a livello di
-repository: per usare account diversi sullo stesso registry occorre usare file
-separati tramite `BACKIMAGE_AUTH_FILE`.
+Più account sullo stesso registry canonico convivono. Il primo occupa la chiave
+host, compatibile con Docker e con le versioni precedenti di backimage; ogni
+account successivo usa una chiave `host#username` (`pkg/registry/auth.go`), e un
+bearer token salvato con `--token` ha una propria identità riservata, mostrata
+come `token`. Nessun login sovrascrive gli altri.
+
+La selezione avviene per **namespace del repository**: `docker.io/user2/img` usa
+il login `user2`. Se il namespace non corrisponde ad alcun account salvato il
+comando si ferma invece di pubblicare con l'identità sbagliata, e `--registry-user
+NOME` (flag globale) forza la scelta; `--registry-user none` forza una richiesta
+anonima.
+
+`backimage login --list` elenca provider, account e utente locale proprietario
+del file (`--json` aggiunge `authFile`), mai i segreti. `backimage logout
+REGISTRY` rimuove l'unico account; con più account servono `--user NOME` oppure
+`--all`, altrimenti il comando si ferma elencandoli. Il logout riguarda il
+registry, non il singolo repository.
+
+File separati via `BACKIMAGE_AUTH_FILE` restano utili per isolare del tutto i
+contesti, per esempio in CI, ma non sono più necessari per avere più account.
+Ricette complete in [handbook.it.md](handbook.it.md#login-multipli-più-account-sullo-stesso-registry).
 
 ## Compatibilità
 
@@ -68,3 +84,45 @@ prima con un backup piccolo.
 - un checkpoint corrotto o riferito a un'altra reference blocca il resume.
 
 Nessun log include password, token o contenuto di `auth.json`.
+
+## Cancellazione e manifest condivisi
+
+L'API OCI cancella **per digest**: `DELETE /v2/<name>/manifests/<digest>`. Un
+tag non è un oggetto separato che si possa rimuovere da solo, quindi eliminare
+un manifest fa sparire **tutti** i tag che lo referenziano.
+
+Questo ha una conseguenza concreta sui backup: due dump identici di sorgenti
+diverse producono la stessa immagine e quindi lo stesso manifest. Se `db_1` e
+`app_1` condividono il manifest, cancellare `db_1` cancellerebbe anche `app_1`.
+
+`repo prune` verifica per questo l'intero piano prima della prima richiesta:
+
+- se un manifest da eliminare è ancora referenziato da un tag che la policy
+  conserva, il comando **rifiuta ed elenca i tag coinvolti**, senza inviare
+  nessuna DELETE. Non esiste uno stato intermedio in cui una parte dei tag è
+  già stata cancellata e il comando è uscito in errore;
+- se invece tutti i tag di un manifest sono nell'insieme da eliminare, il
+  manifest viene rimosso con **una sola** richiesta, e non serve `--force`.
+
+`repo rm --force` resta la via per eliminare deliberatamente insieme i tag che
+condividono un manifest.
+
+Due note operative:
+
+- la cancellazione va abilitata sul registry. `registry:2` la rifiuta se non si
+  imposta `REGISTRY_STORAGE_DELETE_ENABLED=true`; il messaggio d'errore di
+  backimage lo ricorda;
+- eliminare il manifest non libera subito lo spazio dei blob. Il recupero
+  dipende dal garbage collector del registry e va eseguito a parte
+  (`registry garbage-collect` su `registry:2`). Nessun adapter di backimage
+  espone oggi quell'operazione: `repo caps` dichiara `CapListTags`,
+  `CapDeleteManifest`, `CapDeleteTag` e `CapUsageStats`, non `CapGarbageCollect`.
+
+### Un limite che resta
+
+Il pre-check elimina la causa *prevedibile* di un'interruzione a metà, ma una
+sequenza di DELETE HTTP non può essere atomica: un errore di rete sul terzo di
+cinque manifest lascia comunque i primi due eliminati. `prune` in quel caso dice
+fino a dove è arrivato — `2 manifest su 5 erano già stati eliminati` — e
+rieseguire lo stesso comando completa il lavoro, perché la policy è idempotente:
+i manifest già rimossi non compaiono più nel piano.
