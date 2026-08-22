@@ -87,7 +87,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        phase: ['00', '01', '04', '05', '06', '07', '08', '08_stream', '09', '10']
+        phase: ['00', '01', '04', '05', '06', '07', '08', '08_stream', '09', '10', '13']
     steps:
       - uses: actions/checkout@v4
         with:
