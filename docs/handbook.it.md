@@ -844,7 +844,7 @@ dati che nessun dato) — a meno di `--strict`.
 | `--passphrase-file` | file `0600` leggibile da root | la passphrase non finisce né nella history né in `ps`; `--password` sì, quindi non va usato |
 | `--numeric-owner` | consigliato se il restore avviene su un altro host | conserva UID/GID senza dipendere dal database utenti locale |
 | `--one-file-system` | consigliato per gli alberi di sistema | non attraversa i mount: evita di inghiottire `/proc`, `/sys`, NFS e bind mount annidati |
-| `--exclude` | pseudo-filesystem e cache | `'proc/**'`, `'sys/**'`, `'run/**'`, socket e cache non hanno senso in un archivio |
+| `--exclude` | pseudo-filesystem e cache | socket e cache non hanno senso in un archivio. I pattern vanno scritti sul nome **archiviato**, che parte dal basename della sorgente: archiviando `/var/lib` il pattern è `'lib/docker/**'`, non `'var/lib/docker/**'` |
 | `--dedup` | **da non usare** | la deduplicazione è convergente: rivela l'uguaglianza dei chunk fra backup che condividono la chiave. Vedere [dedup](dedup.md) e [security](security.md) |
 | `--runnable` | `true` (default) | l'immagine si estrae da sola con `docker run`, senza CLI sull'host di destinazione |
 | `--platform` | includere l'architettura dell'host di ripristino | il self-extractor deve poter girare dove serve |
@@ -914,9 +914,11 @@ ma stanno già nel comando: aggiungere quel flag non richiede altro.
 
 Senza `sudo` o senza `--privileged` l'estrazione **riesce comunque**: owner,
 permessi, timestamp, ACL, xattr e hardlink non applicabili vengono degradati,
-contati per classe e riepilogati alla fine
-(`degradazioni: owner=812 xattr.trusted=15043`). I contenuti dei file sono
-sempre scritti e verificati per digest. Con `--strict`, invece, la prima
+contati per classe e riepilogati alla fine. Il riepilogo è la riga `esito 1:1
+sulle entry ricevute: ... nessuna differenza` quando tutto è stato applicato,
+altrimenti `esito NON 1:1 ...: N differenze di metadati per classe:` seguita da
+una riga `differenza <classe>: <conteggio>` per classe. I contenuti dei file
+sono sempre scritti e verificati per digest. Con `--strict`, invece, la prima
 operazione rifiutata ferma l'estrazione e l'errore riporta il rimedio.
 
 ### Quello che la verifica non copre
