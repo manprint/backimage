@@ -14,6 +14,7 @@ import (
 
 	"github.com/manprint/backimage/internal/buildinfo"
 	"github.com/manprint/backimage/internal/embedded"
+	"github.com/manprint/backimage/internal/pathglob"
 	"github.com/manprint/backimage/pkg/backup"
 	"github.com/manprint/backimage/pkg/chunk"
 	"github.com/manprint/backimage/pkg/crypt"
@@ -350,6 +351,12 @@ func runBackup(cmd *cobra.Command, args []string) error {
 	resume := getFlagBool(cmd, "resume")
 	tempDir := getFlagString(cmd, "temp-dir")
 	excludes := getFlagStrings(cmd, "exclude")
+	// A pattern the matcher cannot parse answers "no match", so an unvalidated
+	// typo in --exclude would read as "nothing to exclude" and archive the data
+	// anyway. Fail before reading a single file instead.
+	if err := pathglob.Validate(excludes); err != nil {
+		return usageErrorf("--exclude: %v", err)
+	}
 	oneFS := getFlagBool(cmd, "one-file-system")
 	numOwner := getFlagBool(cmd, "numeric-owner")
 	degraded := getFlagBool(cmd, "allow-degraded")

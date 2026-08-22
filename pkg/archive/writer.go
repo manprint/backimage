@@ -15,6 +15,8 @@ import (
 	"sort"
 	"strings"
 	"time"
+
+	"github.com/manprint/backimage/internal/pathglob"
 )
 
 // hardlinkKey identifies an inode for hardlink grouping.
@@ -229,7 +231,10 @@ func (w *tarWriter) emitOne(ctx context.Context, arcPath, fsPath string, st os.F
 
 func (w *tarWriter) excluded(arcPath string) bool {
 	for _, pat := range w.opts.Excludes {
-		if ok, err := filepath.Match(pat, arcPath); err == nil && ok {
+		// pathglob, not filepath.Match: the latter treats "**" as a
+		// single-segment wildcard, so "alice/.cache/**" used to leave
+		// alice/.cache/chromium/Default/Cookies in the archive.
+		if pathglob.Match(pat, arcPath) {
 			return true
 		}
 		trimmed := strings.TrimSuffix(pat, "/")

@@ -17,6 +17,8 @@ import (
 	"time"
 
 	"golang.org/x/sys/unix"
+
+	"github.com/manprint/backimage/internal/pathglob"
 )
 
 type extractor struct {
@@ -245,7 +247,7 @@ func (x *extractor) matches(name string) bool {
 	if len(x.opts.Includes) > 0 {
 		ok := false
 		for _, pat := range x.opts.Includes {
-			if m, err := filepath.Match(pat, name); err == nil && m {
+			if pathglob.Match(pat, name) {
 				ok = true
 				break
 			}
@@ -259,7 +261,7 @@ func (x *extractor) matches(name string) bool {
 		}
 	}
 	for _, pat := range x.opts.Excludes {
-		if m, err := filepath.Match(pat, name); err == nil && m {
+		if pathglob.Match(pat, name) {
 			return false
 		}
 		if strings.HasSuffix(pat, "/") && strings.HasPrefix(name, strings.TrimSuffix(pat, "/")+"/") {

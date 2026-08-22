@@ -4,7 +4,8 @@ import (
 	"fmt"
 	"path"
 	"sort"
-	"strings"
+
+	"github.com/manprint/backimage/internal/pathglob"
 )
 
 // tarHeaderBlock is the size of a tar header record including padding.
@@ -83,7 +84,7 @@ func EntriesMatching(idx *Index, includes, excludes []string) ([]FileEntry, erro
 	if idx == nil {
 		return nil, fmt.Errorf("nil index")
 	}
-	if err := validateGlobs(includes, excludes); err != nil {
+	if err := pathglob.Validate(includes, excludes); err != nil {
 		return nil, err
 	}
 	out := make([]FileEntry, 0, len(idx.Entries))
@@ -108,74 +109,21 @@ func matchAnyEntry(e FileEntry, pats []string) bool {
 	return false
 }
 
-// entryMatches reports whether e matches pat. Beyond plain path.Match the
+// entryMatches reports whether e matches pat. Beyond the plain glob the
 // convenience rules apply: a pattern matching an ancestor directory (or a
 // directory entry) includes the entry, and trailing "/" forces that.
 func entryMatches(e FileEntry, pat string) bool {
-	if matchGlob(pat, e.Path) {
+	if pathglob.Match(pat, e.Path) {
 		return true
 	}
 	dir := path.Dir(e.Path)
 	for dir != "." && dir != "/" {
-		if matchGlob(pat, dir) {
+		if pathglob.Match(pat, dir) {
 			return true
 		}
 		dir = path.Dir(dir)
 	}
 	return false
-}
-
-// matchGlob matches a slash-separated glob supporting "**" and per-segment
-// path.Match wildcards.
-func matchGlob(pat, name string) bool {
-	pat = strings.TrimSuffix(pat, "/")
-	if pat == "" {
-		return name == ""
-	}
-	p := strings.Split(pat, "/")
-	n := strings.Split(name, "/")
-	return matchParts(p, n)
-}
-
-func matchParts(p, n []string) bool {
-	if len(p) == 0 {
-		return len(n) == 0
-	}
-	switch p[0] {
-	case "**":
-		for i := 0; i <= len(n); i++ {
-			if matchParts(p[1:], n[i:]) {
-				return true
-			}
-		}
-		return false
-	default:
-		if len(n) == 0 {
-			return false
-		}
-		ok, err := path.Match(p[0], n[0])
-		if err != nil || !ok {
-			return false
-		}
-		return matchParts(p[1:], n[1:])
-	}
-}
-
-func validateGlobs(groups ...[]string) error {
-	for _, gs := range groups {
-		for _, p := range gs {
-			// path.Match rejects malformed patterns; validate each segment.
-			for _, seg := range strings.Split(strings.TrimSuffix(p, "/"), "/") {
-				if seg == "**" {
-					continue
-				}
-				if _, err := path.Match(seg, "x"); err != nil {
-					return fmt.Errorf("bad glob %q: %w", p, err)
-				}
-			}
-		}
-	}
-	return nil
 }
 
 // entryRange returns the plaintext span [start,end) occupied by e: the tar

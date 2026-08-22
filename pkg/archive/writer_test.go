@@ -264,16 +264,22 @@ func TestWriterSkippedSocketAndExcluded(t *testing.T) {
 	os.WriteFile(filepath.Join(src, "skipme-dir", "f"), []byte("z"), 0o644)
 
 	var buf bytes.Buffer
-	w := NewWriter(&buf, Options{Excludes: []string{"**/skip.me", "skipme-dir"}})
+	w := NewWriter(&buf, Options{Excludes: []string{"**/skip.me", "**/skipme-dir/**"}})
 	if err := w.AddRoot(context.Background(), src); err != nil {
 		t.Fatal(err)
 	}
 	w.Close()
+	// Archived names are rooted at the source basename, which t.TempDir() makes
+	// "001". Asserting on the bare names would pass without excluding anything.
+	base := filepath.Base(src)
 	for _, e := range w.Entries() {
 		switch e.Path {
-		case "skip.me", "skipme-dir", "skipme-dir/f":
+		case base + "/skip.me", base + "/skipme-dir", base + "/skipme-dir/f":
 			t.Fatalf("%q must be excluded, entries: %v", e.Path, entryTypes(w.Entries()))
 		}
+	}
+	if len(w.Entries()) == 0 {
+		t.Fatal("the writer emitted nothing: the assertions above would be vacuous")
 	}
 }
 
@@ -285,5 +291,80 @@ func TestWriterCancelledContext(t *testing.T) {
 	w := NewWriter(io.Discard, Options{})
 	if err := w.AddRoot(ctx, src); err == nil {
 		t.Fatal("cancelled context must abort walk")
+	}
+}
+
+// An exclusion must remove the whole subtree it names. It did not: the filter
+// went through filepath.Match, where "**" is a single-segment wildcard, so
+// "alice/.cache/**" dropped alice/.cache/cookies.db but archived
+// alice/.cache/chromium/Default/Cookies — data the operator asked to leave out.
+func TestWriterExcludesWholeSubtree(t *testing.T) {
+	src := t.TempDir()
+	base := filepath.Base(src)
+	deep := filepath.Join(src, ".cache", "chromium", "Default")
+	if err := os.MkdirAll(deep, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(src, "docs"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for path, content := range map[string]string{
+		filepath.Join(src, ".cache", "cookies.db"): "shallow",
+		filepath.Join(deep, "Cookies"):             "deep",
+		filepath.Join(src, "docs", "cv.pdf"):       "keep",
+	} {
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var buf bytes.Buffer
+	w := NewWriter(&buf, Options{Excludes: []string{base + "/.cache/**"}})
+	if err := w.AddRoot(context.Background(), src); err != nil {
+		t.Fatal(err)
+	}
+	w.Close()
+
+	kept := make([]string, 0, len(w.Entries()))
+	for _, e := range w.Entries() {
+		kept = append(kept, e.Path)
+		if strings.Contains(e.Path, "/.cache") {
+			t.Errorf("excluded subtree leaked into the archive: %q", e.Path)
+		}
+	}
+	// The exclusion must not have taken the rest of the tree with it.
+	var sawPDF bool
+	for _, p := range kept {
+		if p == base+"/docs/cv.pdf" {
+			sawPDF = true
+		}
+	}
+	if !sawPDF {
+		t.Fatalf("the exclusion removed unrelated paths, entries: %v", kept)
+	}
+}
+
+// A pattern naming the directory itself, without the trailing "/**", must also
+// take everything under it: "alice/.cache" is the spelling an operator reaches
+// for first.
+func TestWriterExcludesBareDirectoryName(t *testing.T) {
+	src := t.TempDir()
+	base := filepath.Base(src)
+	if err := os.MkdirAll(filepath.Join(src, "cache", "sub"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(src, "cache", "sub", "f"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	w := NewWriter(&buf, Options{Excludes: []string{base + "/cache"}})
+	if err := w.AddRoot(context.Background(), src); err != nil {
+		t.Fatal(err)
+	}
+	w.Close()
+	for _, e := range w.Entries() {
+		if strings.Contains(e.Path, "cache") {
+			t.Errorf("entry under an excluded directory was archived: %q", e.Path)
+		}
 	}
 }
