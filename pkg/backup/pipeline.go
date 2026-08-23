@@ -347,8 +347,7 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		cfg.TempDir = os.TempDir()
 	}
 	if cfg.RemoteStream == nil {
-		need := int64(cfg.Jobs) * plan.LayerBytes
-		if err := checkTempSpace(cfg.TempDir, need); err != nil {
+		if err := checkTempSpace(cfg.TempDir, tempSpaceNeeded(est.Bytes, plan.LayerBytes)); err != nil {
 			return res, err
 		}
 	}
@@ -748,13 +747,28 @@ var statfs = func(dir string) (free int64, err error) {
 	return platformFreeSpace(dir)
 }
 
+// tempSpaceNeeded is the peak of --temp-dir for a run that builds its layers
+// locally. Every layer file survives until the push completes: rollLayer drops
+// the spool but keeps what NewFileLayer produced, and cleanup only runs when
+// Run returns. The peak is therefore the whole stored backup, not a window of
+// --jobs layers, plus the spool and the layer being written at that moment.
+//
+// rawBytes is the upper bound of the stored size: compression only shrinks it
+// and sealing adds a few bytes per chunk. A backup that compresses well needs
+// less, which is why the error names --temp-dir as the first remedy.
+func tempSpaceNeeded(rawBytes, layerBytes int64) int64 {
+	return rawBytes + 2*layerBytes
+}
+
 func checkTempSpace(dir string, need int64) error {
 	free, err := statfs(dir)
 	if err != nil {
 		return fmt.Errorf("statfs %s: %w", dir, err)
 	}
 	if free < need {
-		return fmt.Errorf("spazio temporaneo insufficiente in %s: servono %d GiB, disponibili %d GiB; usare --temp-dir o ridurre --max-layer-size",
+		return fmt.Errorf("spazio temporaneo insufficiente in %s: servono fino a %d GiB, disponibili %d GiB. "+
+			"Un backup che si comprime bene ne usa meno, ma i layer restano tutti su disco fino alla fine del push: "+
+			"usare --temp-dir per puntare a un filesystem piu' capiente, oppure --remote-mode stream per non costruirli affatto in locale",
 			dir, ceilDiv(need, 1<<30), ceilDiv(free, 1<<30))
 	}
 	return nil
