@@ -360,25 +360,27 @@ backimage listen-remote [flags]
 ### Options
 
 ```
-      --allow-repo strings       repository prefix a client may push to, e.g. ghcr.io/team/ (repeatable; empty = any)
-      --also-tcp                 when using --udp, also listen on TCP at the same address
-      --auth-token string        pre-shared client authentication token
-      --auth-token-file string   read the pre-shared token from a file
-      --bind-address string      address to listen on, HOST:PORT (0.0.0.0 = every interface) (default "0.0.0.0:7575")
-  -h, --help                     help for listen-remote
-      --insecure-no-auth         allow unauthenticated clients (strongly discouraged)
-      --log-format string        diagnostics format: text|json (default "text")
-      --max-bytes string         maximum bytes accepted per session, e.g. 200GiB (0 = unlimited) (default "0")
-      --max-sessions int         maximum concurrent backup sessions; server disk needed is 2 x layer size x sessions (default 4)
-      --metrics-address string   serve /healthz and /metrics on this HOST:PORT (empty = disabled)
-      --rate-limit string        bytes per second per session, e.g. 80MiB (0 = unlimited) (default "0")
-      --spool                    deprecated: the streaming protocol always spools one layer at a time
-      --tls-ca string            PEM CA bundle used to authenticate mTLS clients
-      --tls-cert string          PEM server certificate
-      --tls-key string           PEM server private key
-      --tls-self-signed          generate a self-signed certificate and print its SHA-256 pin; persisted in --tls-cert/--tls-key or under --work-dir when either is set
-      --udp                      use QUIC instead of TCP
-      --work-dir string          directory for the per-layer spool of streaming sessions (default $TMPDIR)
+      --allow-repo strings         repository prefix a client may push to, e.g. ghcr.io/team/ (repeatable; empty = any)
+      --also-tcp                   when using --udp, also listen on TCP at the same address
+      --auth-token string          pre-shared client authentication token
+      --auth-token-file string     read the pre-shared token from a file
+      --bind-address string        address to listen on, HOST:PORT (0.0.0.0 = every interface) (default "0.0.0.0:7575")
+  -h, --help                       help for listen-remote
+      --insecure-no-auth           allow unauthenticated clients (strongly discouraged)
+      --log-format string          diagnostics format: text|json (default "text")
+      --max-bytes string           maximum bytes accepted per session, e.g. 200GiB (0 = unlimited) (default "0")
+      --max-sessions int           maximum concurrent backup sessions; server disk needed is 3 x layer size x sessions (default 4)
+      --metrics-address string     serve /healthz and /metrics on this HOST:PORT (empty = disabled)
+      --push-jobs int              parallel blob uploads per registry push (default 3)
+      --rate-limit string          bytes per second per session, e.g. 80MiB (0 = unlimited) (default "0")
+      --spool                      deprecated: the streaming protocol always spools one layer at a time
+      --tls-ca string              PEM CA bundle used to authenticate mTLS clients
+      --tls-cert string            PEM server certificate
+      --tls-key string             PEM server private key
+      --tls-self-signed            generate a self-signed certificate and print its SHA-256 pin; persisted in --tls-cert/--tls-key or under --work-dir when either is set
+      --udp                        use QUIC instead of TCP
+      --upload-chunk-size string   registry PATCH chunk size, e.g. 32MiB (0 = one request per blob, faster) (default "0")
+      --work-dir string            directory for the per-layer spool of streaming sessions (default $TMPDIR)
 ```
 
 ### Options inherited from parent commands

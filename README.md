@@ -295,7 +295,10 @@ is explicit: **the server sees the plaintext**, because it is the one encrypting
 it. Use `--remote-mode layers` when the receiver must not.
 
 Registry credentials stay on the client, which hands the server short-lived
-bearer tokens over TLS. Full setup, certificate pinning, mTLS and QUIC are in
+bearer tokens over TLS, scoped to the session that supplied them. The server
+receives, chunks, seals and pushes at the same time, so it needs about
+`3 × --max-layer-size × --max-sessions` of scratch space in `--work-dir`. Full
+setup, certificate pinning, mTLS and QUIC are in
 [`docs/remote.md`](docs/remote.md).
 
 ### `version`
@@ -359,7 +362,7 @@ shell history and in `ps`.
 | `BACKIMAGE_<FLAG>` | default for a `listen-remote` flag, e.g. `BACKIMAGE_BIND_ADDRESS`, `BACKIMAGE_WORK_DIR`, and the root flags it inherits such as `BACKIMAGE_JSON`. Only that command reads the environment, and an explicit flag always wins |
 | `XDG_CONFIG_HOME` | base for `backimage/auth.json` |
 | `XDG_CACHE_HOME` | layer cache and resumable upload checkpoints |
-| `TMPDIR` | spool, unless `--temp-dir` is given |
+| `TMPDIR` | spool, unless `--temp-dir` is given. It must hold the whole compressed backup: every layer stays there until the push ends. `--remote-mode stream` needs none of it |
 
 ### Known limits
 

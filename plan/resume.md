@@ -4,8 +4,12 @@
 > Una sotto-fase è verde solo se `make check` esce 0 **e** tutte le voci della sua Definition of Done sono spuntate.
 
 Stato progetto: **IN CORSO**
-Ultimo tag pubblicato: `v0.3.0` (2026-08-21). `CHANGELOG.md` porta una sezione
-`0.3.1` non ancora taggata (pre-release `v0.3.1-dev.1` dal branch `dev`).
+Ultimo tag pubblicato: `v0.3.0` (2026-08-21). `CHANGELOG.md` porta le sezioni
+`0.3.1` e `0.3.2`, nessuna delle due taggata come release finale: dal branch
+`dev` escono le pre-release `v0.3.1-dev.1` e `v0.3.2-dev.1`. La `0.3.2` raccoglie
+l'assessment del percorso remoto (`listen-remote`): sei difetti di correttezza e
+sicurezza, la sovrapposizione fra ricezione e push, e la correzione del preflight
+dello spazio temporaneo. Il dettaglio sta in `docs/TROUGHPUT_IMPROVE.md`.
 Ultima fase con **gate superato**: 07 (milestone v0.1.0).
 Fasi con lavoro consegnato e gate ancora aperto: 01, 08, 09, 10, 11, 13 — la
 ragione di ciascuna è in "Blocchi aperti" in fondo a questo file. Le voci

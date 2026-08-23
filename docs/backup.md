@@ -41,17 +41,32 @@ fallback da solo). Il
 riepilogo di successo resta su stdout e non viene prefissato dal timestamp;
 con `--json` stdout contiene solo JSON.
 
-I layer sono appoggiati su disco e letti in streaming durante il push. Il
-preflight richiede spazio libero pari a circa:
+I layer sono appoggiati su disco e letti in streaming durante il push. **Tutti
+i layer restano su disco fino alla fine del push**: la costruzione di un layer
+libera lo spool ma conserva il file del blob OCI, e la pulizia avviene solo
+all'uscita. Lo spazio temporaneo di picco è quindi:
 
 ```
-jobs × max-layer-size
+dimensione del backup compresso  (+ due layer transitori)
 ```
 
-Con i default (`--jobs 3`, `--max-layer-size 1GiB`) servono quindi almeno
-3 GiB nella directory temporanea. Usare `--temp-dir`, ridurre il numero di job
-o la dimensione dei layer se il controllo fallisce. La memoria non cresce con
-la dimensione complessiva del backup: il test slow impone un limite di 512 MiB.
+Non `jobs × max-layer-size`, come questo documento affermava fino alla 0.3.2:
+quella era una finestra che non esiste, e su una sorgente da 1 GiB
+incomprimibile con `--jobs 1 --max-layer-size 64MiB` il preflight chiedeva
+64 MiB mentre il picco reale era 1024 MiB. Ridurre `--max-layer-size` o
+`--jobs` non abbassa il requisito.
+
+Il preflight controlla il caso peggiore, cioè dati incomprimibili: un backup
+che si comprime bene ne usa meno. Se fallisce:
+
+- `--temp-dir` per puntare a un filesystem più capiente (attenzione: il default
+  è `$TMPDIR`, che su molti sistemi è una tmpfs in RAM);
+- `--remote-mode stream` verso un `listen-remote`, che non costruisce nessun
+  layer in locale: il client usa **4 KiB** di disco indipendentemente dalla
+  dimensione del backup (misurato su 1 GiB).
+
+La memoria non cresce con la dimensione complessiva del backup: il test slow
+impone un limite di 512 MiB.
 
 ## Cifratura
 

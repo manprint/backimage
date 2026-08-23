@@ -88,8 +88,10 @@ Con `stream` il client invia solo il flusso tar: non esiste né l'archivio
 completo né un layer locale, quindi lo spazio richiesto sul client non cresce
 con la dimensione del backup (misurato: picco di spool 4 KiB su un backup da
 4 GiB). Il
-server assembla un layer per volta (serve circa `2 × --max-layer-size` di spazio
-temporaneo) e lo carica in streaming nel registry.
+server assembla un layer per volta e lo carica in streaming nel registry, con
+il push che si sovrappone alla ricezione invece di fermarla: servono circa
+`3 × --max-layer-size` di spazio temporaneo (lo spool in riempimento, quello in
+upload e il suo blob OCI ricostruito).
 
 `--server-side-compress` è ora un alias accettato di `--remote-mode stream`
 (già il default) e viene rifiutato con `--remote-mode layers`, dove sarebbe una
@@ -849,7 +851,7 @@ dati che nessun dato) — a meno di `--strict`.
 | `--runnable` | `true` (default) | l'immagine si estrae da sola con `docker run`, senza CLI sull'host di destinazione |
 | `--platform` | includere l'architettura dell'host di ripristino | il self-extractor deve poter girare dove serve |
 | `--timestamp` | consigliato | un tag per esecuzione: nessun backup precedente viene sovrascritto |
-| `--temp-dir` | directory accessibile a root con spazio libero | lo spool non deve finire su una `TMPDIR` piccola o non scrivibile dal processo privilegiato |
+| `--temp-dir` | directory accessibile a root, capiente quanto il backup compresso | tutti i layer vi restano fino alla fine del push, e il default `$TMPDIR` e' spesso una tmpfs in RAM |
 
 `--compression` e `--compression-level` non influiscono sulla fedeltà: sono
 solo spazio contro tempo.
@@ -1127,7 +1129,7 @@ Flag:
 | `--dry-run` | `false` | Mostra il piano senza scrivere |
 | `--resume` | `true` | Riprende da checkpoint |
 | `--runnable` | `true` | Richiede codec compatibili con `docker run` |
-| `--temp-dir DIR` | `$TMPDIR` | Spool temporaneo dei layer |
+| `--temp-dir DIR` | `$TMPDIR` | Spool temporaneo dei layer. Il picco è la dimensione del backup compresso: tutti i layer restano su disco fino alla fine del push |
 | `--created RFC3339` | — | Data fissa per build riproducibili |
 | `--remote HOST:PORT` | — | Server `listen-remote` |
 | `--remote-mode stream\|layers` | `stream` | `stream`: pipeline sul server; `layers`: pipeline sul client (v1) |
@@ -1434,12 +1436,14 @@ accettabile, `--remote-mode layers` mantiene tutta la crittografia sul client
 | --- | --- |
 | disco client | indipendente dal backup: solo buffer di rete |
 | RAM client | ~20 MiB in streaming; picco transitorio ~280 MiB quando age/scrypt avvolge la passphrase |
-| disco server `--work-dir` | `2 × --max-layer-size × --max-sessions` (default layer 1 GiB) |
-| RAM server | buffer chunk + 32 MiB di upload per sessione |
+| disco server `--work-dir` | `3 × --max-layer-size × --max-sessions` (default layer 1 GiB) |
+| RAM server | buffer chunk; l'upload di un layer v2 è streamato da disco, quello di un layer v1 usa 32 MiB per sessione |
 
 Misure reali su backup da 4 GiB incompressibili con `--max-layer-size 512MiB`:
 spool client 0 byte, RSS client 19 MiB senza cifratura, picco spool server
-1 GiB, directory di lavoro vuota a fine run.
+1 GiB, directory di lavoro vuota a fine run. Quelle misure precedono la
+sovrapposizione fra ricezione e push: il limite corrente è `3 ×`, non
+rimisurato.
 
 ### Certificati TLS del server
 

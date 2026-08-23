@@ -301,8 +301,11 @@ lui a cifrarlo. Usare `--remote-mode layers` quando il ricevente non deve
 vederlo.
 
 Le credenziali del registry restano sul client, che consegna al server token
-bearer di breve durata attraverso TLS. Configurazione completa, pinning del
-certificato, mTLS e QUIC sono in [`docs/remote.md`](docs/remote.md).
+bearer di breve durata attraverso TLS, validi solo per la sessione che li ha
+forniti. Il server riceve, spezza, sigilla e carica contemporaneamente, quindi
+gli servono circa `3 × --max-layer-size × --max-sessions` di spazio temporaneo
+in `--work-dir`. Configurazione completa, pinning del certificato, mTLS e QUIC
+sono in [`docs/remote.md`](docs/remote.md).
 
 ### `version`
 
@@ -366,7 +369,7 @@ nella history della shell e in `ps`.
 | `BACKIMAGE_<FLAG>` | default di un flag di `listen-remote`, es. `BACKIMAGE_BIND_ADDRESS`, `BACKIMAGE_WORK_DIR`, e dei flag di root che quel comando eredita come `BACKIMAGE_JSON`. Solo quel comando legge l'ambiente, e il flag esplicito prevale sempre |
 | `XDG_CONFIG_HOME` | base per `backimage/auth.json` |
 | `XDG_CACHE_HOME` | cache dei layer e checkpoint di upload riprendibili |
-| `TMPDIR` | spool, se non è dato `--temp-dir` |
+| `TMPDIR` | spool, se non è dato `--temp-dir`. Deve contenere l'intero backup compresso: ogni layer resta lì fino alla fine del push. `--remote-mode stream` non ne usa affatto |
 
 ### Limiti noti
 

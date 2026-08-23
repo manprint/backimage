@@ -186,3 +186,128 @@ conclusions from any single number:
 `make bench-transport` measures the raw encrypted transport only and never
 contacts a registry (see `docs/transport-benchmark.md`); it does **not** cover
 this path.
+
+## The same audit on `listen-remote`
+
+The five steps above cover a `backup` that pushes from the client. A backup
+that goes through `backimage listen-remote` reaches the registry from the
+server, on a path that had not been looked at and did not inherit any of them.
+Four findings, all applied.
+
+### 6. Reception and the registry push were strictly serialised
+
+`streamBuilder.run` rolled a layer inline: digest the spool, rebuild it into
+its OCI blob, then upload it — all on the goroutine draining the client's
+`io.Pipe`. While that ran, nothing read the pipe, the session stopped reading
+frames, the receive window closed, and the client stopped sending. Reception
+and the slowest stage of the pipeline never overlapped, so the wall clock was
+their sum: `t = t_receive + t_push`, when it could be `max(t_receive, t_push)`.
+
+The layer tail now runs on its own goroutine. The handoff is unbuffered, which
+keeps exactly one layer in flight — the back-pressure that stops a fast client
+from accumulating spools — and raises the `--work-dir` requirement from two to
+three times the layer size. `TestReceptionOverlapsTheRegistryPush` pins the
+behaviour by making every upload slow and asserting that bytes still arrive
+during one.
+
+### 7. The server could never reach the one-request-per-blob path
+
+Step 2 made `ChunkSize: 0` mean "one streamed `PATCH` per blob". The server
+never got there: `NewRegistrySink` coerced any non-positive chunk size to
+32 MiB, and `listen-remote` exposed no flag to change it. Every server-side
+push therefore paid a round trip per 32 MiB — the exact cost step 2 removed
+from the client.
+
+`RegistrySinkOptions.ChunkSize` now keeps the caller's zero, and
+`--upload-chunk-size` exposes it. The distinction that matters is whether the
+source can be rewound:
+
+- a v1 layer arrives as a stream the server cannot seek, so it still goes
+  through the 32 MiB double buffer of `BlobClient.Open`;
+- a v2 layer is a file in `--work-dir`, so it goes through the new
+  `BlobClient.PutStream`: three round trips instead of one per chunk, with the
+  same 413 fallback.
+
+### 8. `--push-jobs` was wired to `--max-sessions`
+
+`listen_remote.go` passed `Jobs: maxSessions` into the sink. They are different
+quantities: one bounds concurrent clients, the other bounds parallel blob
+uploads inside a single push. A server at its default of 4 sessions authorised
+16 concurrent uploads. They are now separate flags, `--push-jobs` defaulting
+to 3 like the library.
+
+### 9. The client alternated with the wire
+
+`runStream` wrapped the archiver in a plain `bufio.Writer`: every flush stopped
+the filesystem walk for the duration of the send. `remote.FrameBuffer` replaces
+it with two buffers — the walk fills one while the other is on the wire — which
+is the same double-buffering `BlobUpload` already used for the registry side.
+
+### What is still on the table
+
+- **The stored bytes go through the codec twice, and the second pass gains
+  nothing.** A chunk is compressed and sealed into the spool (pass 1, the real
+  compression), and `ociimg.NewFileLayer` then runs the codec again over the
+  tar wrapping that spool (pass 2), because an OCI layer *is* a tar and its
+  media type declares the codec: `…layer.v1.tar+zstd`. Pass 2 therefore
+  compresses data that is already compressed, and on an encrypted backup is
+  AEAD output, i.e. indistinguishable from random.
+
+  Measured on this machine, per 256 MiB at the zstd default level 2:
+
+  | stage | throughput | size change |
+  |---|---:|---:|
+  | pass 1, zstd over plaintext chunks | data-dependent | the actual saving |
+  | pass 2, zstd over the sealed spool | ~1500 MiB/s | −0.002% (it grows) |
+  | AES-256-GCM seal | ~2900 MiB/s | — |
+  | sha256, one of 3-4 passes | ~2300 MiB/s | — |
+
+  So it is waste, but small waste: zstd detects incompressible blocks and
+  stores them, leaving pass 2 at roughly memcpy speed. At ~12 Gbit/s it is not
+  the server bottleneck on any link this tool is likely to see, and it is not
+  server-specific either — the local pipeline does the same two passes
+  (`pkg/backup/pipeline.go:986` and `:1061`).
+
+  Removing it means giving the layer wrapper the `store` codec and a plain
+  `…layer.v1.tar` media type. That changes the layer digest, so it breaks
+  dedup against every existing backup and the local/remote digest parity. Not
+  worth 170 ms per 256 MiB.
+- **No buffering between pipeline stages.** Network → chunker and chunker →
+  tar scanner are both unbuffered `io.Pipe`s, so the three goroutines hand off
+  in lockstep with no slack. The kernel receive buffer absorbs some of it; a
+  concurrent read-ahead between the stages would absorb the rest. Deliberately
+  not done: it means reimplementing the error propagation the ingest path
+  relies on (`CloseWithError` in both directions, `errStreamAborted`, the
+  sticky cause surfaced to the client), and the gain only appears once
+  compression and the link are comparable — around 10 GbE, not on the gigabit
+  links this is used on.
+- **None of this has been measured on a real link.** As with steps 1-5, the
+  reasoning is backed by tests, not by a throughput number. The overlap test
+  proves the property, not the size of the gain.
+
+### 10. The temp-space preflight described a window that does not exist
+
+Not a remote finding, but found while answering "how much local disk does a
+remote backup need?" and it changes that answer.
+
+`pipeline.go` required `jobs × max-layer-size` of free space. But `rollLayer`
+drops the spool and **keeps** the file `ociimg.NewFileLayer` produced, appending
+it to `b.data`; those are only released by `cleanup()`, deferred to the end of
+`Run` — that is, after the push. Every layer is on disk at once for the whole
+upload.
+
+Measured: a 1 GiB incompressible source with `--jobs 1 --max-layer-size 64MiB`
+→ preflight asked for 64 MiB, real `--temp-dir` peak **1024 MiB**. A factor of
+16, growing with the layer count. A 20 GiB source on a 5 GiB disk passed the
+preflight and then died of ENOSPC mid-run.
+
+The preflight now asks for the stored upper bound (`raw + 2 × layer`) and its
+error names the two remedies that work: `--temp-dir`, or `--remote-mode stream`
+which builds nothing locally (measured: 4 KiB of client spool for the same
+1 GiB).
+
+Making the peak genuinely small is a separate change: push each layer as it is
+built and replace it with a descriptor, the way the server already does in
+`CommitStream`. It touches the `build → finalize → buildImages → push`
+ordering, the checkpoint resume, and the `--output oci-layout/tar/daemon`
+paths that need the bytes at write time. Not attempted here.

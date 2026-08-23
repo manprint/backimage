@@ -7,6 +7,87 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-08-23
+
+### Added
+
+- **`listen-remote --upload-chunk-size`.** Espone la dimensione del chunk
+  `PATCH` verso il registry. Il default `0` invia ogni blob che il server ha su
+  disco in **una sola richiesta streamata**, come già faceva `backup`; serve
+  solo per un registry che rifiuta corpi grandi (un 413 fa comunque ricadere il
+  push sul chunking da solo).
+- **`listen-remote --push-jobs`.** Numero di blob caricati in parallelo dentro
+  un singolo push, prima ricavato da `--max-sessions`.
+
+### Fixed
+
+- **Un backup remoto su TCP moriva dopo 120 secondi.** `IdleTimeout` veniva
+  applicato come deadline assoluta al momento della `Dial` e nessuno la
+  rinfrescava lato client (il server lo faceva a ogni frame): qualunque backup
+  più lungo del timeout falliva con `i/o timeout`, e i cinque retry morivano
+  allo stesso punto. Adesso la deadline avanza a ogni byte trasferito, quindi
+  significa davvero "inattivo". QUIC non era interessato.
+- **Una singola connessione silenziosa bloccava il server.** L'handshake TLS
+  (e, per QUIC, l'attesa dello stream di sessione) avveniva dentro il loop di
+  accept, senza deadline sulla connessione grezza: un peer che apriva il socket
+  e taceva impediva ogni nuova sessione finché voleva. L'handshake ora avviene
+  fuori dal loop, con un budget di 10 secondi e al massimo 64 peer in
+  handshake insieme.
+- **Il token del registry di un client era raggiungibile dalla sessione di un
+  altro.** `listen-remote` creava un unico `TokenBroker` condiviso da tutte le
+  sessioni, con le chiavi per repository: due client che spingono sullo stesso
+  repository si scambiavano le credenziali. Ogni sessione ha ora il proprio
+  sink e il proprio broker (`server.Config.NewSink`).
+- **Due sessioni streaming concorrenti si corrompevano lo spool a vicenda.** Il
+  file era nominato sull'indice del layer (`backimage-stream-000000.blob.tmp`)
+  dentro un `--work-dir` condiviso: la seconda sessione troncava il layer che
+  la prima stava ancora caricando, e il backup veniva pubblicato corrotto senza
+  errori. Il nome è ora unico per spool.
+- **Il server smetteva di parlare proprio quando era occupato.** Lo
+  `StreamProgress` era emesso all'arrivo di un frame: durante un upload lento
+  il client non sentiva più nulla e chiudeva una sessione che stava
+  progredendo. Ora è su timer (`ProgressInterval`, minimo 50 ms), e vale da
+  keepalive del server.
+- **Il preflight dello spazio temporaneo sottostimava di ordini di
+  grandezza.** Richiedeva `jobs × max-layer-size`, ma la costruzione di un
+  layer libera lo spool e *conserva* il blob OCI prodotto: tutti i layer
+  restano in `--temp-dir` fino alla fine del push. Misurato su una sorgente da
+  1 GiB incomprimibile con `--jobs 1 --max-layer-size 64MiB`: preflight 64 MiB,
+  picco reale 1024 MiB. Una sorgente da 20 GiB su un disco da 5 GiB passava il
+  controllo e poi moriva di ENOSPC a metà corsa. Ora il requisito è la
+  dimensione del backup compresso e l'errore indica i due rimedi che
+  funzionano: `--temp-dir`, oppure `--remote-mode stream` che in locale non
+  costruisce nulla (misurato: 4 KiB di spool sul client per lo stesso 1 GiB).
+  Ridurre `--max-layer-size` o `--jobs` non abbassa il requisito, e la
+  documentazione che lo suggeriva è stata corretta.
+- **Una sessione fatta di soli keepalive teneva uno slot per sempre.** La
+  deadline di inattività non può accorgersene: un peer che manda un keepalive
+  ogni 30 secondi non è mai inattivo. Ora una sessione senza progresso di
+  protocollo per 15 minuti viene chiusa con un errore di rete.
+- **Il client rifiutava un server che negoziava una versione più bassa.**
+  `uploadOnce` pretendeva esattamente la propria versione di protocollo, quindi
+  `--remote-mode layers` non parlava con un server v1 nonostante lo scambio
+  layer-per-layer sia proprio ciò che un peer v1 capisce.
+- **Il server QUIC non liberava la connessione**, solo lo stream: restava
+  appesa fino a `MaxIdleTimeout`. Ora attende che il peer chiuda la sua metà —
+  chiuderla subito farebbe scartare il `BackupEnd` non ancora riscontrato — con
+  un limite di 5 secondi.
+
+### Changed
+
+- **La ricezione e il push verso il registry si sovrappongono.** Il tail della
+  pipeline (digest dello spool, ricostruzione del layer OCI, upload) gira su
+  una goroutine separata invece che sul percorso di ricezione, dove fermava il
+  client per tutta la durata dell'upload. Il passaggio di consegne non è
+  bufferizzato: un solo layer in volo, ed è questa la contropressione che
+  impedisce a un client veloce di riempire il disco.
+  **`--work-dir` richiede ora `3 × --max-layer-size × --max-sessions`** invece
+  di `2 ×`: lo spool in riempimento, quello in upload e il suo blob OCI
+  ricostruito.
+- Il client streaming usa un doppio buffer (`remote.FrameBuffer`) al posto di
+  un `bufio.Writer`: la scansione del filesystem riempie un frame mentre il
+  precedente è sul filo, invece di fermarsi a ogni invio.
+
 ## [0.3.1] - 2026-08-22
 
 ### Added

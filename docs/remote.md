@@ -21,6 +21,12 @@ short-lived bearer tokens and sends them to the server over the already
 authenticated TLS session when the server asks for them. The server must reach
 the registry but never needs `backimage login`.
 
+A token belongs to the session that supplied it. Each session gets its own
+token broker, so a bearer token one client hands over is not reachable by
+another client's session — including when both push to the same repository,
+which is precisely the case a broker shared by the whole server would have
+served from the wrong client's credentials.
+
 ## Streaming mode (default)
 
 ```sh
@@ -36,9 +42,22 @@ archiver window, both bounded and independent of the backup size.
 
 The server assembles one layer at a time in `--work-dir`: the stored blob is
 spooled, digested, wrapped in its deterministic OCI layer, checked with a
-registry `HEAD` and streamed to the registry. Both temporary files are removed
-before the next layer starts, so the server needs roughly twice the layer size
-(`--max-layer-size`, 1 GiB by default), not the size of the backup.
+registry `HEAD` and streamed to the registry.
+
+That tail of the pipeline runs **beside** the reception, not inside it. A
+finished spool is handed to an uploader goroutine and the receiver immediately
+starts filling the next one, so the client keeps sending while the previous
+layer is being digested, rebuilt and pushed. The handoff is unbuffered: at most
+one layer is ever in flight, which is both the back-pressure that stops a fast
+client from filling the disk and what bounds `--work-dir` to **three times the
+layer size** per session (`--max-layer-size`, 1 GiB by default) — the spool
+being filled, the spool being uploaded, and its rebuilt OCI blob. All of them
+are removed as soon as the layer is published, on the error and cancellation
+paths too.
+
+Performed inline, as it was before, the push left the wire idle for exactly as
+long as the slowest stage of the pipeline ran: on a real registry that is most
+of a backup.
 
 `--server-side-compress` is an accepted alias for this mode; it is a no-op
 because streaming already compresses and encrypts on the server. Combined with
@@ -51,7 +70,7 @@ because streaming already compresses and encrypts on the server. Combined with
 | client spool (`--temp-dir`) peak | 4 KiB, i.e. the empty directory |
 | client peak RSS, `--no-encrypt` | ~19 MiB |
 | client peak RSS with a passphrase | ~280 MiB, dominated by the one-shot age/scrypt key wrap, not by the stream |
-| server spool (`--work-dir`) peak | ~1 GiB = 2 × layer size |
+| server spool (`--work-dir`) peak | ~1 GiB = 2 × layer size, **measured before the push was made to overlap the reception**; the current bound is 3 × layer size and has not been re-measured |
 | server spool after the run | empty |
 
 The same invariants are asserted by `test/e2e/phase_08_stream.sh` over TCP and
@@ -195,14 +214,55 @@ file. TLS 1.2 and older are rejected.
 - `--rate-limit` throttles received bytes per second per session.
 - `--metrics-address` exposes `/healthz` and Prometheus text metrics.
 - `--work-dir` holds the per-layer spool of streaming sessions (default
-  `$TMPDIR`). Size it for `2 × --max-layer-size × --max-sessions`. Files are
-  created with mode 0600 and removed as soon as the layer is published, on the
-  error and cancellation paths too. `layers` sessions stay diskless.
+  `$TMPDIR`). Size it for `3 × --max-layer-size × --max-sessions`: reception
+  and the registry push overlap, so one more layer is on disk than when they
+  alternated. Files are created with mode 0600, with a unique name per spool,
+  and removed as soon as the layer is published, on the error and cancellation
+  paths too. `layers` sessions stay diskless.
+- `--push-jobs` is the number of blob uploads a single registry push runs in
+  parallel (default 3). It is unrelated to `--max-sessions`, which used to
+  feed it: a server with 4 sessions was silently allowed 16 concurrent uploads.
+- `--upload-chunk-size` is the registry `PATCH` chunk size. The default, `0`,
+  sends each blob the server holds on disk as **one streamed request**;
+  chunking costs a round trip per chunk and most registries persist a chunk
+  before answering, which caps a push at a fraction of the link speed. Set it
+  only for a registry that refuses large bodies — a `413` also switches the
+  running push over on its own. The maximum accepted value is 64 MiB.
 - `--spool` is deprecated: streaming always spools one layer at a time and the
   flag only prints a warning.
 
-The largest registry upload buffer is 32 MiB per session; control/data frames
-are capped at 4 MiB. Oversized frame lengths are rejected before allocation.
+The layer stream of a `layers` (v1) session cannot be rewound, so it is
+uploaded through a 32 MiB double buffer regardless of `--upload-chunk-size`.
+Control and data frames are capped at 4 MiB; oversized frame lengths are
+rejected before allocation.
+
+## Timeouts and keepalives
+
+Both peers apply a 120-second **idle** timeout, and idle is meant literally:
+the deadline is pushed forward by every byte that moves, so a transfer that
+keeps making progress never expires no matter how long it runs. A deadline
+armed once at connection time would instead cap every TCP backup at two
+minutes.
+
+Silence is what the timeout is for, so neither side may go quiet while it is
+busy:
+
+- the client sends a keepalive frame every 30 seconds;
+- a streaming server reports progress on a timer (`ProgressInterval`, 2 seconds
+  by default, floored at 50 ms), not when a frame happens to arrive. A slow
+  registry can hold the pipeline for minutes, and a server that only spoke when
+  spoken to fell silent exactly then — on a session that was in fact
+  progressing.
+
+QUIC carries its own keepalive every 15 seconds and the same 120-second idle
+timeout, negotiated in the handshake.
+
+A peer that opens a connection and then says nothing is dropped after a
+10-second handshake budget, and it never holds the accept loop: both transports
+complete the TLS handshake (and, for QUIC, wait for the session stream) off the
+accept path, with at most 64 peers mid-handshake at a time. One silent
+connection used to block every other client for as long as it cared to hold the
+socket.
 
 ## Progress
 
@@ -217,8 +277,10 @@ server[publishing]: ...
 
 `receiving` covers reception, chunking, compression and sealing (they run in
 the same pass), `pushing` is a blob upload in flight and `publishing` is the
-manifest/index publication. The same counters are exported by
-`--metrics-address`.
+manifest/index publication. Because the push overlaps the reception, the
+counters keep moving during `pushing`. Reports arrive on a timer, so they also
+prove the session is alive while a stage is slow. The same counters are
+exported by `--metrics-address`.
 
 ## Resume and failure behavior
 

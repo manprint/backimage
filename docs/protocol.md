@@ -23,8 +23,14 @@ TCP is wrapped in TLS 1.3. Every application frame is:
 
 Types are control (protobuf), data (raw compressed OCI layer bytes), and empty
 keepalive. Payloads are limited to 4 MiB. The reader checks the declared length
-before growing its reusable buffer. Idle streams time out after 120 seconds;
-clients send keepalives every 30 seconds.
+before growing its reusable buffer.
+
+Streams time out after 120 seconds of being **idle**: the deadline moves
+forward with every byte transferred, so a long transfer never expires while it
+is making progress. Keeping the wire from falling silent is therefore part of
+the protocol, not an optimisation — clients send keepalives every 30 seconds
+and a streaming server reports progress on a timer (see below). QUIC carries
+the same idle timeout with a 15-second keepalive of its own.
 
 ## Session sequence — v2 (streaming)
 
@@ -47,8 +53,12 @@ manifest, chunk table, encrypted index blob, metadata layer and per-platform
 images, and pushes them with the self-extract binary embedded in the *server*
 build.
 
-`StreamProgress` is throttled to one message every two seconds and reports the
-stage plus received/stored/uploaded bytes, layers, skipped layers and chunks.
+`StreamProgress` is sent on a two-second timer — not once per received frame —
+and reports the stage plus received/stored/uploaded bytes, layers, skipped
+layers and chunks. The timer is what keeps the session alive across a slow
+pipeline stage: driven by arriving frames, the server would go silent exactly
+while a layer upload held the receive path, and the client would drop a
+connection that was in fact progressing.
 `StreamEnd.raw_bytes` must match the bytes the server accepted, otherwise the
 session fails with an integrity error. `BackupEnd` reports the index digest and
 the server-side counters.
@@ -56,6 +66,12 @@ the server-side counters.
 Because the client sends no digest in advance, the server cannot pre-check a
 layer before assembling it; deduplication happens on the layer it just built,
 with the same registry `HEAD` used by v1.
+
+A finished layer is digested, rebuilt and pushed on a separate goroutine, so
+data frames keep being consumed while the previous layer is on its way to the
+registry. The handoff is unbuffered: exactly one layer is in flight, and a
+client that outruns the registry is throttled by the receive window rather than
+by the server accumulating spools.
 
 ### Encryption in v2
 
