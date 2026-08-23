@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -228,6 +227,41 @@ type streamBuilder struct {
 	plain     int64
 	stored    int64
 	created   time.Time
+
+	// A finished spool is handed to the uploader instead of being digested,
+	// rebuilt and pushed inline: doing that on the receive path stops the
+	// client for the whole duration of the registry upload, so the wire sits
+	// idle exactly while the slowest step runs. The handoff is unbuffered, so
+	// at most one layer is ever in flight and the disk holds three: the spool
+	// being filled, the one being uploaded, and its rebuilt OCI blob.
+	pending    chan *pendingLayer
+	uploaded   chan struct{}
+	closeOnce  sync.Once
+	nextFrom   int
+	layerCount int
+
+	// results is written only by the uploader and read only after it stops.
+	results []layerResult
+
+	errMu     sync.Mutex
+	uploadErr error
+}
+
+// pendingLayer is a sealed spool waiting to become an OCI layer.
+type pendingLayer struct {
+	spool *spoolFile
+	index int
+	from  int
+	to    int
+}
+
+// layerResult is what the uploader learned about one published layer.
+type layerResult struct {
+	descriptor Layer
+	info       index.LayerInfo
+	dataPath   string
+	from       int
+	to         int
 }
 
 func newStreamBuilder(cfg ingestConfig, stats *streamStats) (*streamBuilder, error) {
@@ -308,45 +342,49 @@ func (b *streamBuilder) run(ctx context.Context, r io.Reader) (StreamResult, err
 		<-scanned
 		return res, err
 	}
+	b.startUploader(ctx)
+	// abort unwinds both halves of the pipeline on any failure of the
+	// receiving one, so no spool and no scan goroutine outlives it.
+	abort := func(cause error) (StreamResult, error) {
+		_ = scanWriter.CloseWithError(cause)
+		<-scanned
+		b.stopUploader()
+		return res, cause
+	}
 	for {
 		if err := ctx.Err(); err != nil {
-			_ = scanWriter.CloseWithError(err)
-			<-scanned
-			return res, err
+			return abort(err)
+		}
+		// A failed upload must stop the receiver rather than let it keep
+		// spooling into a backup that can no longer be published.
+		if err := b.failure(); err != nil {
+			return abort(err)
 		}
 		ck, err := splitter.Next()
 		if errors.Is(err, io.EOF) {
 			break
 		}
 		if err != nil {
-			_ = scanWriter.CloseWithError(err)
-			<-scanned
-			return res, fmt.Errorf("split: %w", err)
+			return abort(fmt.Errorf("split: %w", err))
 		}
 		stored, err := b.storeChunk(ck)
 		if err != nil {
-			_ = scanWriter.CloseWithError(err)
-			<-scanned
-			return res, err
+			return abort(err)
 		}
 		if b.cfg.MaxBytes > 0 && uint64(b.plain) > b.cfg.MaxBytes {
-			err := fmt.Errorf("session quota exceeded: %d > %d", b.plain, b.cfg.MaxBytes)
-			_ = scanWriter.CloseWithError(err)
-			<-scanned
-			return res, err
+			return abort(fmt.Errorf("session quota exceeded: %d > %d", b.plain, b.cfg.MaxBytes))
 		}
 		if b.shouldRoll(sha256.Sum256(stored)) {
-			if err := b.roll(ctx); err != nil {
-				_ = scanWriter.CloseWithError(err)
-				<-scanned
-				return res, err
+			if err := b.roll(); err != nil {
+				return abort(err)
 			}
 		}
 	}
-	if err := b.roll(ctx); err != nil {
-		_ = scanWriter.CloseWithError(err)
-		<-scanned
-		return res, err
+	if err := b.roll(); err != nil {
+		return abort(err)
+	}
+	if err := b.drainUploader(); err != nil {
+		return abort(err)
 	}
 	_ = scanWriter.Close()
 	outcome := <-scanned
@@ -420,7 +458,7 @@ func (b *streamBuilder) storeChunk(ck *chunk.Chunk) ([]byte, error) {
 		}
 	}
 	if b.spool == nil {
-		spool, err := newSpool(b.cfg.TempDir, len(b.layers))
+		spool, err := newSpool(b.cfg.TempDir)
 		if err != nil {
 			return nil, err
 		}
@@ -451,77 +489,141 @@ func (b *streamBuilder) shouldRoll(digest [32]byte) bool {
 		return false
 	}
 	// Keep one unconstrained final layer: this is the hard guard behind the
-	// probabilistic content-defined boundaries.
-	if len(b.layers) >= maxDataLayers-1 {
+	// probabilistic content-defined boundaries. layerCount, not the published
+	// list, is what counts here: a layer still in flight is already spoken for.
+	if b.layerCount >= maxDataLayers-1 {
 		return false
 	}
 	return b.boundary.ShouldClose(b.spool.size, digest)
 }
 
-// roll turns the current spool into an OCI layer and streams it to the
-// registry. Both temporary files are removed before the next layer starts.
-func (b *streamBuilder) roll(ctx context.Context) error {
+// startUploader runs the layer tail of the pipeline — digest, OCI layer,
+// registry push — one layer behind the receiver.
+func (b *streamBuilder) startUploader(ctx context.Context) {
+	b.pending = make(chan *pendingLayer)
+	b.uploaded = make(chan struct{})
+	go func() {
+		defer close(b.uploaded)
+		for p := range b.pending {
+			// Keep draining after a failure: the receiver must never block on
+			// a send nobody is reading.
+			if b.failure() != nil {
+				p.spool.Remove()
+				continue
+			}
+			if err := b.finishLayer(ctx, p); err != nil {
+				b.setFailure(err)
+			}
+		}
+	}()
+}
+
+// roll hands the current spool to the uploader and returns immediately, so
+// the next chunk can be received while this layer is still being pushed.
+func (b *streamBuilder) roll() error {
 	if b.spool == nil {
 		return nil
 	}
-	if len(b.layers) >= maxDataLayers {
+	if b.layerCount >= maxDataLayers {
 		return fmt.Errorf("layer limit exceeded: %d", maxDataLayers)
 	}
-	blobDigest, err := b.spool.digest()
+	spool := b.spool
+	b.spool = nil
+	p := &pendingLayer{spool: spool, index: b.layerCount, from: b.nextFrom, to: b.chunkIdx - 1}
+	b.nextFrom = b.chunkIdx
+	b.layerCount++
+	// The unbuffered handoff is the back-pressure: a receiver that outruns the
+	// registry waits here instead of filling the disk with spools.
+	b.pending <- p
+	b.applyBoundaryFallback()
+	return b.failure()
+}
+
+// finishLayer turns one spool into a published layer. It runs on the uploader
+// goroutine and touches only uploader-owned state and the atomic counters.
+func (b *streamBuilder) finishLayer(ctx context.Context, p *pendingLayer) error {
+	defer p.spool.Remove()
+	blobDigest, err := p.spool.digest()
 	if err != nil {
-		b.spool.Remove()
-		b.spool = nil
 		return err
 	}
-	if err := b.spool.Close(); err != nil {
-		b.spool.Remove()
-		b.spool = nil
+	if err := p.spool.Close(); err != nil {
 		return err
 	}
-	from := 0
-	if len(b.layerInfo) > 0 {
-		from = b.layerInfo[len(b.layerInfo)-1].ChunkTo + 1
-	}
-	to := b.chunkIdx - 1
 	// Content-addressed name: an identical layer keeps an identical digest
 	// even when an earlier probabilistic boundary moves.
 	dataPath := dataBlobPath(blobDigest)
-	for i := from; i <= to && i < len(b.rows); i++ {
-		b.rows[i].P = dataPath
-	}
-
-	spool := b.spool
-	b.spool = nil
-	defer spool.Remove()
 	layer, err := ociimg.NewFileLayer([]ociimg.LayerFile{{
 		Path: "/" + dataPath,
 		Mode: 0o644,
-		Size: spool.size,
-		Open: func() (io.ReadCloser, error) { return os.Open(spool.path) },
+		Size: p.spool.size,
+		Open: func() (io.ReadCloser, error) { return os.Open(p.spool.path) },
 	}}, b.codec, b.level, b.cfg.TempDir)
 	if err != nil {
 		return err
 	}
 	defer ociimg.RemoveLayer(layer)
 
-	descriptor, err := layerDescriptor(layer, uint32(len(b.layers)))
+	descriptor, err := layerDescriptor(layer, uint32(p.index))
 	if err != nil {
 		return err
 	}
 	if err := b.upload(ctx, layer, descriptor); err != nil {
 		return err
 	}
-	b.layers = append(b.layers, descriptor)
-	b.layerInfo = append(b.layerInfo, index.LayerInfo{
-		Index:       len(b.layerInfo),
-		Digest:      blobDigest,
-		ChunkFrom:   from,
-		ChunkTo:     to,
-		StoredBytes: spool.size,
+	b.results = append(b.results, layerResult{
+		descriptor: descriptor,
+		info: index.LayerInfo{
+			Index:       p.index,
+			Digest:      blobDigest,
+			ChunkFrom:   p.from,
+			ChunkTo:     p.to,
+			StoredBytes: p.spool.size,
+		},
+		dataPath: dataPath, from: p.from, to: p.to,
 	})
-	b.stats.layers.Store(uint32(len(b.layers)))
-	b.applyBoundaryFallback()
+	b.stats.layers.Store(uint32(len(b.results)))
 	return nil
+}
+
+// drainUploader stops the uploader and folds its results into the state the
+// manifest is built from. A single worker consumes the queue in order, so the
+// results already are in layer order.
+func (b *streamBuilder) drainUploader() error {
+	b.stopUploader()
+	if err := b.failure(); err != nil {
+		return err
+	}
+	for _, r := range b.results {
+		for i := r.from; i <= r.to && i < len(b.rows); i++ {
+			b.rows[i].P = r.dataPath
+		}
+		b.layers = append(b.layers, r.descriptor)
+		b.layerInfo = append(b.layerInfo, r.info)
+	}
+	return nil
+}
+
+func (b *streamBuilder) stopUploader() {
+	if b.pending == nil {
+		return
+	}
+	b.closeOnce.Do(func() { close(b.pending) })
+	<-b.uploaded
+}
+
+func (b *streamBuilder) setFailure(err error) {
+	b.errMu.Lock()
+	if b.uploadErr == nil {
+		b.uploadErr = err
+	}
+	b.errMu.Unlock()
+}
+
+func (b *streamBuilder) failure() error {
+	b.errMu.Lock()
+	defer b.errMu.Unlock()
+	return b.uploadErr
 }
 
 func (b *streamBuilder) upload(ctx context.Context, layer ociimgLayer, descriptor Layer) error {
@@ -537,6 +639,28 @@ func (b *streamBuilder) upload(ctx context.Context, layer ociimgLayer, descripto
 		return nil
 	}
 	b.stats.setStage(stagePushing)
+	// The layer is a file on disk here, so it can be replayed: prefer the
+	// single-request upload over the chunked writer, which exists for a
+	// stream that cannot rewind.
+	if putter, ok := b.cfg.Sink.(BlobPutter); ok {
+		base := b.stats.uploaded.Load()
+		open := func() (io.ReadCloser, error) {
+			rc, err := layer.Compressed()
+			if err != nil {
+				return nil, err
+			}
+			return &countingReadCloser{ReadCloser: rc, stats: b.stats, base: base}, nil
+		}
+		if err := putter.PutBlob(ctx, b.cfg.Reference, descriptor.Digest, descriptor.Size, open); err != nil {
+			return fmt.Errorf("registry upload failed: %w", err)
+		}
+		b.stats.uploaded.Store(base + uint64(descriptor.Size))
+		if b.cfg.Metrics != nil {
+			b.cfg.Metrics.addUploaded(uint64(descriptor.Size))
+		}
+		b.stats.setStage(stageReceiving)
+		return nil
+	}
 	writer, err := b.cfg.Sink.OpenBlob(ctx, b.cfg.Reference, descriptor.Digest, descriptor.Size)
 	if err != nil {
 		return fmt.Errorf("registry upload start failed: %w", err)
@@ -575,7 +699,7 @@ func (b *streamBuilder) upload(ctx context.Context, layer ociimgLayer, descripto
 // applyBoundaryFallback mirrors the local pipeline: close to the OCI layer
 // budget the content-defined boundaries give way to fixed ones.
 func (b *streamBuilder) applyBoundaryFallback() {
-	if !b.cfg.Start.GetDedup() || b.boundaryFallback || len(b.layers) < 110 {
+	if !b.cfg.Start.GetDedup() || b.boundaryFallback || b.layerCount < 110 {
 		return
 	}
 	remaining := int64(b.cfg.Start.GetEstimatedBytes()) - b.plain
@@ -690,6 +814,9 @@ func (b *streamBuilder) chunkingInfo() index.ChunkingInfo {
 }
 
 func (b *streamBuilder) cleanup() {
+	// Stop the uploader first: it owns the spools already handed over and
+	// removes each of them, including on the failure path.
+	b.stopUploader()
 	if b.spool != nil {
 		b.spool.Remove()
 		b.spool = nil
@@ -741,6 +868,37 @@ func (c writeCounter) Write(p []byte) (int, error) {
 	return n, err
 }
 
+// BlobPutter is the fast path of a Sink that can replay a blob it holds on
+// disk. A Sink without it keeps the chunked OpenBlob writer.
+type BlobPutter interface {
+	PutBlob(ctx context.Context, reference, digest string, size int64, open func() (io.ReadCloser, error)) error
+}
+
+// countingReadCloser feeds the progress counters from the upload side, where
+// the single-request path has no writer to wrap. base is the total reported
+// before this attempt: a retry reopens the source, and rewinding to base is
+// what keeps a retried layer from being counted twice.
+type countingReadCloser struct {
+	io.ReadCloser
+	stats *streamStats
+	base  uint64
+	sent  uint64
+}
+
+func (c *countingReadCloser) Read(p []byte) (int, error) {
+	n, err := c.ReadCloser.Read(p)
+	if n > 0 {
+		c.sent += uint64(n)
+		c.stats.uploaded.Store(c.base + c.sent)
+	}
+	return n, err
+}
+
+func (c *countingReadCloser) Close() error {
+	c.stats.uploaded.Store(c.base)
+	return c.ReadCloser.Close()
+}
+
 // spoolFile accumulates the stored bytes of the layer being assembled.
 type spoolFile struct {
 	path string
@@ -748,16 +906,25 @@ type spoolFile struct {
 	size int64
 }
 
-func newSpool(dir string, idx int) (*spoolFile, error) {
+// newSpool creates the file the next layer accumulates into. The name is
+// unique per spool, not derived from the layer index: concurrent sessions
+// share --work-dir, and a layer still being uploaded must not be truncated by
+// the one being filled behind it.
+func newSpool(dir string) (*spoolFile, error) {
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return nil, err
 	}
-	path := filepath.Join(dir, fmt.Sprintf("backimage-stream-%06d.blob.tmp", idx))
-	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_TRUNC, 0o600)
+	f, err := os.CreateTemp(dir, "backimage-stream-*.blob.tmp")
 	if err != nil {
 		return nil, err
 	}
-	return &spoolFile{path: path, f: f}, nil
+	if err := f.Chmod(0o600); err != nil {
+		name := f.Name()
+		_ = f.Close()
+		_ = os.Remove(name)
+		return nil, err
+	}
+	return &spoolFile{path: f.Name(), f: f}, nil
 }
 
 func (s *spoolFile) Write(p []byte) error {

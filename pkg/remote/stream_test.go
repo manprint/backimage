@@ -52,7 +52,7 @@ func streamPayload(t *testing.T, size int) []byte {
 func TestClientUploadStreamRunsTheServerPipeline(t *testing.T) {
 	stream := streamPayload(t, 6<<20)
 	sink := newStreamingSink()
-	dialer := &sessionDialer{cfg: server.SessionConfig{AllowNoAuth: true, ProgressInterval: time.Nanosecond}, sink: sink}
+	dialer := &sessionDialer{cfg: server.SessionConfig{AllowNoAuth: true, ProgressInterval: 10 * time.Millisecond}, sink: sink}
 	client, err := New(Config{Dialer: dialer, Address: "pipe", Backoffs: []time.Duration{}})
 	if err != nil {
 		t.Fatal(err)

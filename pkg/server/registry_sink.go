@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"strings"
 
 	"github.com/google/go-containerregistry/pkg/name"
@@ -21,7 +22,13 @@ import (
 )
 
 type RegistrySinkOptions struct {
-	Broker      *TokenBroker
+	Broker *TokenBroker
+	// ChunkSize is the registry PATCH chunk size. Zero, the default, sends
+	// every blob whose source can be reopened as one streamed request:
+	// chunking costs a round trip per chunk and most registries persist a
+	// chunk before answering, which is what caps a push at a fraction of the
+	// link speed. The layer stream of a protocol v1 session cannot rewind, so
+	// it chunks regardless, at 32 MiB when no size is given.
 	ChunkSize   int
 	Jobs        int
 	SelfExtract func(architecture string) ([]byte, error)
@@ -34,8 +41,8 @@ func NewRegistrySink(opts RegistrySinkOptions) (*RegistrySink, error) {
 	if opts.Broker == nil {
 		return nil, errors.New("registry token broker is required")
 	}
-	if opts.ChunkSize <= 0 {
-		opts.ChunkSize = 32 << 20
+	if opts.ChunkSize < 0 {
+		opts.ChunkSize = 0
 	}
 	if opts.Jobs <= 0 {
 		opts.Jobs = 3
@@ -73,6 +80,18 @@ func (s *RegistrySink) OpenBlob(ctx context.Context, reference, digest string, _
 		return nil, err
 	}
 	return client.Open(digest)
+}
+
+// PutBlob uploads a layer the server already holds on disk. It exists so a
+// streaming session does not pay the chunked path meant for the client stream
+// it cannot rewind: the spool is a file, so one streamed request per blob is
+// both possible and considerably faster.
+func (s *RegistrySink) PutBlob(ctx context.Context, reference, digest string, size int64, open func() (io.ReadCloser, error)) error {
+	client, err := s.client(ctx, reference)
+	if err != nil {
+		return err
+	}
+	return client.PutStream(digest, size, open)
 }
 
 func (s *RegistrySink) client(ctx context.Context, reference string) (*backregistry.BlobClient, error) {

@@ -506,16 +506,16 @@ func TestStreamHelpers(t *testing.T) {
 	// Close to the OCI budget the content-defined boundaries give way to
 	// fixed-size ones so the layer count stays bounded.
 	builder := &streamBuilder{
-		cfg:    ingestConfig{Start: &protocol.StreamStart{Dedup: true, EstimatedBytes: 1 << 30}},
-		stats:  new(streamStats),
-		layers: make([]Layer, 110),
+		cfg:        ingestConfig{Start: &protocol.StreamStart{Dedup: true, EstimatedBytes: 1 << 30}},
+		stats:      new(streamStats),
+		layerCount: 110,
 	}
 	builder.applyBoundaryFallback()
 	if !builder.boundaryFallback || builder.boundary == nil {
 		t.Fatal("the boundary fallback did not engage at 110 layers")
 	}
 	builder.boundaryFallback = false
-	builder.layers = make([]Layer, 3)
+	builder.layerCount = 3
 	builder.applyBoundaryFallback()
 	if builder.boundaryFallback {
 		t.Fatal("the fallback engaged too early")
@@ -576,7 +576,7 @@ func TestNewSpoolRejectsUnusableDirectory(t *testing.T) {
 	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := newSpool(file, 0); err == nil {
+	if _, err := newSpool(file); err == nil {
 		t.Fatal("a spool directory that is a file was accepted")
 	}
 }

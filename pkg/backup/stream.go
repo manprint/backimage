@@ -1,7 +1,6 @@
 package backup
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"fmt"
@@ -51,8 +50,10 @@ func (b *builder) runStream(ctx context.Context, est Estimate, res Result) (Resu
 	var stats archive.Stats
 	source := func(sourceCtx context.Context, w io.Writer) error {
 		// The archiver writes in small bursts; buffering them into full frames
-		// keeps the wire overhead and the client allocation rate flat.
-		buffered := bufio.NewWriterSize(w, backremote.StreamFrameSize)
+		// keeps the wire overhead and the client allocation rate flat. The
+		// buffer is double: the walk fills one frame while the previous one is
+		// on the wire, instead of stopping for every send.
+		buffered := backremote.NewFrameBuffer(w, backremote.StreamFrameSize)
 		writer := archive.NewWriter(buffered, archive.Options{
 			Strict:         !cfg.AllowDegraded,
 			OneFileSystem:  cfg.OneFileSystem,

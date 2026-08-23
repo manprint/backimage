@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"sync"
 	"time"
@@ -17,6 +18,13 @@ type Config struct {
 	MaxSessions int
 	Metrics     *Metrics
 	OnError     func(error)
+
+	// NewSink builds the registry-facing half of one session. A sink carries
+	// the token broker the client fills with its registry credentials, so a
+	// shared one lets any session push with any other session's bearer token
+	// as soon as two clients target the same repository. Set this to isolate
+	// them; when nil every session shares the sink passed to New.
+	NewSink func() (Sink, error)
 }
 
 // Server accepts independent, stateless sessions with a hard concurrency cap.
@@ -28,7 +36,7 @@ type Server struct {
 }
 
 func New(cfg Config, sink Sink) (*Server, error) {
-	if sink == nil {
+	if sink == nil && cfg.NewSink == nil {
 		return nil, errors.New("server sink is required")
 	}
 	if cfg.MaxSessions <= 0 {
@@ -38,7 +46,20 @@ func New(cfg Config, sink Sink) (*Server, error) {
 		cfg.Metrics = new(Metrics)
 	}
 	cfg.Session.Metrics = cfg.Metrics
-	if _, err := NewSession(cfg.Session, sink); err != nil {
+	// Build one sink up front so a misconfigured factory fails at startup
+	// rather than on the first client.
+	probe := sink
+	if cfg.NewSink != nil {
+		built, err := cfg.NewSink()
+		if err != nil {
+			return nil, err
+		}
+		if built == nil {
+			return nil, errors.New("server sink factory returned no sink")
+		}
+		probe = built
+	}
+	if _, err := NewSession(cfg.Session, probe); err != nil {
 		return nil, err
 	}
 	return &Server{cfg: cfg, sink: sink, sem: make(chan struct{}, cfg.MaxSessions)}, nil
@@ -61,6 +82,10 @@ func (s *Server) Serve(ctx context.Context, listener transport.Listener) error {
 		if err != nil {
 			if ctx.Err() != nil {
 				return ctx.Err()
+			}
+			// A closed listener never recovers; retrying it is a busy loop.
+			if errors.Is(err, net.ErrClosed) {
+				return err
 			}
 			s.report(fmt.Errorf("accept remote session: %w", err))
 			continue
@@ -97,7 +122,15 @@ func (s *Server) serveOne(ctx context.Context, stream transport.Stream) {
 	defer func() {
 		s.cfg.Metrics.sessionDone(time.Since(start))
 	}()
-	session, err := NewSession(s.cfg.Session, s.sink)
+	sink, err := s.sessionSink()
+	if err != nil {
+		if closeErr := stream.Close(); closeErr != nil && !errors.Is(closeErr, net.ErrClosed) {
+			s.report(fmt.Errorf("close invalid session: %w", closeErr))
+		}
+		s.report(err)
+		return
+	}
+	session, err := NewSession(s.cfg.Session, sink)
 	if err != nil {
 		if closeErr := stream.Close(); closeErr != nil && !errors.Is(closeErr, net.ErrClosed) {
 			s.report(fmt.Errorf("close invalid session: %w", closeErr))
@@ -108,6 +141,52 @@ func (s *Server) serveOne(ctx context.Context, stream transport.Stream) {
 	if err := session.Run(ctx, stream); err != nil && !errors.Is(err, context.Canceled) {
 		s.report(err)
 	}
+	releaseConnection(stream)
+}
+
+// connectionLinger bounds the wait for a peer to close its half after the
+// session ends.
+const connectionLinger = 5 * time.Second
+
+// releaseConnection tears down the transport once the protocol is done. For
+// QUIC, Stream.Close only sends the stream FIN and the connection would linger
+// until MaxIdleTimeout. Closing it outright is not an option either:
+// CONNECTION_CLOSE discards data the peer has not acknowledged, which is
+// exactly the BackupEnd it is waiting for. So wait for the peer to finish
+// first, and give up after a bounded linger.
+func releaseConnection(stream transport.Stream) {
+	closer, ok := stream.(transport.ConnectionCloser)
+	if !ok {
+		return
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		// EOF means the peer closed its side, so it has read everything.
+		_, _ = io.Copy(io.Discard, stream)
+	}()
+	select {
+	case <-done:
+	case <-time.After(connectionLinger):
+	}
+	_ = closer.CloseConnection()
+}
+
+// sessionSink gives this session its own registry-facing half when a factory
+// is configured, so the registry token one client hands over stays reachable
+// only by that client's session.
+func (s *Server) sessionSink() (Sink, error) {
+	if s.cfg.NewSink == nil {
+		return s.sink, nil
+	}
+	sink, err := s.cfg.NewSink()
+	if err != nil {
+		return nil, fmt.Errorf("build session sink: %w", err)
+	}
+	if sink == nil {
+		return nil, errors.New("server sink factory returned no sink")
+	}
+	return sink, nil
 }
 
 func (s *Server) report(err error) {

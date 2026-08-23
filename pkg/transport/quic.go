@@ -63,6 +63,11 @@ func (d *quicDialer) Dial(ctx context.Context, addr string) (Stream, error) {
 
 type quicListener struct {
 	listener *quic.Listener
+
+	ready    chan Stream
+	closed   chan struct{}
+	once     sync.Once
+	closeErr error
 }
 
 func newQUICListener(addr string, cfg Config) (Listener, error) {
@@ -80,25 +85,71 @@ func newQUICListener(addr string, cfg Config) (Listener, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &quicListener{listener: listener}, nil
+	l := &quicListener{
+		listener: listener,
+		ready:    make(chan Stream), closed: make(chan struct{}),
+	}
+	go l.acceptLoop()
+	return l, nil
 }
 
 func (l *quicListener) Name() string { return "quic" }
 
 func (l *quicListener) Addr() net.Addr { return l.listener.Addr() }
 
-func (l *quicListener) Close() error { return l.listener.Close() }
+func (l *quicListener) Close() error {
+	l.once.Do(func() {
+		close(l.closed)
+		l.closeErr = l.listener.Close()
+	})
+	return l.closeErr
+}
+
+// acceptLoop waits for the session stream off the accept path. A QUIC peer
+// that completes the handshake and never opens a stream would otherwise hold
+// the accept loop, and with it every other client, for the whole idle timeout.
+func (l *quicListener) acceptLoop() {
+	pending := make(chan struct{}, maxPendingHandshakes)
+	for {
+		conn, err := l.listener.Accept(context.Background())
+		if err != nil {
+			return
+		}
+		select {
+		case pending <- struct{}{}:
+		case <-l.closed:
+			_ = conn.CloseWithError(0, "")
+			return
+		}
+		go func() {
+			defer func() { <-pending }()
+			// The stream must arrive within the handshake budget: a
+			// connection without one carries no session.
+			ctx, cancel := context.WithTimeout(context.Background(), handshakeTimeout)
+			defer cancel()
+			stream, err := conn.AcceptStream(ctx)
+			if err != nil {
+				_ = conn.CloseWithError(0, "")
+				return
+			}
+			select {
+			case l.ready <- newQUICStream(conn, stream):
+			case <-l.closed:
+				_ = conn.CloseWithError(0, "")
+			}
+		}()
+	}
+}
 
 func (l *quicListener) Accept(ctx context.Context) (Stream, error) {
-	conn, err := l.listener.Accept(ctx)
-	if err != nil {
-		return nil, err
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-l.closed:
+		return nil, net.ErrClosed
+	case stream := <-l.ready:
+		return stream, nil
 	}
-	stream, err := conn.AcceptStream(ctx)
-	if err != nil {
-		return nil, errors.Join(fmt.Errorf("accept QUIC backup stream: %w", err), conn.CloseWithError(0, ""))
-	}
-	return newQUICStream(conn, stream), nil
 }
 
 type quicStream struct {

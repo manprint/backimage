@@ -142,7 +142,11 @@ func (c *Client) uploadOnce(ctx context.Context, backup Backup) (Result, error) 
 		return result, remoteErr
 	}
 	ack := msg.GetHelloAck()
-	if ack == nil || ack.ProtocolVersion != protocol.Version {
+	// The server answers with the version it agreed to speak, which may be
+	// lower than ours: the layer-by-layer exchange below is exactly what a v1
+	// peer understands, so refusing anything but our own version would reject
+	// a server this client can talk to.
+	if ack == nil || !protocol.Supported(ack.ProtocolVersion) || ack.ProtocolVersion > protocol.Version {
 		return result, errors.New("remote server returned an invalid HelloAck")
 	}
 	if ack.MaxBytes > 0 && start.EstimatedBytes > ack.MaxBytes {

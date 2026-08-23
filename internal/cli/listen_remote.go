@@ -48,7 +48,9 @@ func newListenRemoteCommand() *cobra.Command {
 	f.String("auth-token-file", "", "read the pre-shared token from a file")
 	f.Bool("insecure-no-auth", false, "allow unauthenticated clients (strongly discouraged)")
 	f.StringSlice("allow-repo", nil, "repository prefix a client may push to, e.g. ghcr.io/team/ (repeatable; empty = any)")
-	f.Int("max-sessions", 4, "maximum concurrent backup sessions; server disk needed is 2 x layer size x sessions")
+	f.Int("max-sessions", 4, "maximum concurrent backup sessions; server disk needed is 3 x layer size x sessions")
+	f.Int("push-jobs", 3, "parallel blob uploads per registry push")
+	f.String("upload-chunk-size", "0", "registry PATCH chunk size, e.g. 32MiB (0 = one request per blob, faster)")
 	f.String("max-bytes", "0", "maximum bytes accepted per session, e.g. 200GiB (0 = unlimited)")
 	f.String("rate-limit", "0", "bytes per second per session, e.g. 80MiB (0 = unlimited)")
 	f.String("metrics-address", "", "serve /healthz and /metrics on this HOST:PORT (empty = disabled)")
@@ -131,12 +133,27 @@ func runListenRemote(cmd *cobra.Command, _ []string) error {
 			return New(KindNetwork, "", "listen TCP %s: %v", bind, errors.Join(err, listener.Close()))
 		}
 	}
-	broker := server.NewTokenBroker(30 * time.Second)
-	sink, err := server.NewRegistrySink(server.RegistrySinkOptions{
-		Broker: broker, Jobs: maxSessions, SelfExtract: embedded.SelfExtract,
-	})
+	pushJobs := getFlagInt(cmd, "push-jobs")
+	if pushJobs <= 0 {
+		return New(KindUsage, "", "--push-jobs must be positive")
+	}
+	uploadChunk, err := parseLimitFlag(getFlagString(cmd, "upload-chunk-size"))
 	if err != nil {
-		return New(KindGeneric, "", "registry sink: %v", errors.Join(err, listener.Close(), closeOptionalListener(alsoTCP)))
+		return New(KindUsage, "", "--upload-chunk-size: %v", err)
+	}
+	if uploadChunk > 64<<20 {
+		return New(KindUsage, "", "--upload-chunk-size cannot exceed 64MiB")
+	}
+	// One sink, and therefore one token broker, per session: a registry token
+	// a client hands over must never be reachable by another client's session
+	// pushing to the same repository.
+	newSink := func() (server.Sink, error) {
+		return server.NewRegistrySink(server.RegistrySinkOptions{
+			Broker:      server.NewTokenBroker(30 * time.Second),
+			Jobs:        pushJobs,
+			ChunkSize:   int(uploadChunk),
+			SelfExtract: embedded.SelfExtract,
+		})
 	}
 	metrics := new(server.Metrics)
 	remoteServer, err := server.New(server.Config{
@@ -148,7 +165,8 @@ func runListenRemote(cmd *cobra.Command, _ []string) error {
 		},
 		MaxSessions: maxSessions, Metrics: metrics,
 		OnError: func(err error) { printer.Warnf("remote session: %v", err) },
-	}, sink)
+		NewSink: newSink,
+	}, nil)
 	if err != nil {
 		return New(KindUsage, "", "%v", errors.Join(err, listener.Close(), closeOptionalListener(alsoTCP)))
 	}

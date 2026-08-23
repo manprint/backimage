@@ -11,6 +11,7 @@ import (
 	"hash"
 	"io"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/manprint/backimage/pkg/protocol"
@@ -73,8 +74,10 @@ type SessionConfig struct {
 	// TempDir holds the per-layer spool of streaming (v2) sessions. Only the
 	// layer currently being assembled is written there.
 	TempDir string
-	// ProgressInterval throttles the StreamProgress messages sent while a
-	// streaming session receives data.
+	// ProgressInterval is how often a streaming session reports progress. It
+	// doubles as the server keepalive, so it also bounds how long a client can
+	// hear nothing while the pipeline is busy. Values below 50ms are raised to
+	// it; zero selects 2s.
 	ProgressInterval time.Duration
 }
 
@@ -138,21 +141,101 @@ type runState struct {
 	skipCount  uint32
 
 	// streaming (protocol v2) state
-	ingest       *ingest
-	lastProgress time.Time
+	ingest    *ingest
+	heartbeat *heartbeat
 }
 
+// sessionStream serialises everything the server writes. The session loop is
+// not the only writer any more: while the pipeline holds it, a heartbeat keeps
+// the wire warm beside it, and a protocol message must never be interleaved
+// with another halfway through its frame.
+type sessionStream struct {
+	transport.Stream
+	mu sync.Mutex
+}
+
+func (s *sessionStream) send(msg *protocol.ServerMessage) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return protocol.WriteServerMessage(s.Stream, msg)
+}
+
+func (s *sessionStream) setDeadline(t time.Time) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.Stream.SetDeadline(t)
+}
+
+// heartbeat reports progress on a timer while a streaming session runs. A
+// layer upload can hold the receive path for longer than the client's idle
+// timeout, and a client that hears nothing for that long drops the connection
+// on a backup that is in fact progressing.
+type heartbeat struct {
+	stop chan struct{}
+	done chan struct{}
+}
+
+// minHeartbeatInterval floors the timer. ProgressInterval used to throttle a
+// report driven by arriving frames, where a tiny value simply meant "every
+// frame"; a timer with the same value would instead flood the session.
+const minHeartbeatInterval = 50 * time.Millisecond
+
+func startHeartbeat(stream *sessionStream, in *ingest, every time.Duration) *heartbeat {
+	if every < minHeartbeatInterval {
+		every = minHeartbeatInterval
+	}
+	h := &heartbeat{stop: make(chan struct{}), done: make(chan struct{})}
+	go func() {
+		defer close(h.done)
+		// The first report is one interval away on purpose: a client that has
+		// not entered its read loop yet must not meet an unsolicited message
+		// on a transport with no buffer to park it in.
+		ticker := time.NewTicker(every)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-h.stop:
+				return
+			case <-ticker.C:
+				// A failed send is not this goroutine's to report: the
+				// session loop is about to see the same broken stream.
+				_ = stream.send(&protocol.ServerMessage{
+					Msg: &protocol.ServerMessage_StreamProgress{StreamProgress: in.progress()},
+				})
+			}
+		}
+	}()
+	return h
+}
+
+func (h *heartbeat) Stop() {
+	if h == nil {
+		return
+	}
+	close(h.stop)
+	<-h.done
+}
+
+// maxKeepaliveOnly bounds how long a session may consist of nothing but
+// keepalives. The idle deadline cannot catch that on its own: a peer sending a
+// keepalive every 30 seconds is never idle, and would hold one of the
+// --max-sessions slots for as long as it cared to.
+const maxKeepaliveOnly = 15 * time.Minute
+
 // Run serves the stream until the backup commits or a protocol error occurs.
-func (s *Session) Run(ctx context.Context, stream transport.Stream) error {
+func (s *Session) Run(ctx context.Context, raw transport.Stream) error {
+	stream := &sessionStream{Stream: raw}
 	defer stream.Close()
 	rs := &runState{state: stateNew}
+	defer func() { rs.heartbeat.Stop() }()
 	buf := make([]byte, 0, 64<<10)
+	lastProgress := s.cfg.Now()
 	for rs.state != stateClosed {
 		if err := ctx.Err(); err != nil {
 			s.abort(ctx, rs)
 			return err
 		}
-		if err := stream.SetDeadline(s.cfg.Now().Add(s.cfg.IdleTimeout)); err != nil {
+		if err := stream.setDeadline(s.cfg.Now().Add(s.cfg.IdleTimeout)); err != nil {
 			s.abort(ctx, rs)
 			return fmt.Errorf("set session deadline: %w", err)
 		}
@@ -167,11 +250,17 @@ func (s *Session) Run(ctx context.Context, stream transport.Stream) error {
 			if len(payload) != 0 {
 				return s.fail(ctx, stream, rs, ErrorUsage, "keepalive frame must be empty", "")
 			}
+			if s.cfg.Now().Sub(lastProgress) > maxKeepaliveOnly {
+				return s.fail(ctx, stream, rs, ErrorNetwork,
+					fmt.Sprintf("no protocol progress for %s: keepalives alone do not hold a session", maxKeepaliveOnly), "")
+			}
 		case protocol.FrameData:
+			lastProgress = s.cfg.Now()
 			if err := s.data(ctx, stream, rs, payload); err != nil {
 				return err
 			}
 		case protocol.FrameControl:
+			lastProgress = s.cfg.Now()
 			msg, decErr := protocol.DecodeClientMessage(payload)
 			if decErr != nil {
 				return s.fail(ctx, stream, rs, ErrorUsage, decErr.Error(), "")
@@ -186,7 +275,7 @@ func (s *Session) Run(ctx context.Context, stream transport.Stream) error {
 	return nil
 }
 
-func (s *Session) control(ctx context.Context, stream transport.Stream, rs *runState, msg *protocol.ClientMessage) error {
+func (s *Session) control(ctx context.Context, stream *sessionStream, rs *runState, msg *protocol.ClientMessage) error {
 	switch m := msg.Msg.(type) {
 	case *protocol.ClientMessage_Hello:
 		return s.hello(ctx, stream, rs, m.Hello)
@@ -230,7 +319,7 @@ type TokenRequestSource interface {
 	TokenScope(reference string) (repository string, actions []string, err error)
 }
 
-func (s *Session) hello(ctx context.Context, stream transport.Stream, rs *runState, hello *protocol.Hello) error {
+func (s *Session) hello(ctx context.Context, stream *sessionStream, rs *runState, hello *protocol.Hello) error {
 	if rs.state != stateNew {
 		return s.unexpected(ctx, stream, rs, "Hello")
 	}
@@ -252,7 +341,7 @@ func (s *Session) hello(ctx context.Context, stream transport.Stream, rs *runSta
 	rs.sessionID = hello.SessionId
 	rs.version = hello.ProtocolVersion
 	rs.state = stateGreeted
-	return protocol.WriteServerMessage(stream, &protocol.ServerMessage{Msg: &protocol.ServerMessage_HelloAck{HelloAck: &protocol.HelloAck{
+	return stream.send(&protocol.ServerMessage{Msg: &protocol.ServerMessage_HelloAck{HelloAck: &protocol.HelloAck{
 		ServerVersion:       s.cfg.Version,
 		ProtocolVersion:     rs.version,
 		Streaming:           rs.version >= 2 && s.Streaming(),
@@ -263,7 +352,7 @@ func (s *Session) hello(ctx context.Context, stream transport.Stream, rs *runSta
 	}}})
 }
 
-func (s *Session) backupStart(ctx context.Context, stream transport.Stream, rs *runState, start *protocol.BackupStart) error {
+func (s *Session) backupStart(ctx context.Context, stream *sessionStream, rs *runState, start *protocol.BackupStart) error {
 	if rs.state != stateGreeted {
 		return s.unexpected(ctx, stream, rs, "BackupStart")
 	}
@@ -290,10 +379,10 @@ func (s *Session) backupStart(ctx context.Context, stream transport.Stream, rs *
 		}
 		ack.TokenRequest = &protocol.TokenRequest{Repository: repository, Actions: actions}
 	}
-	return protocol.WriteServerMessage(stream, &protocol.ServerMessage{Msg: &protocol.ServerMessage_BackupAck{BackupAck: ack}})
+	return stream.send(&protocol.ServerMessage{Msg: &protocol.ServerMessage_BackupAck{BackupAck: ack}})
 }
 
-func (s *Session) layerStart(ctx context.Context, stream transport.Stream, rs *runState, start *protocol.LayerStart) error {
+func (s *Session) layerStart(ctx context.Context, stream *sessionStream, rs *runState, start *protocol.LayerStart) error {
 	if rs.state != stateReady {
 		return s.unexpected(ctx, stream, rs, "LayerStart")
 	}
@@ -324,12 +413,12 @@ func (s *Session) layerStart(ctx context.Context, stream transport.Stream, rs *r
 			return s.fail(ctx, stream, rs, ErrorNetwork, "registry upload start failed", err.Error())
 		}
 	}
-	return protocol.WriteServerMessage(stream, &protocol.ServerMessage{Msg: &protocol.ServerMessage_LayerAck{LayerAck: &protocol.LayerAck{
+	return stream.send(&protocol.ServerMessage{Msg: &protocol.ServerMessage_LayerAck{LayerAck: &protocol.LayerAck{
 		Index: start.Index, Skipped: exists,
 	}}})
 }
 
-func (s *Session) data(ctx context.Context, stream transport.Stream, rs *runState, payload []byte) error {
+func (s *Session) data(ctx context.Context, stream *sessionStream, rs *runState, payload []byte) error {
 	if rs.state == stateStreaming {
 		return s.streamData(ctx, stream, rs, payload)
 	}
@@ -383,7 +472,7 @@ func (s *Session) throttle(ctx context.Context, rs *runState) error {
 	}
 }
 
-func (s *Session) layerEnd(ctx context.Context, stream transport.Stream, rs *runState, end *protocol.LayerEnd) error {
+func (s *Session) layerEnd(ctx context.Context, stream *sessionStream, rs *runState, end *protocol.LayerEnd) error {
 	if rs.state != stateReceiving || rs.current == nil {
 		return s.unexpected(ctx, stream, rs, "LayerEnd")
 	}
@@ -412,7 +501,7 @@ func (s *Session) layerEnd(ctx context.Context, stream transport.Stream, rs *run
 	})
 	rs.current, rs.receiver, rs.hash = nil, nil, nil
 	rs.state = stateReady
-	if err := protocol.WriteServerMessage(stream, &protocol.ServerMessage{Msg: &protocol.ServerMessage_Progress{Progress: &protocol.Progress{
+	if err := stream.send(&protocol.ServerMessage{Msg: &protocol.ServerMessage_Progress{Progress: &protocol.Progress{
 		Layer: uint32(len(rs.layers) - 1), Uploaded: rs.totalBytes, Skipped: rs.skipped,
 	}}}); err != nil {
 		return err
@@ -425,22 +514,22 @@ func (s *Session) layerEnd(ctx context.Context, stream transport.Stream, rs *run
 		return s.fail(ctx, stream, rs, ErrorNetwork, "publishing OCI index failed", err.Error())
 	}
 	rs.state = stateClosed
-	return protocol.WriteServerMessage(stream, &protocol.ServerMessage{Msg: &protocol.ServerMessage_BackupEnd{BackupEnd: &protocol.BackupEnd{
+	return stream.send(&protocol.ServerMessage{Msg: &protocol.ServerMessage_BackupEnd{BackupEnd: &protocol.BackupEnd{
 		Digest: digest, BytesUploaded: rs.totalBytes, BlobsSkipped: rs.skipCount,
 	}}})
 }
 
-func (s *Session) unexpected(ctx context.Context, stream transport.Stream, rs *runState, message string) error {
+func (s *Session) unexpected(ctx context.Context, stream *sessionStream, rs *runState, message string) error {
 	return s.fail(ctx, stream, rs, ErrorUsage, fmt.Sprintf("unexpected %s in state %d", message, rs.state), "")
 }
 
-func (s *Session) fail(ctx context.Context, stream transport.Stream, rs *runState, kind uint32, message, hint string) error {
+func (s *Session) fail(ctx context.Context, stream *sessionStream, rs *runState, kind uint32, message, hint string) error {
 	s.abort(ctx, rs)
 	rs.state = stateClosed
 	if s.cfg.Metrics != nil {
 		s.cfg.Metrics.addError(kind)
 	}
-	writeErr := protocol.WriteServerMessage(stream, &protocol.ServerMessage{Msg: &protocol.ServerMessage_Error{Error: &protocol.Error{
+	writeErr := stream.send(&protocol.ServerMessage{Msg: &protocol.ServerMessage_Error{Error: &protocol.Error{
 		Kind: kind, Message: message, Hint: hint,
 	}}})
 	sessionErr := &SessionError{Kind: kind, Message: message}
@@ -451,6 +540,9 @@ func (s *Session) fail(ctx context.Context, stream transport.Stream, rs *runStat
 }
 
 func (s *Session) abort(ctx context.Context, rs *runState) {
+	// The heartbeat reads the ingest: stop it before the ingest goes away.
+	rs.heartbeat.Stop()
+	rs.heartbeat = nil
 	if rs.ingest != nil {
 		rs.ingest.Abort()
 		rs.ingest = nil

@@ -76,7 +76,7 @@ func TestSessionStreamPublishesAndReportsProgress(t *testing.T) {
 	stream, _ := testArchive(t, 24<<20)
 	sink := newStreamSink()
 	client, done := startSession(t, SessionConfig{
-		AllowNoAuth: true, TempDir: t.TempDir(), ProgressInterval: time.Nanosecond,
+		AllowNoAuth: true, TempDir: t.TempDir(), ProgressInterval: 10 * time.Millisecond,
 	}, sink)
 	defer client.Close()
 	_ = client.SetDeadline(time.Now().Add(60 * time.Second))

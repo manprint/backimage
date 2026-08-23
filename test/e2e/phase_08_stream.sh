@@ -120,7 +120,9 @@ peak=$(cat "$work/spool-peak" 2>/dev/null || echo 0)
 
 echo "==> distinct server-side stages reached the client"
 grep -q 'server\[' "$work/client.err"
-grep -qE 'server\[(receiving|pushing|publishing)\]' "$work/client.err"
+# A backup shorter than one heartbeat interval is reported by the closing
+# progress message alone, so "done" is a legitimate single sample here.
+grep -qE 'server\[(receiving|pushing|publishing|done)\]' "$work/client.err"
 grep -q 'streaming mode' "$work/client.err"
 
 echo "==> published image restores byte for byte"
@@ -136,6 +138,33 @@ echo "==> backimage restore of the streamed backup"
 bin/backimage restore "${REPO}:tcp" --extract --destination "$work/restored" \
 	--no-preserve-owner --password "$PASSPHRASE" >/dev/null 2>"$work/restore.err"
 cmp "$work/tree/random.bin" "$work/restored/tree/random.bin"
+
+echo "==> two concurrent sessions share --work-dir without corrupting each other"
+# A spool named after the layer index let the second session truncate the layer
+# the first was still uploading, and both published silently corrupted data.
+mkdir -p "$work/tmp-par1" "$work/tmp-par2" "$work/out"
+pids=""
+for tag in par1 par2; do
+	bin/backimage backup "$work/tree" --repo "$REPO" --tag "$tag" \
+		--remote "127.0.0.1:${REMOTE_PORT}" --tls-ca "$work/server.crt" \
+		--auth-token-file "$work/token" --no-encrypt --allow-degraded \
+		--max-layer-size 32MiB --temp-dir "$work/tmp-$tag" \
+		--json >"$work/$tag.json" 2>"$work/$tag.err" &
+	pids="$pids $!"
+done
+for pid in $pids; do wait "$pid"; done
+for tag in par1 par2; do
+	jq -e '.digest != "" and .chunks > 0' "$work/$tag.json" >/dev/null
+	docker pull "${REPO}:$tag" >/dev/null
+	docker run --rm "${REPO}:$tag" verify --json | jq -e '.ok' >/dev/null
+	rm -rf "$work/out/$tag" && mkdir -p "$work/out/$tag"
+	docker run --rm "${REPO}:$tag" tar >"$work/out/$tag.tar"
+	tar -xf "$work/out/$tag.tar" -C "$work/out/$tag"
+	cmp "$work/tree/random.bin" "$work/out/$tag/tree/random.bin"
+done
+# Identical sources must reach identical content, whatever the interleaving was.
+cmp "$work/out/par1/tree/random.bin" "$work/out/par2/tree/random.bin"
+rm -rf "$work/out"/*
 
 echo "==> server released every temporary file and logged no secret"
 [ -z "$(find "$work/server-work" -mindepth 1 -print -quit)" ]

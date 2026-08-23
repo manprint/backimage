@@ -25,11 +25,14 @@ func NewBlobClient(ctx context.Context, ref name.Reference, provider Provider, c
 	if provider == nil {
 		return nil, errors.New("registry token provider is required")
 	}
-	if chunkSize <= 0 {
-		chunkSize = fallbackChunkSize
-	}
 	if chunkSize > 64<<20 {
 		return nil, errors.New("registry upload chunk exceeds 64 MiB memory limit")
+	}
+	// Open cannot seek, so it always needs a concrete buffer size. PutStream
+	// can, so it keeps the caller's zero and sends one request per blob.
+	bufSize := chunkSize
+	if bufSize <= 0 {
+		bufSize = fallbackChunkSize
 	}
 	base, err := httpBase(ref.Context().RegistryStr())
 	if err != nil {
@@ -41,9 +44,24 @@ func NewBlobClient(ctx context.Context, ref name.Reference, provider Provider, c
 		ref:    ref,
 		base:   base + "/v2/" + ref.Context().RepositoryStr(),
 		client: newRegistryClient(provider, scope),
-		opts:   PushOptions{ChunkSize: int64(chunkSize), MaxRetries: 5},
+		opts:   PushOptions{ChunkSize: int64(max(chunkSize, 0)), MaxRetries: 5},
 	}
-	return &BlobClient{p: p, chunkSize: chunkSize}, nil
+	return &BlobClient{p: p, chunkSize: bufSize}, nil
+}
+
+// PutStream uploads a blob whose source can be reopened, in a single streamed
+// request when no chunk size was configured. Open has to chunk because it
+// receives bytes it cannot rewind; a caller holding the blob on disk does not,
+// and one request per blob costs three round trips instead of one per chunk.
+// A registry that answers 413 still falls back to chunking on its own.
+func (c *BlobClient) PutStream(digest string, size int64, open func() (io.ReadCloser, error)) error {
+	if !validSHA256Digest(digest) {
+		return fmt.Errorf("invalid blob digest %q", digest)
+	}
+	if open == nil {
+		return errors.New("registry blob source is required")
+	}
+	return c.p.uploadWithRetries(blobTask{digest: digest, size: size, open: open})
 }
 
 func (c *BlobClient) Exists(digest string) (bool, error) {

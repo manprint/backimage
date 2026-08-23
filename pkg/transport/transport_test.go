@@ -350,6 +350,8 @@ func mustListener(t *testing.T, transportName string, tlsCfg *tls.Config) Listen
 
 func streamTLSVersion(stream Stream) uint16 {
 	switch conn := stream.(type) {
+	case *idleConn:
+		return conn.Conn.ConnectionState().Version
 	case *tls.Conn:
 		return conn.ConnectionState().Version
 	case *quicStream:
