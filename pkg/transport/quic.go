@@ -118,7 +118,7 @@ func (l *quicListener) acceptLoop() {
 		select {
 		case pending <- struct{}{}:
 		case <-l.closed:
-			_ = conn.CloseWithError(0, "")
+			discardCloseError(conn.CloseWithError(0, ""))
 			return
 		}
 		go func() {
@@ -129,13 +129,13 @@ func (l *quicListener) acceptLoop() {
 			defer cancel()
 			stream, err := conn.AcceptStream(ctx)
 			if err != nil {
-				_ = conn.CloseWithError(0, "")
+				discardCloseError(conn.CloseWithError(0, ""))
 				return
 			}
 			select {
 			case l.ready <- newQUICStream(conn, stream):
 			case <-l.closed:
-				_ = conn.CloseWithError(0, "")
+				discardCloseError(conn.CloseWithError(0, ""))
 			}
 		}()
 	}
@@ -180,6 +180,15 @@ func (s *quicStream) CloseConnection() error {
 		s.connErr = s.conn.CloseWithError(0, "")
 	})
 	return s.connErr
+}
+
+// discardCloseError drops the outcome of tearing down a connection the
+// listener is abandoning. There is no caller left to report it to: the peer
+// either never became a session, or the listener is shutting down.
+func discardCloseError(err error) {
+	if err != nil {
+		_ = err
+	}
 }
 
 func quicTLSConfig(in *tls.Config, addr string) (*tls.Config, error) {

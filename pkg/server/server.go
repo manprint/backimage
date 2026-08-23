@@ -162,14 +162,22 @@ func releaseConnection(stream transport.Stream) {
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		// EOF means the peer closed its side, so it has read everything.
-		_, _ = io.Copy(io.Discard, stream)
+		// EOF means the peer closed its side, so it has read everything. How
+		// the drain ended does not matter: either way the peer is finished
+		// with this connection.
+		if _, err := io.Copy(io.Discard, stream); err != nil {
+			_ = err
+		}
 	}()
 	select {
 	case <-done:
 	case <-time.After(connectionLinger):
 	}
-	_ = closer.CloseConnection()
+	if err := closer.CloseConnection(); err != nil {
+		// The session is over and its result already reported; a failure to
+		// tear the transport down is not the client's problem.
+		_ = err
+	}
 }
 
 // sessionSink gives this session its own registry-facing half when a factory

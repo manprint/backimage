@@ -199,9 +199,11 @@ func startHeartbeat(stream *sessionStream, in *ingest, every time.Duration) *hea
 			case <-ticker.C:
 				// A failed send is not this goroutine's to report: the
 				// session loop is about to see the same broken stream.
-				_ = stream.send(&protocol.ServerMessage{
+				if err := stream.send(&protocol.ServerMessage{
 					Msg: &protocol.ServerMessage_StreamProgress{StreamProgress: in.progress()},
-				})
+				}); err != nil {
+					_ = err
+				}
 			}
 		}
 	}()

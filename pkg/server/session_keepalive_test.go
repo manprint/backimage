@@ -9,6 +9,11 @@ import (
 )
 
 // fakeClock is read by the session goroutine and advanced by the test one.
+//
+// Advancing it is only safe while the server is known to be blocked reading:
+// a client write returns as soon as the server has taken the bytes off the
+// wire, which is before the server has acted on them. Every Advance below is
+// therefore preceded by a reply that proves the previous frame was handled.
 type fakeClock struct {
 	mu  sync.Mutex
 	now time.Time
@@ -47,13 +52,7 @@ func TestKeepalivesAloneDoNotHoldASession(t *testing.T) {
 		t.Fatal("no hello ack")
 	}
 
-	// Well inside the budget: accepted, and no answer is due for a keepalive.
-	clock.Advance(maxKeepaliveOnly / 2)
-	if err := protocol.WriteFrame(client, protocol.FrameKeepalive, nil); err != nil {
-		t.Fatal(err)
-	}
-
-	// Past it: refused, with a network-kind error the client can act on.
+	// The ack proves the Hello was handled, so the budget starts here.
 	clock.Advance(maxKeepaliveOnly + time.Second)
 	if err := protocol.WriteFrame(client, protocol.FrameKeepalive, nil); err != nil {
 		t.Fatal(err)
@@ -67,9 +66,9 @@ func TestKeepalivesAloneDoNotHoldASession(t *testing.T) {
 	}
 }
 
-// TestProgressResetsTheKeepaliveBudget is the other half: a session doing real
-// work is never cut off, however long it runs. Here the total elapsed time is
-// more than twice the budget, but a real frame lands in the middle.
+// TestProgressResetsTheKeepaliveBudget is the other half: a keepalive inside
+// the budget is accepted, and real work restarts the count. Total elapsed here
+// is nearly twice the budget without the session ever being cut off.
 func TestProgressResetsTheKeepaliveBudget(t *testing.T) {
 	clock := newFakeClock()
 	client, done := startSession(t, SessionConfig{
@@ -83,12 +82,13 @@ func TestProgressResetsTheKeepaliveBudget(t *testing.T) {
 		t.Fatal("no hello ack")
 	}
 
+	// Inside the budget: accepted. The StreamStart right after it is what
+	// proves so — an answer can only come from a session still running — and
+	// it is also the progress that resets the count.
 	clock.Advance(maxKeepaliveOnly - time.Minute)
 	if err := protocol.WriteFrame(client, protocol.FrameKeepalive, nil); err != nil {
 		t.Fatal(err)
 	}
-
-	// Real progress: this is what resets the budget.
 	writeClient(t, client, streamStartMessage("registry.test/me/repo:t", 1<<20))
 	if ack := peer.next(t).GetStreamAck(); ack == nil || !ack.Ready {
 		t.Fatalf("stream ack = %v", ack)
