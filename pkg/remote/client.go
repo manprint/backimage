@@ -193,14 +193,19 @@ func (c *Client) uploadOnce(ctx context.Context, backup Backup) (Result, error) 
 		if err != nil {
 			return result, err
 		}
-		if err := conn.handleAux(attemptCtx, msg); err != nil {
-			return result, err
-		}
+		// BackupEnd is checked before the auxiliary handling, and that order
+		// matters: the server has committed the backup, so a keepalive that
+		// lost the race with the teardown and left its failure in asyncErr
+		// says nothing about the outcome. Handled the other way round, a
+		// successful backup was reported as a broken pipe.
 		if end := msg.GetBackupEnd(); end != nil {
 			result.Digest = end.Digest
 			result.BytesUploaded = end.BytesUploaded
 			result.BlobsSkipped = end.BlobsSkipped
 			return result, nil
+		}
+		if err := conn.handleAux(attemptCtx, msg); err != nil {
+			return result, err
 		}
 	}
 }

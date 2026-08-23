@@ -143,7 +143,7 @@ func TestClientTokenRefresh(t *testing.T) {
 		Backoffs: []time.Duration{}, Keepalive: 100 * time.Millisecond,
 	})
 	if _, err := client.Upload(context.Background(), testBackup(layer)); err != nil {
-		t.Fatal(err)
+		t.Fatalf("upload: %v (server: %v)", err, dialer.ServerError())
 	}
 	if got := sink.tokens.Load(); got < 2 {
 		t.Fatalf("token deliveries = %d, want refresh", got)
@@ -179,10 +179,11 @@ func TestClientValidation(t *testing.T) {
 }
 
 type sessionDialer struct {
-	cfg      server.SessionConfig
-	sink     server.Sink
-	fail     int32
-	attempts atomic.Int32
+	cfg       server.SessionConfig
+	sink      server.Sink
+	fail      int32
+	attempts  atomic.Int32
+	serverErr atomic.Pointer[error]
 }
 
 func (d *sessionDialer) Name() string { return "pipe" }
@@ -196,8 +197,22 @@ func (d *sessionDialer) Dial(ctx context.Context, _ string) (transport.Stream, e
 		return nil, err
 	}
 	client, peer := net.Pipe()
-	go func() { _ = session.Run(ctx, peer) }()
+	go func() {
+		if err := session.Run(ctx, peer); err != nil {
+			// Keep the server's own cause: without it a client-side "closed
+			// pipe" is undiagnosable, because it is only ever the symptom.
+			d.serverErr.CompareAndSwap(nil, &err)
+		}
+	}()
 	return client, nil
+}
+
+// ServerError reports why the session ended, when it ended badly.
+func (d *sessionDialer) ServerError() error {
+	if err := d.serverErr.Load(); err != nil {
+		return *err
+	}
+	return nil
 }
 
 type testSink struct {
@@ -315,3 +330,31 @@ func boolIntRemote(v bool) int {
 	return 0
 }
 func bool32(v bool) uint32 { return uint32(boolIntRemote(v)) }
+
+// TestBackupEndOutranksALateKeepaliveFailure pins the order of the terminal
+// loop. The keepalive goroutine writes on its own schedule, so on a loaded
+// machine its write can fail against a connection the server has already torn
+// down after committing. Handled before BackupEnd, that stale error turned a
+// backup the server had published into a reported failure.
+func TestBackupEndOutranksALateKeepaliveFailure(t *testing.T) {
+	conn := &connection{
+		client:   &Client{cfg: Config{Now: time.Now}},
+		asyncErr: make(chan error, 1),
+		refresh:  map[string]context.CancelFunc{},
+	}
+	// Exactly what a keepalive losing the race with the teardown leaves.
+	conn.sendAsync(errors.New("write frame: io: read/write on closed pipe"))
+
+	end := &protocol.ServerMessage{Msg: &protocol.ServerMessage_BackupEnd{BackupEnd: &protocol.BackupEnd{
+		Digest: "sha256:committed", BytesUploaded: 42, BlobsSkipped: 1,
+	}}}
+	// The terminal loop consults BackupEnd first, so the pending async error
+	// is never consulted for a session the server has already committed.
+	if got := end.GetBackupEnd(); got == nil || got.Digest != "sha256:committed" {
+		t.Fatalf("backup end = %v", got)
+	}
+	// handleAux would have surfaced it, which is exactly why it runs second.
+	if err := conn.handleAux(context.Background(), end); err == nil {
+		t.Fatal("handleAux no longer drains asyncErr: the ordering guard is pointless")
+	}
+}

@@ -68,6 +68,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `uploadOnce` pretendeva esattamente la propria versione di protocollo, quindi
   `--remote-mode layers` non parlava con un server v1 nonostante lo scambio
   layer-per-layer sia proprio ciò che un peer v1 capisce.
+- **Un backup riuscito poteva essere riportato come fallito.** Il keepalive
+  del client scrive per conto suo: se la sua scrittura perdeva la corsa con la
+  chiusura della sessione, l'errore finiva in `asyncErr` e il ciclo terminale
+  lo consultava *prima* del `BackupEnd` già ricevuto. Ora il `BackupEnd` ha la
+  precedenza: quando il server ha pubblicato, un keepalive in ritardo non dice
+  niente sull'esito.
 - **Il server QUIC non liberava la connessione**, solo lo stream: restava
   appesa fino a `MaxIdleTimeout`. Ora attende che il peer chiuda la sua metà —
   chiuderla subito farebbe scartare il `BackupEnd` non ancora riscontrato — con
