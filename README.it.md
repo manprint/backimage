@@ -400,7 +400,7 @@ Riferimento tecnico: [backup](docs/backup.md) · [restore](docs/restore.md) ·
 [dedup](docs/dedup.md) · [compressione](docs/compression.md) ·
 [remoto](docs/remote.md) · [formato immagine](docs/image-format.md) ·
 [sicurezza](docs/security.md) · [riferimento CLI](docs/cli.md) ·
-[architettura](docs/ARCHITECTURE.md)
+[backup schedulati](docs/cron.md) · [architettura](docs/ARCHITECTURE.md)
 
 ## Sviluppo
 

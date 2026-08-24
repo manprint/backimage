@@ -391,7 +391,7 @@ Technical reference: [backup](docs/backup.md) · [restore](docs/restore.md) ·
 [dedup](docs/dedup.md) · [compression](docs/compression.md) ·
 [remote](docs/remote.md) · [image format](docs/image-format.md) ·
 [security](docs/security.md) · [CLI reference](docs/cli.md) ·
-[architecture](docs/ARCHITECTURE.md)
+[scheduled backups](docs/cron.md) · [architecture](docs/ARCHITECTURE.md)
 
 ## Development
 

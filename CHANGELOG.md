@@ -7,6 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **`contrib/backimage-backup.sh`.** Wrapper per i backup schedulati da cron o
+  da un timer systemd: lock `flock` che impedisce due esecuzioni sovrapposte
+  dello stesso job, un log per esecuzione con rotazione, `BI_TIMEOUT`,
+  `nice`/`ionice`, hook pre e post, retention opzionale con `repo prune` dopo
+  un backup riuscito, e notifica dell'esito su webhook Slack o Google Chat in
+  policy `always` o `on-error`. Il messaggio porta la descrizione del job,
+  riferimento e digest pubblicati, byte sorgente/memorizzati/caricati, durata,
+  e per un fallimento l'exit code interpretato con la coda del log. La
+  configurazione sono variabili `BI_*` lette da un file e dall'ambiente, dove
+  l'ambiente vince; `contrib/backimage-backup.env.example` le elenca tutte.
+  Documentazione in `contrib/README.md` e `docs/cron.md`.
+
 ## [0.3.2] - 2026-08-23
 
 ### Added
