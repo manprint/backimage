@@ -51,6 +51,18 @@ cambiano se i dati non sono cambiati, quindi il costo è il solo layer tool.
 
 ### Changed
 
+- **Un dossier per la review crittografica indipendente.**
+  [`docs/crypto-review.md`](docs/crypto-review.md) raccoglie in un solo
+  documento quel che un revisore esterno deve poter leggere senza attraversare
+  il codice: gerarchia delle chiavi, layout dell'envelope e composizione
+  dell'AAD versione per versione, le tre derivazioni del nonce convergente
+  (fino alla 0.2.3, 0.2.4–0.4.0, 0.4.1) con il motivo di ciascun cambio,
+  perché `chunkIndex` è deliberatamente fuori dall'AAD convergente e cosa lo
+  compensa, garanzie e perdite della deduplica, regole di riuso e rotazione
+  delle chiavi, bilancio delle collisioni, vettori golden e fixture di
+  formato. Il rischio residuo resta dichiarato: il documento rende la review
+  affrontabile, non la sostituisce.
+
 - **L'esempio primario di restore non è più `docker run --privileged`.** In
   entrambi i readme e nell'handbook il primo comando mostrato è ora il profilo
   confinato — `--network none`, `--read-only --tmpfs /tmp`, `--cap-drop ALL`,

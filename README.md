@@ -462,7 +462,8 @@ Technical reference: [backup](docs/backup.md) · [restore](docs/restore.md) ·
 [fidelity](docs/FIDELITY.md) · [registries](docs/registries.md) ·
 [dedup](docs/dedup.md) · [compression](docs/compression.md) ·
 [remote](docs/remote.md) · [image format](docs/image-format.md) ·
-[security](docs/security.md) · [CLI reference](docs/cli.md) ·
+[security](docs/security.md) · [crypto dossier](docs/crypto-review.md) ·
+[CLI reference](docs/cli.md) ·
 [scheduled backups](docs/cron.md) · [architecture](docs/ARCHITECTURE.md)
 
 ## Development
