@@ -35,7 +35,7 @@ DA-01…DA-05 in `overview.md` §3 e non si rinegoziano senza aggiornare quel do
 | A5.1 `--expect-digest` | A08 | Opus + Sonnet | **fatto** |
 | A5.2 Docker fuori dall'autoestraente | A08 | Sonnet | **fatto** |
 | A5.3 profilo confinato come esempio primario | A08 | Haiku | **fatto** |
-| A5.4 e2e autoestraente confinato | A08 | Haiku | da fare |
+| A5.4 e2e autoestraente confinato | A08 | Haiku | **fatto** |
 | A6.0 congelare fixture dei formati attuali | A05, A20 | Sonnet | da fare, **prima di A6.1** |
 | A6.1 epoca e politica nel materiale avvolto | A05 | Opus + Sonnet | da fare |
 | A6.2 nonce su tutti i campi autenticati | A19 | Opus + Sonnet | da fare |
@@ -109,7 +109,7 @@ uno stato.
 | ID | — |
 | Stato | none |
 | Intento | — |
-| Prossima azione | A5.4 e2e autoestraente confinato |
+| Prossima azione | A6.0 congelare le fixture dei formati attuali |
 | Lavoro a metà | none — tree consistent |
 
 CI su `main`: run 34429719223 (c72db6a) verde su quality, cross-build e tutte le fasi e2e;
@@ -145,9 +145,11 @@ CI su `main`: run 34429719223 (c72db6a) verde su quality, cross-build e tutte le
 | 24 | sub-fase | A5.1 | `--expect-digest` sui comandi di lettura del binario host: ExpectedDigest come tipo separato, confronto col descrittore della sorgente prima di ogni lettura, classificazione a integrita' | make check verde (fmt, vet, lint 0 issues, build, test, race, deps-check, docs-check, proto-check SKIP, vuln 0 raggiungibili); verificato in negativo (rimuovendo il confronto falliscono 3 test di pkg/restore e l'ordinamento in internal/cli); TestExpectDigestRefusesBeforeReadingThePassphrase prova l'ordine con una corsa di controllo che dimostra che quel file viene letto quando nulla rifiuta prima | uncommitted |
 | 25 | sub-fase | A5.2 | `--remove-local-image` rimosso dall'autoestraente con errore d'uso che indica l'equivalente host, prima di estrarre; `pkg/docker` vietato nel fence di `scripts/check-deps.sh` | make check verde; fence verificato in negativo (reintroducendo l'import di pkg/docker `check-deps.sh` esce 1); TestExtractRefusesRemoveLocalImage verifica exit 2, il testo che nomina il comando host, nessun output e nessuna directory di destinazione creata | uncommitted |
 | 26 | sub-fase | A5.3 | profilo confinato come primo esempio in README.md, README.it.md e handbook; `--privileged` spostato sotto con costi, benefici e raccomandazione VM; procedura di ancoraggio del digest in tutte e tre le pagine; socket Docker tolto dagli esempi | make check verde; docs-check verde; nessun esempio monta piu' /var/run/docker.sock; `--privileged` compare solo nella sezione dichiarata a fedelta' massima | uncommitted |
+| 27 | sub-fase | A5.4 | test/e2e/phase_A5.sh e utensile leakpass: entrypoint sostituito, rifiuto ancorato con fifo come prova che il segreto non e' stato letto, profilo confinato, ownership dichiarata, gate di fedelta' completa, guardia sul socket del daemon; A5 nella matrice e2e | phase A5 e2e verde in locale (gate di fedelta' completa saltato: niente sudo senza password su questa macchina, in CI gira); make check verde; il controllo senza `--expect-digest` si blocca sulla fifo (exit 124), quello ancorato esce 5 senza nominarla | uncommitted |
 
 ### Deviazioni a runtime
 
+- A5.4 — il gate di fedeltà completa (ownership, xattr `trusted.*`, device node) richiede di costruire la fixture come root: gira solo dove `sudo -n` e `setfattr`/`getfattr` sono disponibili, e altrimenti stampa uno SKIP esplicito. Sulla macchina di sviluppo non c'è sudo senza password, quindi in locale è stato saltato; sui runner GitHub gira.
 - A5.1 — il flag è dichiarato in `addSourceFlags`, quindi arriva anche a `inspect` e `find` oltre ai quattro comandi nominati dal piano. Sono comandi che leggono la stessa immagine dalla stessa sorgente: lasciarli senza ancora sarebbe stata una lacuna, non una scelta.
 - A5.1 — «`tar`» nel piano non è un comando del binario host: l'uscita tar è `restore --output tar`, coperta dallo stesso flag.
 - A5.1 — per una layout OCI l'ancora accetta **due** identità: il digest dell'indice della layout (quello che `backup` stampa) e quello di uno dei manifest che l'indice pubblica. Sono due nomi dello stesso oggetto e un chiamante può legittimamente avere l'uno o l'altro; un digest estraneo non passa.

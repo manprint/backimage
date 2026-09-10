@@ -253,6 +253,19 @@ cambiano se i dati non sono cambiati, quindi il costo è il solo layer tool.
   dichiara su stderr quando succede: il server riceve una credenziale
   dell'intero account, non una delega a questo repository, e la tiene per la
   finestra dichiarata (un'ora) invece che per una durata scelta dal registry.
+- **`make e2e PHASE=A5`.** Sostituisce l'entrypoint di un'immagine di backup
+  con un programma che si limita a scrivere su file la passphrase ricevuta —
+  la perdita che nessun controllo interno all'immagine può impedire — e poi
+  verifica che il binario host, ancorato al digest onesto, la rifiuti con
+  codice 5. Che il segreto non sia stato letto è provato da una fifo senza
+  scrittori: la corsa ancorata esce subito, la corsa di controllo senza
+  `--expect-digest` si blocca su quella fifo. Verifica inoltre il restore in
+  profilo confinato (nessuna rete, nessuna capability, filesystem in sola
+  lettura, utente non privilegiato), che l'ownership degradi in modo
+  dichiarato invece di essere finta, e — dove l'ambiente lo consente — la
+  fedeltà completa su ownership, xattr `trusted.*` e device node nel profilo
+  privilegiato. Nessuno script e2e monta il socket del daemon, e lo script
+  stesso lo verifica per tutti.
 - **`make e2e PHASE=A4`.** Un server remoto ostile (`greedyremote`) che chiede
   credenziali per un altro repository e per `delete`, e una sessione con un
   bearer statico con e senza il consenso esplicito.
