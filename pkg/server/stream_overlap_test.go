@@ -12,48 +12,69 @@ import (
 	"time"
 )
 
-// slowSink makes every registry upload take a fixed amount of time and
-// records how many bytes the client managed to send while one was in flight.
-// Sampling a flag between writes would be unreliable: the receiver unblocks
-// exactly when an upload ends, so every sample would land on a quiet instant.
-type slowSink struct {
+// heldSink blocks the first layer push and records how many bytes the client
+// managed to hand over while it was held.
+//
+// Sampling reception inside a fixed sleep is what this replaces, and it does
+// not measure the overlap: the pipeline is one layer deep on purpose, so a
+// receiver fast enough to fill the next layer before the sample opens is
+// parked on the hand-off for the whole window. It looks blocked while it is
+// only full, and how often that happens depends on the speed of the runner —
+// the same test passed on Linux and failed on macOS and Windows for that
+// reason alone. Holding the push instead makes the question exact: with a
+// whole layer of room free, does the wire keep moving?
+type heldSink struct {
 	*streamSink
-	delay time.Duration
-	// received counts the bytes the client has handed over so far.
+	// received counts the bytes the client has handed over so far, sending
+	// says whether it still has any left.
 	received *atomic.Uint64
+	sending  *atomic.Bool
 
-	uploads       atomic.Int32
-	overlapBytes  atomic.Uint64
-	blockedUpload atomic.Int32
+	pushes atomic.Int32
+	moved  atomic.Uint64
 }
 
-func newSlowSink(delay time.Duration, received *atomic.Uint64) *slowSink {
-	return &slowSink{streamSink: newStreamSink(), delay: delay, received: received}
+func newHeldSink(received *atomic.Uint64, sending *atomic.Bool) *heldSink {
+	return &heldSink{streamSink: newStreamSink(), received: received, sending: sending}
 }
 
-func (s *slowSink) OpenBlob(ctx context.Context, ref, digest string, size int64) (BlobWriter, error) {
-	writer, err := s.streamSink.OpenBlob(ctx, ref, digest, size)
-	if err != nil {
-		return nil, err
+// OpenBlob holds the first push at its very first step, before the layer body
+// is even read, so the receiver still has its full layer budget available.
+// Every later blob — the remaining layers, the config, the manifest — goes
+// straight through.
+func (s *heldSink) OpenBlob(ctx context.Context, ref, digest string, size int64) (BlobWriter, error) {
+	if s.pushes.Add(1) == 1 {
+		s.hold()
 	}
-	return &slowBlobWriter{BlobWriter: writer, sink: s}, nil
+	return s.streamSink.OpenBlob(ctx, ref, digest, size)
 }
 
-type slowBlobWriter struct {
-	BlobWriter
-	sink *slowSink
-}
+// hold keeps the push in place until reception stops moving on its own —
+// the receiver has filled its one layer of room and parked on the hand-off —
+// or until the client has nothing left to send. A push that stops the wire
+// never moves a byte, so it releases on the deadline with nothing recorded.
+func (s *heldSink) hold() {
+	// Long enough that a runner scheduling the receiver late still counts as
+	// movement, short enough that the passing case costs a fraction of a
+	// second.
+	const stall = 250 * time.Millisecond
+	const limit = 10 * time.Second
 
-func (w *slowBlobWriter) Commit(ctx context.Context) error {
-	w.sink.uploads.Add(1)
-	before := w.sink.received.Load()
-	time.Sleep(w.sink.delay)
-	if moved := w.sink.received.Load() - before; moved > 0 {
-		w.sink.overlapBytes.Add(moved)
-	} else {
-		w.sink.blockedUpload.Add(1)
+	before := s.received.Load()
+	last := before
+	changed := time.Now()
+	deadline := changed.Add(limit)
+	for time.Now().Before(deadline) {
+		now := s.received.Load()
+		if now != last {
+			last, changed = now, time.Now()
+		}
+		if !s.sending.Load() || (now > before && time.Since(changed) > stall) {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
 	}
-	return w.BlobWriter.Commit(ctx)
+	s.moved.Store(last - before)
 }
 
 // TestReceptionOverlapsTheRegistryPush is the bandwidth contract of the
@@ -65,7 +86,6 @@ func TestReceptionOverlapsTheRegistryPush(t *testing.T) {
 	if testing.Short() {
 		t.Skip("needs enough payload for several 16 MiB layers")
 	}
-	const uploadDelay = 150 * time.Millisecond
 	// chunk.DefaultLimits clamps a layer to 16 MiB, so the payload has to be
 	// large enough to produce several of them.
 	stream, raw := testArchive(t, 80<<20)
@@ -73,7 +93,9 @@ func TestReceptionOverlapsTheRegistryPush(t *testing.T) {
 	start.MaxLayerBytes = 16 << 20
 
 	var received atomic.Uint64
-	sink := newSlowSink(uploadDelay, &received)
+	var sending atomic.Bool
+	sending.Store(true)
+	sink := newHeldSink(&received, &sending)
 	tempDir := t.TempDir()
 	in, err := startIngest(context.Background(), ingestConfig{
 		Start: start, SessionID: "overlap", Reference: start.Reference,
@@ -90,6 +112,7 @@ func TestReceptionOverlapsTheRegistryPush(t *testing.T) {
 		}
 		received.Add(uint64(end - offset))
 	}
+	sending.Store(false)
 	res, err := in.Finish()
 	if err != nil {
 		t.Fatal(err)
@@ -97,11 +120,9 @@ func TestReceptionOverlapsTheRegistryPush(t *testing.T) {
 	if res.Layers < 3 {
 		t.Fatalf("layers = %d, want several so an upload can overlap the next one", res.Layers)
 	}
-	t.Logf("uploads=%d overlapped-bytes=%d blocked-uploads=%d",
-		sink.uploads.Load(), sink.overlapBytes.Load(), sink.blockedUpload.Load())
-	if got := sink.overlapBytes.Load(); got == 0 {
-		t.Fatalf("no byte was received during any of the %d uploads: the push still blocks reception",
-			sink.uploads.Load())
+	t.Logf("pushes=%d received-while-the-first-push-was-held=%d", sink.pushes.Load(), sink.moved.Load())
+	if sink.moved.Load() == 0 {
+		t.Fatal("no byte was received while the first layer push was held: the push still blocks reception")
 	}
 	assertNoSpool(t, tempDir)
 }

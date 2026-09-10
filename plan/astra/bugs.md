@@ -181,3 +181,4 @@ prodotto, e nessuna asserzione è stata rimossa su Linux:
 | `TestNetworkErrorsAndAuthPath`, `TestAuthHomePromptAndDirectLogoutBranches` | separatore di path | `filepath.Join` nell'attesa |
 | `TestPipelineTarRecipientAndTempCleanup` | l'output `tar` porta l'immagine della piattaforma host | il test costruisce per la piattaforma host |
 | `TestBackup*ToOCILayout` | i job non costruivano gli asset self-extract | i due job li costruiscono prima dei test |
+| `TestReceptionOverlapsTheRegistryPush` | misurava la ricezione dentro una finestra di 150 ms: la pipeline è profonda un layer, quindi un ricevente abbastanza veloce riempie il layer successivo *prima* che la finestra si apra e resta parcheggiato sul passaggio di consegne — pieno, non bloccato. Su Linux la finestra cadeva bene, su macOS e Windows no | la spinta viene **trattenuta** al primo `OpenBlob` e rilasciata quando la ricezione si ferma da sola; misura quanto è passato sul filo mentre era trattenuta |

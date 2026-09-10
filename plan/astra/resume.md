@@ -112,9 +112,9 @@ uno stato.
 | Prossima azione | A6.1 epoca e politica nel materiale avvolto |
 | Lavoro a metà | none — tree consistent |
 
-CI su `main`: run 34429719223 (c72db6a) verde su quality, cross-build e tutte le fasi e2e;
-`windows` e `macos` rossi, corretti dall'unita' 23 del ledger e da verificare sul primo run che
-li esegue con la correzione dentro.
+CI su `main`: run 34434080651 (0d585f1) verde su quality, cross-build e tutte le fasi e2e.
+`windows` e `macos`: le correzioni dell'unita' 23 hanno tenuto (tutti i package passano su
+entrambe le piattaforme), resta un solo test rosso su entrambe, corretto dall'unita' 29.
 
 ### Ledger
 
@@ -147,7 +147,8 @@ li esegue con la correzione dentro.
 | 25 | sub-fase | A5.2 | `--remove-local-image` rimosso dall'autoestraente con errore d'uso che indica l'equivalente host, prima di estrarre; `pkg/docker` vietato nel fence di `scripts/check-deps.sh` | make check verde; fence verificato in negativo (reintroducendo l'import di pkg/docker `check-deps.sh` esce 1); TestExtractRefusesRemoveLocalImage verifica exit 2, il testo che nomina il comando host, nessun output e nessuna directory di destinazione creata | efb7a7f |
 | 26 | sub-fase | A5.3 | profilo confinato come primo esempio in README.md, README.it.md e handbook; `--privileged` spostato sotto con costi, benefici e raccomandazione VM; procedura di ancoraggio del digest in tutte e tre le pagine; socket Docker tolto dagli esempi | make check verde; docs-check verde; nessun esempio monta piu' /var/run/docker.sock; `--privileged` compare solo nella sezione dichiarata a fedelta' massima | 0d585f1 |
 | 27 | sub-fase | A5.4 | test/e2e/phase_A5.sh e utensile leakpass: entrypoint sostituito, rifiuto ancorato con fifo come prova che il segreto non e' stato letto, profilo confinato, ownership dichiarata, gate di fedelta' completa, guardia sul socket del daemon; A5 nella matrice e2e | phase A5 e2e verde in locale (gate di fedelta' completa saltato: niente sudo senza password su questa macchina, in CI gira); make check verde; il controllo senza `--expect-digest` si blocca sulla fifo (exit 124), quello ancorato esce 5 senza nominarla | 549b4f3 |
-| 28 | sub-fase | A6.0 | tre backup completi congelati in pkg/recovery/testdata (schema1-plain, schema2-encrypted, legacy-envelope1 con envelope v1), scripts/make-format-fixtures.sh che li rigenera costruendo la fixture legacy da un git worktree sul tag v0.2.3-dev.3, utensile unpackbackup, format_compat_test.go che le apre, elenca, ripristina e verifica | make check verde (fmt, vet, lint 0 issues, build, test, race, deps-check, docs-check, proto-check SKIP, vuln 0 raggiungibili); 5 test di compatibilita' verdi sulle tre fixture; verificato in negativo (disattivando il ramo AAD v1 in pkg/crypt/envelope.go falliscono solo i sotto-test legacy-envelope1, quindi la fixture esercita davvero quel percorso); TestASealedBlobDoesNotTravelBetweenBackups prova che un blob di un backup non si apre dentro un altro | b9bfbac |
+| 28 | sub-fase | A6.0 | tre backup completi congelati in pkg/recovery/testdata (schema1-plain, schema2-encrypted, legacy-envelope1 con envelope v1), scripts/make-format-fixtures.sh che li rigenera costruendo la fixture legacy da un git worktree sul tag v0.2.3-dev.3, utensile unpackbackup, format_compat_test.go che le apre, elenca, ripristina e verifica | make check verde (fmt, vet, lint 0 issues, build, test, race, deps-check, docs-check, proto-check SKIP, vuln 0 raggiungibili); 5 test di compatibilita' verdi sulle tre fixture; verificato in negativo (disattivando il ramo AAD v1 in pkg/crypt/envelope.go falliscono solo i sotto-test legacy-envelope1, quindi la fixture esercita davvero quel percorso); TestASealedBlobDoesNotTravelBetweenBackups prova che un blob di un backup non si apre dentro un altro | dca52bd |
+| 29 | bug | portabilita' | TestReceptionOverlapsTheRegistryPush misurava la sovrapposizione dentro una finestra a tempo: la pipeline e' profonda un layer, quindi un ricevente veloce e' gia' parcheggiato sul passaggio di consegne quando la finestra si apre e sembra bloccato mentre e' solo pieno; verde su Linux, rosso su macOS e Windows. La spinta viene ora trattenuta al primo OpenBlob e rilasciata quando la ricezione si ferma da sola | make check verde; il test passa in 0.8s su 3 corse consecutive (7-9 MiB passati sul filo mentre la spinta era trattenuta); verificato in negativo (serializzando la consegna del layer con un ack sincrono in roll() il test fallisce con 0 byte ricevuti) | uncommitted |
 
 ### Deviazioni a runtime
 
