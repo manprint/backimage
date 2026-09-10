@@ -374,6 +374,17 @@ cambiano se i dati non sono cambiati, quindi il costo è il solo layer tool.
 
 ### Added
 
+- **`make e2e PHASE=A7`.** Metadati ostili su un layout locale, letti
+  dall'autoestraente che questo albero incorpora: un chunk che dichiara piu'
+  byte del layer che lo contiene, un backup i cui file pubblici concordano
+  fra loro e non con il blob su disco, e tre forme dell'indice che i suoi
+  lettori assumono da sempre (un path ripetuto, offset tar che non crescono,
+  un path piu' lungo di quanto un filesystem accetti). Ogni caso e' misurato,
+  non solo verificato: lo script legge il picco di memoria residente del
+  processo che ha rifiutato, perche' un lettore che alloca otto gigabyte e
+  poi si accorge che il blob e' piu' piccolo esce 5 esattamente come uno che
+  rifiuta prima di allocare. `test/e2e/tools/forgeindex` costruisce gli indici
+  ostili, che il writer di questo albero si rifiuterebbe di scrivere.
 - **`backimage backup --dedup --rotate-key`**: genera materiale di chiave nuovo
   anche quando quello precedente sarebbe ancora riusabile. La rotazione è una
   decisione, quindi si scrive; il comando la annuncia insieme al suo costo (un
