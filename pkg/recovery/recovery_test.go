@@ -147,19 +147,36 @@ func buildFixture(t *testing.T, encrypted bool, chunkBytes int, privateMeta bool
 		m.Encryption = index.EncryptionInfo{Enabled: true, AEAD: "aes256-gcm", KDF: "scrypt-age", NonceMode: "random"}
 	}
 	table := &index.ChunkTable{SchemaVersion: 1, Chunks: rows}
+	var private *index.Private
 	if privateMeta {
-		private := index.SplitPrivate(m, table)
+		private = index.SplitPrivate(m, table)
 		if private == nil {
 			t.Fatal("SplitPrivate returned nothing for an encrypted fixture")
 		}
+	}
+	// Same order as the real writer: the index blob exists before the private
+	// blob, which binds its digest.
+	idx := &index.Index{SchemaVersion: m.SchemaVersion, Entries: entries}
+	var indexBlob bytes.Buffer
+	if err := index.WriteIndex(&indexBlob, idx, sealer); err != nil {
+		t.Fatal(err)
+	}
+	if private != nil {
+		binding, err := index.NewBinding(m, table, indexBlob.Bytes())
+		if err != nil {
+			t.Fatal(err)
+		}
+		private.Binding = binding
 		writeFile(t, filepath.Join(root, index.PrivatePath), func(w io.Writer) error {
 			return index.WritePrivate(w, private, sealer)
 		})
 	}
 	writeFile(t, filepath.Join(root, "manifest.json"), func(w io.Writer) error { return index.WriteManifest(w, m) })
 	writeFile(t, filepath.Join(root, "chunks.json"), func(w io.Writer) error { return index.WriteChunkTable(w, table) })
-	idx := &index.Index{SchemaVersion: m.SchemaVersion, Entries: entries}
-	writeFile(t, filepath.Join(root, "index.json.zst"), func(w io.Writer) error { return index.WriteIndex(w, idx, sealer) })
+	writeFile(t, filepath.Join(root, "index.json.zst"), func(w io.Writer) error {
+		_, err := w.Write(indexBlob.Bytes())
+		return err
+	})
 	if encrypted {
 		writeFile(t, filepath.Join(root, "keys.pass.age"), func(w io.Writer) error {
 			return crypt.WrapKeys(w, km, crypt.Recipients{Passphrase: []byte(fixturePassphrase)})
@@ -448,4 +465,51 @@ func TestVerifyCorruptionAndUnsafePath(t *testing.T) {
 	if _, err := (&LocalSource{Root: f.root}).Open(context.Background(), "../../etc/passwd"); err == nil {
 		t.Fatal("unsafe path accepted")
 	}
+}
+
+// resealBinding rewrites the private blob so its binding matches whatever is
+// on disk now. It models the attacker these tests are about: one who holds
+// the image and the passphrase, so the sealed binding is not what stops them.
+// Without it those tests would stop at the binding and never reach the
+// defence they exist to measure.
+func resealBinding(t *testing.T, root string, km *crypt.KeyMaterial) {
+	t.Helper()
+	opener, err := crypt.NewKeyedOpener(km)
+	if err != nil {
+		t.Fatal(err)
+	}
+	blob, err := os.ReadFile(filepath.Join(root, index.PrivatePath))
+	if err != nil {
+		t.Fatal(err)
+	}
+	private, err := index.ReadPrivate(bytes.NewReader(blob), opener)
+	if err != nil {
+		t.Fatal(err)
+	}
+	manifestFile, err := os.Open(filepath.Join(root, "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := index.ReadManifest(manifestFile)
+	manifestFile.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	table := readTable(t, filepath.Join(root, "chunks.json"))
+	indexBlob, err := os.ReadFile(filepath.Join(root, "index.json.zst"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	binding, err := index.NewBinding(m, table, indexBlob)
+	if err != nil {
+		t.Fatal(err)
+	}
+	private.Binding = binding
+	sealer, err := crypt.NewSealer(km, crypt.NonceRandom)
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(root, index.PrivatePath), func(w io.Writer) error {
+		return index.WritePrivate(w, private, sealer)
+	})
 }

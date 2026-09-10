@@ -34,12 +34,15 @@ type PrivateEncryption struct {
 // encrypted backups, where manifest.json and chunks.json keep just what a
 // reader needs to fetch and verify stored blobs without the key.
 type Private struct {
-	SchemaVersion int               `json:"schemaVersion"`
-	Sources       []string          `json:"sources,omitempty"`
-	Host          HostInfo          `json:"host"`
-	Totals        Totals            `json:"totals"`
-	Encryption    PrivateEncryption `json:"encryption"`
-	Chunks        []ChunkSecret     `json:"chunks"`
+	SchemaVersion int `json:"schemaVersion"`
+	// Binding ties this backup's public metadata together. Absent in blobs
+	// written before 0.4.1, which had nothing of the sort.
+	Binding    *Binding          `json:"binding,omitempty"`
+	Sources    []string          `json:"sources,omitempty"`
+	Host       HostInfo          `json:"host"`
+	Totals     Totals            `json:"totals"`
+	Encryption PrivateEncryption `json:"encryption"`
+	Chunks     []ChunkSecret     `json:"chunks"`
 }
 
 // SplitPrivate moves the confidential fields of m and t into a Private value.

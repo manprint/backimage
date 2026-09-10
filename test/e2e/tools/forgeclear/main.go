@@ -14,7 +14,18 @@
 // it does not belong and only the plaintext digest in the sealed private blob
 // disagrees. That is the fixture the phase A3 e2e needs.
 //
-// It exists for the phase A1 and A3 e2e only; it is not part of the shipped CLI.
+// With -set-envelope-version, -set-nonce-mode and -graft-chunks it plays the
+// A05/A20 attacker: someone who rewrites the public metadata — the fields a
+// reader used to trust for planning, and the chunk table that carries no
+// signature of its own — while the sealed blobs stay exactly as they were.
+//
+// With -downgrade-key it plays the opposite half of A05: the key file is
+// rewrapped with the same passphrase around key material whose attestation
+// says something else, which is what a backup written by an older release
+// looks like from the outside.
+//
+// It exists for the phase A1, A3 and A6 e2e only; it is not part of the
+// shipped CLI.
 package main
 
 import (
@@ -50,15 +61,19 @@ func main() {
 }
 
 type options struct {
-	layout         string
-	root           string
-	passphraseFile string
-	forge          string
-	swap           string
-	outLayout      string
-	outRef         string
-	push           string
-	daemon         string
+	layout          string
+	root            string
+	passphraseFile  string
+	forge           string
+	swap            string
+	envelopeVersion int
+	nonceMode       string
+	graftChunks     string
+	downgradeKey    string
+	outLayout       string
+	outRef          string
+	push            string
+	daemon          string
 }
 
 func run() error {
@@ -68,6 +83,10 @@ func run() error {
 	flag.StringVar(&o.passphraseFile, "passphrase-file", "", "file holding the backup passphrase")
 	flag.StringVar(&o.forge, "forge", "", "comma separated list of blobs to strip: data,index,private")
 	flag.StringVar(&o.swap, "swap", "", "move the stored blob of chunk J onto chunk I, as `I:J`: a validly sealed chunk in the wrong place")
+	flag.IntVar(&o.envelopeVersion, "set-envelope-version", -1, "rewrite manifest.encryption.envelopeVersion, leaving the age key file untouched")
+	flag.StringVar(&o.nonceMode, "set-nonce-mode", "", "rewrite manifest.encryption.nonceMode, leaving the age key file untouched")
+	flag.StringVar(&o.graftChunks, "graft-chunks", "", "replace chunks.json with this file, taken from another backup")
+	flag.StringVar(&o.downgradeKey, "downgrade-key", "", "rewrap keys.pass.age around a weaker attestation: legacy|epoch|nonce|single-use")
 	flag.StringVar(&o.outLayout, "out-layout", "", "write the forged image to this OCI layout directory")
 	flag.StringVar(&o.outRef, "out-ref", "", "reference used for --out-layout")
 	flag.StringVar(&o.push, "push", "", "push the forged image to this registry reference")
@@ -91,6 +110,32 @@ func run() error {
 	m, table, err := readMeta(backupDir)
 	if err != nil {
 		return err
+	}
+
+	// Public metadata rewrites: no key needed, which is the point — they are
+	// what anybody who can push a tag can do.
+	if o.envelopeVersion >= 0 {
+		m.Encryption.EnvelopeVersion = o.envelopeVersion
+	}
+	if o.nonceMode != "" {
+		m.Encryption.NonceMode = o.nonceMode
+	}
+	if o.graftChunks != "" {
+		grafted, graftErr := os.Open(o.graftChunks)
+		if graftErr != nil {
+			return graftErr
+		}
+		table, graftErr = index.ReadChunkTable(grafted)
+		grafted.Close()
+		if graftErr != nil {
+			return graftErr
+		}
+	}
+
+	if o.downgradeKey != "" {
+		if err := downgradeKeyFile(backupDir, o.passphraseFile, o.downgradeKey); err != nil {
+			return err
+		}
 	}
 
 	targets := parseTargets(o.forge)
@@ -261,6 +306,42 @@ func unwrap(dir, passphraseFile string) (*crypt.KeyMaterial, error) {
 	}
 	defer f.Close()
 	return crypt.UnwrapKeys(f, crypt.Identity{Passphrase: pass})
+}
+
+// downgradeKeyFile rewrites keys.pass.age around key material that attests
+// something weaker than what the run actually did. The secrets are untouched:
+// only the attestation moves, so every blob of the backup still opens. That is
+// the point — the next --dedup run must refuse to seal again with it, and the
+// refusal has to come from here and not from the public manifest.
+func downgradeKeyFile(dir, passphraseFile, mode string) error {
+	km, err := unwrap(dir, passphraseFile)
+	if err != nil {
+		return err
+	}
+	defer km.Wipe()
+	switch mode {
+	case "legacy":
+		km.SchemaVersion = 1
+		km.EnvelopeVersion, km.NonceMode, km.Reuse = 0, "", ""
+	case "epoch":
+		km.EnvelopeVersion = crypt.EnvelopeVersion - 1
+	case "nonce":
+		km.NonceMode = crypt.NonceModeName(crypt.NonceRandom)
+	case "single-use":
+		km.Reuse = crypt.ReuseNever
+	default:
+		return fmt.Errorf("unknown -downgrade-key mode %q", mode)
+	}
+	pass, err := os.ReadFile(passphraseFile)
+	if err != nil {
+		return err
+	}
+	pass = []byte(strings.TrimRight(string(pass), "\r\n"))
+	var wrapped strings.Builder
+	if err := crypt.WrapKeys(&wrapped, km, crypt.Recipients{Passphrase: pass}); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(dir, "keys.pass.age"), []byte(wrapped.String()), 0o600)
 }
 
 // forge rewrites the requested blobs as clear envelopes and repairs every

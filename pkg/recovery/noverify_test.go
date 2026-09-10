@@ -116,6 +116,11 @@ func TestNoVerifyStillCatchesForgedChunk(t *testing.T) {
 	writeFile(t, filepath.Join(f.root, "chunks.json"), func(w io.Writer) error {
 		return index.WriteChunkTable(w, table)
 	})
+	// The sealed binding would catch that repair on its own, which is a
+	// different test (TestTheSealedBindingCatchesARepairedChunkTable). Here
+	// the attacker holds the key, so they reseal it and the run continues to
+	// the defence this test is about.
+	resealBinding(t, f.root, km)
 
 	b, err := OpenLocal(ctx, f.root)
 	if err != nil {

@@ -82,6 +82,19 @@ riservati stanno nel blob privato:
   della chiave e la coppia `ps`/`pb` di ogni chunk. Dopo lo sblocco
   `pkg/recovery` lo fonde in memoria nel manifest e nella chunk table, così i
   lettori a valle vedono la forma di sempre.
+
+  Da 0.4.1 porta anche `binding`, il legame autenticato fra i file di
+  metadati: digest canonico del manifest, digest canonico della chunk table,
+  digest del blob indice e la politica attesa (`schema`, `aead`,
+  `envelopeVersion`, `nonceMode`, indice cifrato sì/no). Il lettore lo
+  verifica **subito dopo `Unlock`**, prima di consegnare qualunque byte. I
+  digest sono calcolati sulle strutture in forma canonica, non sui byte del
+  file: il manifest contiene il digest del blob privato, quindi il blob
+  privato non può contenere il digest del file manifest — il riferimento
+  `private` è escluso dal calcolo, ed è l'unico modo di chiudere il ciclo.
+  Escluso anche ciò che il blob privato stesso rimette nel manifest allo
+  sblocco (`sources`, `host`, `totals`, impronta e recipient), che è già
+  autenticato per il fatto di stare lì dentro.
 - `keys.age` / `keys.pass.age`: materiale di chiave avvolto da age (solo se
   cifrato). Il JSON dentro l'involucro ha `schemaVersion` **2** da 0.4.1:
   oltre a `dek` e `nonceKey` porta l'**attestazione** — `envelopeVersion`

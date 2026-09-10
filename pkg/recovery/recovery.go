@@ -68,6 +68,9 @@ type Backup struct {
 	prefix   []int64
 	opener   crypt.Opener
 	key      *crypt.KeyMaterial
+	// binding is the authenticated link this backup declared, when it has
+	// one. The index blob is checked against it when it is read.
+	binding  *index.Binding
 	progress func(string)
 }
 
@@ -230,11 +233,41 @@ func (b *Backup) loadPrivate(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	// Before anything else is believed: the sealed blob says which manifest
+	// and which chunk table belong to this backup, and what shape they were
+	// supposed to have. Checked here, the composition of pieces from
+	// different backups under one key never reaches a parser, let alone a
+	// destination directory.
+	if err := b.checkBinding(private); err != nil {
+		return err
+	}
 	if err := index.MergePrivate(b.Manifest, b.Chunks, private); err != nil {
 		return err
 	}
+	b.binding = private.Binding
 	b.computeLayout()
 	return nil
+}
+
+// checkBinding verifies the authenticated link between the metadata files,
+// and refuses a backup that should carry one and does not.
+//
+// "Should" is decided from authenticated state only: the key material of a
+// backup written from 0.4.1 on attests the envelope it was made for, and
+// every such backup binds its metadata. A blob with no binding under a key
+// that attests the current envelope is therefore a private blob from
+// somewhere else. Older key material attests nothing, so those backups are
+// read as they always were: the property did not exist when they were
+// written, and inventing it now would only refuse honest data.
+func (b *Backup) checkBinding(private *index.Private) error {
+	if private.Binding == nil {
+		if b.key.Attested() && b.key.EnvelopeVersion >= crypt.EnvelopeVersion {
+			return fmt.Errorf("%w: the key of this backup was made by a release that always binds "+
+				"its metadata, but the sealed metadata carries no binding", index.ErrBadSchema)
+		}
+		return nil
+	}
+	return private.Binding.Check(b.Manifest, b.Chunks)
 }
 
 // OpenLocal opens a backup directory such as /backup.
@@ -318,29 +351,30 @@ func (b *Backup) Index(ctx context.Context) (*index.Index, error) {
 	if b.Manifest.Encryption.Enabled && b.key == nil {
 		return nil, crypt.ErrWrongPassphrase
 	}
-	var r io.ReadCloser
+	var data []byte
 	var err error
 	if b.blobs != nil {
-		var data []byte
 		data, err = b.blobs.IndexBlob(ctx)
-		if err == nil {
-			r = io.NopCloser(bytes.NewReader(data))
-		}
 	} else {
+		var r io.ReadCloser
 		r, err = b.source.Open(ctx, b.Manifest.Index.Path)
+		if err == nil {
+			data, err = io.ReadAll(r)
+			if closeErr := r.Close(); err == nil {
+				err = closeErr
+			}
+		}
 	}
 	if err != nil {
 		return nil, fmt.Errorf("opening index: %w", err)
 	}
-	idx, err := index.ReadIndex(r, b.opener)
-	closeErr := r.Close()
-	if err != nil {
+	// The manifest carries no digest of the index blob, so an index from
+	// another backup of the same repository would open and parse. The sealed
+	// binding names the one that belongs here.
+	if err := b.binding.CheckIndexBlob(data); err != nil {
 		return nil, err
 	}
-	if closeErr != nil {
-		return nil, closeErr
-	}
-	return idx, nil
+	return index.ReadIndex(bytes.NewReader(data), b.opener)
 }
 
 // StoredChunk reads exactly one stored chunk from its shared layer blob.

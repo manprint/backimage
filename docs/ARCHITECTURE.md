@@ -108,7 +108,13 @@ Ordine invariabile: **tar → compressione → cifratura**. AAD del GCM =
 
 ### keys.age
 
-File age (armored) con JSON: `{"dek":"<base64 32B>","nonceKey":"<base64 32B>","schemaVersion":1}`.
+File age (armored) con JSON: `{"schemaVersion":2,"envelopeVersion":3,`
+`"nonceMode":"random|convergent","reuse":"never|convergent-dedup",`
+`"dek":"<base64 32B>","nonceKey":"<base64 32B>"}`. I tre campi di attestazione
+dicono per quale epoca crittografica la chiave è stata creata e se può
+sigillare di nuovo: stanno dentro l'involucro age, quindi sono autenticati da
+esso, e sono l'unica autorità sul riuso. `schemaVersion: 1` (fino alla 0.4.0)
+non attesta nulla e non viene mai riusato.
 Destinatari: `scrypt` (passphrase) e/o `age1…` X25519.
 Se la cifratura è attiva, senza passphrase o chiave privata il backup è
 **irrecuperabile**.
@@ -119,8 +125,12 @@ Solo per backup cifrati (`schemaVersion: 2`): blob nell'envelope crypt con i
 metadati che descrivono il contenuto — `sources`, `host`, `totals`, impronta e
 recipient della chiave, e per ogni chunk digest e byte del plaintext. Il
 manifest pubblico lo referenzia in `private` e non contiene quei campi; dopo lo
-sblocco `pkg/recovery` li rifonde in memoria. Dettagli in
-[image-format.md](image-format.md) e [security.md](security.md).
+sblocco `pkg/recovery` li rifonde in memoria.
+
+Porta anche `binding`, il legame autenticato con gli altri file di metadati
+(digest di manifest, chunk table e blob indice, più la politica attesa),
+verificato subito dopo `Unlock` e prima di qualunque consegna di dati.
+Dettagli in [image-format.md](image-format.md) e [security.md](security.md).
 
 ## Pianificazione dei layer (overlayfs 127)
 

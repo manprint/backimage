@@ -185,6 +185,33 @@ Restano inevitabilmente osservabili: l'esistenza del backup, il momento in cui
 cifrato (quindi un profilo grossolano di comprimibilità), oltre a quanto
 `--dedup` rivela per costruzione.
 
+### Legame fra i file di metadati (0.4.1)
+
+`manifest.json` e `chunks.json` sono pubblici e non firmati, e l'unico
+controllo incrociato che sia mai esistito era che i conteggi dei chunk
+coincidessero. Bastava quindi comporre il manifest di un backup con la chunk
+table di un altro, o con un indice più vecchio, purché i numeri tornassero:
+tutti i blob autenticavano comunque, perché sigillati con la stessa chiave di
+repository.
+
+Il blob privato è sigillato, quindi ciò che dice degli altri file non è
+modificabile senza la chiave. Ora lo dice tutto: `binding` porta il digest
+canonico del manifest, quello della chunk table, il digest del blob indice —
+che il manifest non ha mai trasportato — e la politica attesa. `pkg/recovery`
+lo verifica subito dopo `Unlock`, nell'ordine **politica → legame → dati**, e
+ogni scarto è di classe integrità (exit 5).
+
+Due punti dichiarati:
+
+- **Backup non cifrati (schema 1): la proprietà non è disponibile.** Non
+  esiste un file autenticato dove metterla, e metterla in chiaro sposterebbe
+  soltanto il problema.
+- **Un blob privato senza legame** viene rifiutato quando il materiale di
+  chiave attesta l'envelope corrente: una release che lega sempre i propri
+  metadati non può avere prodotto un blob privo di legame, quindi quel blob
+  viene da un altro backup. Il materiale senza attestazione (fino alla 0.4.0)
+  viene letto come sempre.
+
 ### AAD (authenticated data)
 
 Envelope v2 e v3, per ogni blob:

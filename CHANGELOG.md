@@ -99,6 +99,20 @@ cambiano se i dati non sono cambiati, quindi il costo è il solo layer tool.
 
 ### Security
 
+- **I metadati di un backup non si ricombinano più fra backup diversi.**
+  L'unico controllo incrociato fra `manifest.json`, `chunks.json`, indice e
+  blob privato era che i conteggi dei chunk coincidessero: si poteva servire
+  il manifest di un backup con la chunk table di un altro, o con un indice più
+  vecchio della stessa chiave, e ogni blob autenticava comunque. Il blob
+  privato — che è sigillato — porta ora il legame: digest canonico del
+  manifest e della chunk table, digest del blob indice (che il manifest non ha
+  mai trasportato) e la politica attesa. Il lettore lo verifica subito dopo
+  `Unlock`, prima di consegnare un byte, nell'ordine politica → legame → dati;
+  ogni scarto esce con codice 5. Un blob privato **senza** legame è rifiutato
+  quando il materiale di chiave attesta l'envelope corrente. Per i backup non
+  cifrati la proprietà non è disponibile e viene dichiarata tale: non c'è un
+  file autenticato dove metterla.
+
 - **Il nonce convergente copre tutti i campi autenticati, e la sua etichetta
   segue la versione dell'envelope.** Il nonce derivava da ruolo e payload
   mentre l'AAD copriva l'header intero: due blob con lo stesso payload e un

@@ -1219,16 +1219,13 @@ func (b *builder) finalize() error {
 	// An encrypted backup publishes no description of its plaintext: source
 	// paths, host, totals and the per-chunk plaintext digests and sizes move
 	// into the sealed private blob, which only the backup key can open.
-	if private := index.SplitPrivate(m, b.chunkTable); private != nil {
-		var pb bytes.Buffer
-		if err := index.WritePrivate(&pb, private, b.sealer); err != nil {
-			return err
-		}
-		b.privateBlob = pb.Bytes()
-		m.Private.StoredSha256 = "sha256:" + hex.EncodeToString(sha256Of(b.privateBlob))
-	}
-	b.manifest = m
-	b.manifestBytes = manifestJSON(m)
+	//
+	// The index blob is built first because the private blob binds its
+	// digest, and the manifest is serialised last because it carries the
+	// digest of the private blob. That is the only possible order: the
+	// binding excludes the private reference precisely so the two do not
+	// have to contain each other.
+	private := index.SplitPrivate(m, b.chunkTable)
 
 	ict := &index.Index{
 		SchemaVersion: m.SchemaVersion,
@@ -1239,6 +1236,22 @@ func (b *builder) finalize() error {
 		return err
 	}
 	b.indexBlob = ib.Bytes()
+
+	if private != nil {
+		binding, err := index.NewBinding(m, b.chunkTable, b.indexBlob)
+		if err != nil {
+			return err
+		}
+		private.Binding = binding
+		var pb bytes.Buffer
+		if err := index.WritePrivate(&pb, private, b.sealer); err != nil {
+			return err
+		}
+		b.privateBlob = pb.Bytes()
+		m.Private.StoredSha256 = "sha256:" + hex.EncodeToString(sha256Of(b.privateBlob))
+	}
+	b.manifest = m
+	b.manifestBytes = manifestJSON(m)
 	return nil
 }
 

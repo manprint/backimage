@@ -8,8 +8,15 @@
 # regenerating an existing one silently replaces the very evidence the
 # compatibility tests rest on.
 #
-#   bash scripts/make-format-fixtures.sh            # all
-#   bash scripts/make-format-fixtures.sh legacy-envelope1
+# An existing fixture is never overwritten: the script refuses and says so.
+# Pass --force only to rebuild one you have just deleted on purpose.
+#
+#   bash scripts/make-format-fixtures.sh            # the missing ones
+#   bash scripts/make-format-fixtures.sh schema2-envelope3
+#
+# schema1-plain, schema2-encrypted and legacy-envelope1 cannot be reproduced
+# by this tree any more: their headers carry envelope versions this build no
+# longer writes. That is the point of having frozen them.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -19,6 +26,13 @@ PASS='fixture-passphrase'
 # format differs.
 CREATED='2026-01-02T03:04:05Z'
 LEGACY_TAG=v0.2.3-dev.3
+
+FORCE=0
+args=()
+for arg in "$@"; do
+	if [ "$arg" = "--force" ]; then FORCE=1; else args+=("$arg"); fi
+done
+set -- "${args[@]+"${args[@]}"}"
 
 want() { [ "$#" -eq 0 ] && return 0; case " $* " in *" $FIXTURE "*) return 0;; esac; return 1; }
 
@@ -46,6 +60,10 @@ go build -o "$work/unpackbackup" ./test/e2e/tools/unpackbackup
 generate() {
 	local name=$1 bin=$2; shift 2
 	local layout="$work/layout-$name"
+	if [ -d "$OUT/$name" ] && [ "$FORCE" -ne 1 ]; then
+		echo "kept $OUT/$name (already frozen; --force to replace it)" >&2
+		return 0
+	fi
 	rm -rf "$layout" "$OUT/$name"
 	"$bin" backup "$work/src" --repo "fixtures.invalid/format/$name" --tag frozen \
 		--output oci-layout --output-path "$layout" \
@@ -68,6 +86,9 @@ go build -o "$work/backimage" ./cmd/backimage
 
 run_one schema1-plain generate schema1-plain "$work/backimage" --no-encrypt
 run_one schema2-encrypted generate schema2-encrypted "$work/backimage" --passphrase-file "$work/pass"
+# The format this build writes: envelope 3, attested key material, metadata
+# bound inside the sealed blob.
+run_one schema2-envelope3 generate schema2-envelope3 "$work/backimage" --passphrase-file "$work/pass"
 
 FIXTURE=legacy-envelope1
 if want "${selected[@]+"${selected[@]}"}"; then

@@ -44,6 +44,11 @@ var formatFixtures = []struct {
 	// fixture must keep saying 2 and keep opening.
 	{dir: "schema2-encrypted", encrypted: true, schema: 2, envelope: 2},
 	{dir: "legacy-envelope1", encrypted: true, schema: 2, envelope: 0},
+	// The format this build writes. It is frozen with the others so the next
+	// change to the writer has to keep opening it too, and so the binding of
+	// A6.3 is exercised from a file rather than from something the test just
+	// built.
+	{dir: "schema2-envelope3", encrypted: true, schema: 2, envelope: 3},
 }
 
 // fixtureContent is what every fixture holds, byte for byte. The three were

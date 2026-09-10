@@ -719,8 +719,24 @@ func (b *streamBuilder) publish(ctx context.Context, outcome scanOutcome) (strin
 	chunkTable := &index.ChunkTable{SchemaVersion: index.SchemaVersion, Chunks: b.rows}
 	// Mirror the local pipeline: an encrypted backup keeps everything which
 	// describes its plaintext inside the sealed private blob.
+	private := index.SplitPrivate(manifest, chunkTable)
+
+	// Same order as the local pipeline: the index blob first, because the
+	// binding names its digest; the manifest last, because it names the
+	// digest of the private blob.
+	var indexBlob bytes.Buffer
+	if err := index.WriteIndex(&indexBlob, &index.Index{
+		SchemaVersion: manifest.SchemaVersion, Entries: outcome.entries,
+	}, b.sealer); err != nil {
+		return "", err
+	}
 	var privateBlob []byte
-	if private := index.SplitPrivate(manifest, chunkTable); private != nil {
+	if private != nil {
+		binding, err := index.NewBinding(manifest, chunkTable, indexBlob.Bytes())
+		if err != nil {
+			return "", err
+		}
+		private.Binding = binding
 		var buf bytes.Buffer
 		if err := index.WritePrivate(&buf, private, b.sealer); err != nil {
 			return "", err
@@ -728,12 +744,6 @@ func (b *streamBuilder) publish(ctx context.Context, outcome scanOutcome) (strin
 		privateBlob = buf.Bytes()
 		sum := sha256.Sum256(privateBlob)
 		manifest.Private.StoredSha256 = "sha256:" + hex.EncodeToString(sum[:])
-	}
-	var indexBlob bytes.Buffer
-	if err := index.WriteIndex(&indexBlob, &index.Index{
-		SchemaVersion: manifest.SchemaVersion, Entries: outcome.entries,
-	}, b.sealer); err != nil {
-		return "", err
 	}
 	committer, ok := b.cfg.Sink.(StreamCommitter)
 	if !ok {
