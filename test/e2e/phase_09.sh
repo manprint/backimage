@@ -23,7 +23,7 @@ cleanup() {
 	rc=$?
 	if [ "$rc" -ne 0 ]; then
 		echo "phase 09 diagnostics (exit $rc)" >&2
-		for log in server.log resumed.err resumed.json cross-tcp.err cross-quic.err acl.err auth.err; do
+		for log in server.log server.out resumed.err resumed.json cross-tcp.err cross-quic.err acl.err auth.err noauth-server.err; do
 			if [ -f "$work/$log" ]; then echo "[$log]" >&2; sed -n '1,80p' "$work/$log" >&2; fi
 		done
 	fi
@@ -75,6 +75,27 @@ stop_server() {
 	fi
 }
 
+# ok runs an assertion and says which one failed. A bare "[ ... ]" under
+# set -e kills the script without printing anything, so a run that goes red
+# here says only that the phase failed — which is what happened, and why the
+# first flake in this section could not be diagnosed from its log.
+ok() {
+	local what=$1; shift
+	if ! "$@"; then
+		echo "FAIL: $what" >&2
+		return 1
+	fi
+}
+
+# same reports what it compared, which a bare test never does.
+same() {
+	local what=$1 got=$2 want=$3
+	if [ "$got" != "$want" ]; then
+		echo "FAIL: $what: got $got, want $want" >&2
+		return 1
+	fi
+}
+
 echo "==> QUIC/TLS and TCP coexistence, digest parity"
 start_server --udp --also-tcp
 created=2026-08-09T10:00:00Z
@@ -89,8 +110,10 @@ bin/backimage backup "$work/tree" --repo "$REPO" --tag tcp \
 bin/backimage backup "$work/tree" --repo "$REPO" --tag local \
 	--no-encrypt --allow-degraded --max-layer-size 8MiB --temp-dir "$work/tmp" \
 	--created "$created" --json >"$work/local.json"
-[ "$(jq -r .digest "$work/remote.json")" = "$(jq -r .digest "$work/local.json")" ]
-[ "$(jq -r .digest "$work/tcp.json")" = "$(jq -r .digest "$work/local.json")" ]
+same "the QUIC backup and the local one must publish the same digest" \
+	"$(jq -r .digest "$work/remote.json")" "$(jq -r .digest "$work/local.json")"
+same "the TCP backup and the local one must publish the same digest" \
+	"$(jq -r .digest "$work/tcp.json")" "$(jq -r .digest "$work/local.json")"
 
 echo "==> runnable image round-trip"
 docker pull "$IMAGE" >/dev/null
@@ -119,7 +142,8 @@ done
 stop_server
 start_server --udp --also-tcp
 wait "$client_pid"
-jq -e '.skippedBlobs > 0' "$work/resumed.json" >/dev/null
+resume_skipped_blobs() { jq -e '.skippedBlobs > 0' "$work/resumed.json" >/dev/null; }
+ok "a backup that survived a server restart must skip the blobs it already pushed" resume_skipped_blobs
 
 echo "==> crossed transport hints"
 stop_server
@@ -136,10 +160,10 @@ bin/backimage backup "$work/tree" --repo "$REPO" --tag cross-quic \
 	--auth-token-file "$work/token" --no-encrypt --allow-degraded --json >/dev/null 2>"$work/cross-quic.err"
 cross_quic_rc=$?
 set -e
-[ "$cross_tcp_rc" -ne 0 ]
-[ "$cross_quic_rc" -ne 0 ]
-grep -Fq 'retry adding --udp' "$work/cross-tcp.err"
-grep -Fq 'retry without --udp' "$work/cross-quic.err"
+ok "a TCP client against a QUIC-only server must fail" test "$cross_tcp_rc" -ne 0
+ok "a QUIC client against a TCP-only server must fail" test "$cross_quic_rc" -ne 0
+ok "the TCP failure must hint at --udp" grep -Fq 'retry adding --udp' "$work/cross-tcp.err"
+ok "the QUIC failure must hint at dropping --udp" grep -Fq 'retry without --udp' "$work/cross-quic.err"
 
 echo "==> ACL, authentication, TLS downgrade, metrics and diskless invariant"
 stop_server
@@ -158,13 +182,24 @@ tls12_rc=$?
 bin/backimage listen-remote --bind-address 127.0.0.1:7583 --udp --tls-self-signed >/dev/null 2>"$work/noauth-server.err"
 server_noauth_rc=$?
 set -e
-[ "$acl_rc" -eq 3 ]
-[ "$auth_rc" -eq 3 ]
-[ "$tls12_rc" -ne 0 ]
-[ "$server_noauth_rc" -eq 2 ]
-curl -fsS "http://127.0.0.1:${METRICS_PORT}/healthz" | grep -qx ok
-curl -fsS "http://127.0.0.1:${METRICS_PORT}/metrics" | grep -q backimage_sessions_total
-[ -z "$(find "$work/server-work" -mindepth 1 -print -quit)" ]
-! grep -F 'phase09-shared-secret' "$work/server.log"
+same "a repository outside --allow-repo must exit 3" "$acl_rc" 3
+same "a backup without the auth token must exit 3" "$auth_rc" 3
+ok "the server must refuse a TLS 1.2 handshake" test "$tls12_rc" -ne 0
+same "a server started without authentication must exit 2" "$server_noauth_rc" 2
+healthz_ok() { curl -fsS "http://127.0.0.1:${METRICS_PORT}/healthz" | grep -qx ok; }
+metrics_has_sessions() { curl -fsS "http://127.0.0.1:${METRICS_PORT}/metrics" | grep -q backimage_sessions_total; }
+ok "/healthz must answer ok" healthz_ok
+ok "/metrics must expose backimage_sessions_total" metrics_has_sessions
+leftover=$(find "$work/server-work" -mindepth 1 2>/dev/null | head -20)
+if [ -n "$leftover" ]; then
+	echo "FAIL: the server work directory must be empty, it holds:" >&2
+	printf '%s\n' "$leftover" >&2
+	ls -l "$work/server-work" >&2 || true
+	exit 1
+fi
+if grep -F 'phase09-shared-secret' "$work/server.log"; then
+	echo "FAIL: the shared secret reached the server log" >&2
+	exit 1
+fi
 
 echo "phase 09 e2e OK"

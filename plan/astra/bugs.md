@@ -10,6 +10,7 @@ nessuna fase. Ognuno ha un ID stabile, non riusato.
 | B-A003 | CI (job windows, aggiunto in A1) | RISOLTO | su Windows `readMeta` falliva se si chiedevano gli xattr: ogni entry veniva scartata e il backup usciva vuoto |
 | B-A004 | CI (job macos, aggiunto in A1) | RISOLTO | fuori da Linux il writer non riconosceva hardlink e device e azzerava atime/ctime |
 | B-A005 | CI (e2e A1 e A3, dopo A6.3) | RISOLTO | `forgeclear` invalidava il legame sigillato riparando i numeri pubblici, e il rifiuto arrivava prima della regola che la fixture misura |
+| B-A006 | CI (e2e 09) | APERTO | la fase 09 fallisce a intermittenza nell'ultima sezione, e le sue asserzioni sono mute: il log non dice quale sia caduta |
 
 ---
 
@@ -220,3 +221,35 @@ legame resta com'era, ed è di nuovo lui a rifiutare: è il caso A20 che
 **Lezione, registrata anche fra i vicoli**: una modifica al formato dei
 metadati va provata su **tutte** le fasi e2e che costruiscono immagini
 falsificate, non solo su quella della fase corrente.
+
+---
+
+## B-A006 — la fase 09 flaka e il log non dice dove
+
+**Trovato**: CI, run 34453581698 su `ef7c23c`. Il commit cambia **solo**
+`plan/astra/resume.md` (sette righe di markdown): il run precedente,
+34450479510 su `37d400f`, aveva lo stesso codice ed era verde su tutti e 22 i
+job, `e2e phase 09` compreso. Non e' una regressione. Non e' nemmeno la prima
+volta: `e2e phase 09` era rossa anche sul run 34436146427 (`8383c6b`).
+
+**Il difetto che si puo' chiudere subito** non e' il flake, e' che il flake
+non si puo' diagnosticare. La sezione «ACL, authentication, TLS downgrade,
+metrics and diskless invariant» chiudeva con sette `[ ... ]` nudi e due
+`curl | grep`. Sotto `set -e` una di quelle righe termina lo script senza
+stampare niente, quindi il log di CI mostra l'intestazione della sezione e
+poi direttamente il dump diagnostico del trap: si sa che la fase e' caduta li'
+dentro, non quale proprieta' sia venuta meno. Dai file dumpati si vede solo
+che ACL e autenticazione avevano prodotto i rifiuti attesi, quindi la caduta
+e' in una delle righe successive.
+
+**Fatto**: ogni asserzione della fase ora si nomina (`ok` e `same`), la
+verifica del work dir elenca i file che ha trovato invece di limitarsi a
+fallire, e il trap dumpa anche `server.out` e `noauth-server.err`, che prima
+esistevano e non venivano mai stampati.
+
+**Non fatto**: la causa. L'ipotesi piu' probabile e' l'invariante «il work dir
+del server resta vuoto»: la sezione precedente uccide il server **mentre** sta
+ricevendo un layer (e' il punto del test di resume), e un processo terminato
+mentre scrive il proprio spool puo' lasciarlo li'. E' un'ipotesi, non una
+diagnosi: la prossima corsa rossa lo dira' da sola, ed e' esattamente per
+questo che la diagnosticabilita' viene prima del fix.
