@@ -1,6 +1,6 @@
 # Stato del piano astra
 
-**Ultimo aggiornamento**: 2026-09-10. Esecuzione in corso.
+**Ultimo aggiornamento**: 2026-09-10. Esecuzione completata: A0-A7 chiuse, CI verde su `main`.
 
 Leggere `overview.md` prima di riprendere: qui c'è solo lo stato. Le decisioni congelate sono
 DA-01…DA-05 in `overview.md` §3 e non si rinegoziano senza aggiornare quel documento.
@@ -109,14 +109,14 @@ uno stato.
 | Tipo | — |
 | ID | — |
 | Stato | none |
-| Intento | A7.5 e l'uscita di fase A7 sono chiuse: il piano astra non ha altre sub-fasi |
-| Prossima azione | pubblicare su `main` i commit locali e seguire la CI fino al verde su tutte le fasi, A7 compresa |
+| Intento | il piano astra e' completo: A0-A7 chiuse, nessuna sub-fase aperta |
+| Prossima azione | nessuna. Quel che resta non e' del piano: il taglio della release, che la mappa di `overview.md` §5 colloca su 0.6.0 |
 | Lavoro a metà | none — tree consistent |
 
-CI su `main`: run 34439467365 (30d78b0) **verde** su quality, cross-build, windows, macos e tutte
-le fasi e2e di allora. Le corse successive vengono cancellate dal gruppo di concorrenza quando ne
-parte un'altra: fa fede l'ultima. Da seguire dopo la pubblicazione di A7.3, A7.4, A7.5 e
-dell'uscita di fase, che aggiunge `A7` alla matrice e2e.
+CI su `main`: run **34450479510** (`37d400f`) verde su tutti e 22 i job — quality, cross-build,
+windows, macos e le diciotto fasi e2e, `A7` compresa. E' la prima corsa che contiene A7.3, A7.4,
+A7.5 e l'uscita di fase. Le corse vengono cancellate dal gruppo di concorrenza quando ne parte
+un'altra: fa fede l'ultima.
 
 ### Ledger
 
