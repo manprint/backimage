@@ -9,6 +9,7 @@ nessuna fase. Ognuno ha un ID stabile, non riusato.
 | B-A002 | A2.3 | APERTO | l'indice sostituisce con U+FFFD i byte non-UTF-8 dei nomi (il tar li conserva) |
 | B-A003 | CI (job windows, aggiunto in A1) | RISOLTO | su Windows `readMeta` falliva se si chiedevano gli xattr: ogni entry veniva scartata e il backup usciva vuoto |
 | B-A004 | CI (job macos, aggiunto in A1) | RISOLTO | fuori da Linux il writer non riconosceva hardlink e device e azzerava atime/ctime |
+| B-A005 | CI (e2e A1 e A3, dopo A6.3) | RISOLTO | `forgeclear` invalidava il legame sigillato riparando i numeri pubblici, e il rifiuto arrivava prima della regola che la fixture misura |
 
 ---
 
@@ -183,3 +184,39 @@ prodotto, e nessuna asserzione è stata rimossa su Linux:
 | `TestBackup*ToOCILayout` | i job non costruivano gli asset self-extract | i due job li costruiscono prima dei test |
 | `TestReceptionOverlapsTheRegistryPush` | misurava la ricezione dentro una finestra di 150 ms: la pipeline è profonda un layer, quindi un ricevente abbastanza veloce riempie il layer successivo *prima* che la finestra si apra e resta parcheggiato sul passaggio di consegne — pieno, non bloccato. Su Linux la finestra cadeva bene, su macOS e Windows no | il carico è di **due** layer, cioè quanto la pipeline profonda un layer può assorbire: la prima spinta viene trattenuta e il resto dello stream deve comunque arrivare al server. Serializzando le due metà il client si ferma al primo confine di layer |
 | `TestFrameBufferOverlapsProductionWithSending` | confrontava il tempo trascorso con il costo seriale: su un runner lento il margine si chiude (303 ms contro un limite di 300 ms) | una spedizione viene trattenuta e si verifica che il produttore consegni comunque il frame successivo |
+
+---
+
+## B-A005 — le fixture di A1 e A3 si fermavano al legame dei metadati
+
+**Trovato**: primo giro di CI dopo A6.3 (run 34442939044). In locale non era
+visibile perché dopo A6.3 era stata rieseguita solo la fase A6.
+
+**Sintomo**, identico nelle due fasi:
+
+```
+FAIL: host ls with only the data forged should have succeeded
+error: metadati privati del backup non autenticati: invalid backup metadata:
+manifest.json does not belong to this backup (sha256:c2b6…, the sealed
+metadata names sha256:936b…)
+```
+
+**Causa**: `forgeclear` non si limita a rovinare un blob, **ripara** ogni
+numero pubblico che lo descrive — dimensione memorizzata, digest memorizzato,
+nome del file blob, digest e `storedBytes` del layer. È quello che rende le
+fixture utili: senza la riparazione il rifiuto arriverebbe da un digest
+discordante invece che dalla regola in esame. Da A6.3 quella riparazione
+cambia il digest canonico del manifest, che il blob privato sigillato nomina:
+il legame rifiuta per primo, e le due fasi smettono di misurare la regola per
+cui erano state scritte (l'AEAD assente in A1, il digest del plaintext in A3).
+
+**Correzione**: `forgeclear` ri-sigilla il legame sulla forma finale dei
+metadati quando gli è stata data la passphrase. È coerente col modello che
+già rappresenta — un attaccante che possiede la chiave — ed è la stessa cosa
+che fa `resealBinding` negli unit test di `pkg/recovery`. Senza passphrase il
+legame resta com'era, ed è di nuovo lui a rifiutare: è il caso A20 che
+`test/e2e/phase_A6.sh` misura.
+
+**Lezione, registrata anche fra i vicoli**: una modifica al formato dei
+metadati va provata su **tutte** le fasi e2e che costruiscono immagini
+falsificate, non solo su quella della fase corrente.

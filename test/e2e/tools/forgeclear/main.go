@@ -30,6 +30,7 @@ package main
 
 import (
 	"archive/tar"
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -154,6 +155,17 @@ func run() error {
 			if err := swapChunk(backupDir, m, table, km, o.swap); err != nil {
 				return err
 			}
+		}
+	}
+	// The attacker modelled here holds the key whenever a passphrase was
+	// given, so the sealed binding of A6.3 is not what stops them: they can
+	// re-seal it over the metadata they just repaired. Doing so keeps each
+	// fixture measuring the rule it was written for instead of stopping at
+	// the binding. Without a key, the binding is left as it is — and then it
+	// is the thing that refuses, which is the point of A6.3.
+	if o.passphraseFile != "" && !targets["private"] {
+		if err := resealBinding(backupDir, m, table, o.passphraseFile); err != nil {
+			return err
 		}
 	}
 	if err := writeMeta(backupDir, m, table); err != nil {
@@ -306,6 +318,63 @@ func unwrap(dir, passphraseFile string) (*crypt.KeyMaterial, error) {
 	}
 	defer f.Close()
 	return crypt.UnwrapKeys(f, crypt.Identity{Passphrase: pass})
+}
+
+// resealBinding recomputes the binding inside the private blob over the
+// metadata as it now stands, and re-seals it with the backup key.
+//
+// It is a no-op on a backup that has no private blob, or whose private blob
+// carries no binding (every format before 0.4.1).
+func resealBinding(dir string, m *index.Manifest, t *index.ChunkTable, passphraseFile string) error {
+	if m.Private == nil {
+		return nil
+	}
+	km, err := unwrap(dir, passphraseFile)
+	if err != nil {
+		return err
+	}
+	defer km.Wipe()
+	opener, err := crypt.NewKeyedOpener(km)
+	if err != nil {
+		return err
+	}
+	blob, err := os.ReadFile(filepath.Join(dir, m.Private.Path))
+	if err != nil {
+		return err
+	}
+	private, err := index.ReadPrivate(bytes.NewReader(blob), opener)
+	if err != nil {
+		return err
+	}
+	if private.Binding == nil {
+		return nil
+	}
+	indexBlob, err := os.ReadFile(filepath.Join(dir, m.Index.Path))
+	if err != nil {
+		return err
+	}
+	binding, err := index.NewBinding(m, t, indexBlob)
+	if err != nil {
+		return err
+	}
+	private.Binding = binding
+	mode := crypt.NonceRandom
+	if m.Encryption.NonceMode == "convergent" {
+		mode = crypt.NonceConvergent
+	}
+	sealer, err := crypt.NewSealer(km, mode)
+	if err != nil {
+		return err
+	}
+	var sealed bytes.Buffer
+	if err := index.WritePrivate(&sealed, private, sealer); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(dir, m.Private.Path), sealed.Bytes(), 0o600); err != nil {
+		return err
+	}
+	m.Private.StoredSha256 = restamp(m.Private.StoredSha256, digestOf(sealed.Bytes()))
+	return nil
 }
 
 // downgradeKeyFile rewrites keys.pass.age around key material that attests
