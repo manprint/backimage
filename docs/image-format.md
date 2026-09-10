@@ -94,11 +94,21 @@ Un backimage che legge un'immagine di schema 1 la restaura come prima; un
 backimage precedente allo schema 2 rifiuta un'immagine nuova con
 `backup creato da un backimage più recente`.
 
-Da 0.2.4 i blob usano l'envelope `BIMGCHK1` **versione 2** (stesso layout di
-byte, nonce convergente derivato dal payload sigillato e ruolo del blob nei dati
-autenticati). La versione 1 continua a essere letta, quindi le immagini già
-pubblicate si ripristinano intatte; un `backimage` precedente alla 0.2.4 rifiuta
-un blob nuovo con `unsupported blob version 2 (support 1-2)`.
+Da 0.4.1 i blob usano l'envelope `BIMGCHK1` **versione 3**: stesso layout di
+byte della 2, ma il nonce convergente è derivato anche dai dati autenticati
+(versione, codec, aead, flag, ruolo) e non più dal solo payload. Le versioni 1
+e 2 continuano a essere lette, quindi le immagini già pubblicate si
+ripristinano intatte; un `backimage` precedente rifiuta un blob nuovo con
+`unsupported blob version 3 (support 1-2)`.
+
+La versione dell'envelope è l'**epoca crittografica**: il materiale di chiave
+attesta quella in cui è stato generato e non viene riusato sotto un'altra (vedi
+[security.md](security.md)), quindi il primo backup dopo l'aggiornamento su un
+repository con `--dedup` ricarica i blob una volta sola.
+
+Le tappe precedenti: la versione 2 (0.2.4) ha spostato il nonce convergente sul
+payload sigillato e ha messo il ruolo del blob nei dati autenticati; la 1 è
+quanto scritto fino alla 0.2.3.
 
 ## Media type dei layer
 

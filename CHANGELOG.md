@@ -99,6 +99,26 @@ cambiano se i dati non sono cambiati, quindi il costo è il solo layer tool.
 
 ### Security
 
+- **Il nonce convergente copre tutti i campi autenticati, e la sua etichetta
+  segue la versione dell'envelope.** Il nonce derivava da ruolo e payload
+  mentre l'AAD copriva l'header intero: due blob con lo stesso payload e un
+  header diverso ricevevano lo stesso nonce e AAD diversi, cioè due messaggi
+  AES-GCM sotto la stessa coppia (chiave, nonce) — di nuovo il recupero della
+  chiave di autenticazione GHASH. L'innesco realistico non era il codec (byte
+  diversi, nonce diverso) ma la **versione**: l'etichetta di dominio era la
+  costante `"backimage/nonce/v2\0"`, indipendente da `envelopeVersion`. Ora il
+  nonce è derivato dall'AAD, e l'etichetta è derivata da `envelopeVersion`, così
+  incrementare la versione senza cambiare la derivazione non è esprimibile
+  (`TestTheNonceLabelFollowsTheEnvelopeVersion`). Costo sulla deduplica: nullo a
+  parità di configurazione (`TestConvergentBlobsStillDeduplicate`).
+
+- **Envelope `BIMGCHK1` versione 3.** Stesso layout di byte della 2. Le
+  versioni 1 e 2 continuano a essere lette — le fixture congelate in
+  `pkg/recovery/testdata` e i vettori golden di `pkg/crypt` lo verificano a
+  ogni corsa — e non vengono più scritte. La versione dell'envelope è l'epoca
+  crittografica: una chiave che ne attesta un'altra non viene riusata, quindi
+  il primo backup `--dedup` dopo l'aggiornamento ricarica i blob una volta.
+
 - **L'epoca crittografica di una chiave sta dentro la chiave, non nel manifest.**
   Se una `KeyMaterial` potesse sigillare di nuovo lo decideva
   `manifest.Encryption.EnvelopeVersion`, un campo di `manifest.json`: chiunque

@@ -1,6 +1,6 @@
 # Modelo di sicurezza
 
-Versione: 3 · Aggiornato: 0.4.1 · Applicabile a: envelope `BIMGCHK1` v2, keyfile age (schema 2, attestato), CLI (`--dedup`, `--rotate-key`, `genpass`).
+Versione: 3 · Aggiornato: 0.4.1 · Applicabile a: envelope `BIMGCHK1` v3, keyfile age (schema 2, attestato), CLI (`--dedup`, `--rotate-key`, `genpass`).
 
 ## Catena di elaborazione (ordine invariabile)
 
@@ -16,7 +16,7 @@ riduce la superficie di attacco laterale via side-channel di lunghezza.
 
 | Componente | Generazione | Uso |
 |---|---|---|
-| DEK (256 bit) | `crypto/rand`, una per backup; riusata solo da `--dedup` con chiave precedente convergente **ed envelope v2** | AES-256-GCM per ogni chunk |
+| DEK (256 bit) | `crypto/rand`, una per backup; riusata solo da `--dedup` quando il **materiale avvolto** attesta la stessa epoca dell'envelope e la modalità convergente | AES-256-GCM per ogni chunk |
 | NonceKey (256 bit) | `crypto/rand`, insieme alla DEK | HMAC-SHA256 per derivazione nonce convergenti |
 | Wrap (age scrypt) | passphrase utente (`backimage genpass`) | scrypt 2^18 (age); unwrap una tantum, mai per chunk |
 | Wrap (age X25519) | coppia di chiavi utente | `keys.age` |
@@ -42,11 +42,12 @@ offset 0x00  magic 8B  "BIMGCHK1"
 Header totale: 24 byte (cifrato), 12 byte (chiaro, aead=0).
 Overhead per chunk cifrato: 40 byte (24 header + 16 tag).
 
-Il layout dei byte è identico nelle due versioni: cambiano solo la derivazione
-del nonce convergente e la forma dei dati autenticati. La versione 1 continua a
-essere **letta** (i backup già pubblicati si ripristinano intatti) e non viene
-mai più **scritta**. Un `backimage` precedente alla 0.2.4 rifiuta un blob v2 con
-`unsupported blob version 2 (support 1-2)`.
+Il layout dei byte è identico in tutte e tre le versioni: cambiano solo la
+derivazione del nonce convergente e la forma dei dati autenticati. Le versioni
+1 e 2 continuano a essere **lette** (i backup già pubblicati si ripristinano
+intatti) e non vengono mai più **scritte**; la 3 è quella che questa release
+scrive. Un `backimage` precedente rifiuta un blob nuovo con
+`unsupported blob version 3 (support 1-2)`.
 
 ### Nonce (limiti GCM — CRITICO)
 
@@ -54,8 +55,10 @@ mai più **scritta**. Un `backimage` precedente alla 0.2.4 rifiuta un blob v2 co
   test `TestNoncesNeverRepeat`). AES-GCM con chiave singola: limite pratico
   ≈ 2³² chunk cifrati con la stessa DEK; con 1 MiB/chunk → ≈ 4 EiB. Al di là
   ri-generare un nuovo backup (nuova DEK).
-- Modalità convergente (`--dedup`, opt-in), envelope v2:
-  `nonce = HMAC-SHA256(NonceKey, "backimage/nonce/v2\0" ‖ role ‖ sha256(payload_sigillato))[0:12]`.
+- Modalità convergente (`--dedup`, opt-in), envelope v3:
+  `nonce = HMAC-SHA256(NonceKey, "backimage/nonce/v3\0" ‖ AAD ‖ sha256(payload_sigillato))[0:12]`,
+  dove `AAD` è il blocco autenticato descritto sotto (magic, versione, codec,
+  aead, flag, ruolo; l'indice del chunk non c'è in modalità convergente).
   Il digest è quello dei byte che GCM cifra davvero, cioè il chunk **già
   compresso**. Per chunk identici con la stessa chiave → nonce e ciphertext
   identici → dedup. La chiave HMAC impedisce di ricavare il nonce da un
@@ -82,6 +85,30 @@ mai più **scritta**. Un `backimage` precedente alla 0.2.4 rifiuta un blob v2 co
 I blob di metadati (`index.json.zst`, `private.json.zst`) sono sigillati con lo
 stesso schema e con un `role` distinto, quindi il nonce dipende dal contenuto e
 dal tipo di blob.
+
+#### Perché il nonce copre i dati autenticati (0.4.1)
+
+Fino alla 0.4.0 il nonce convergente derivava da ruolo e payload, mentre l'AAD
+copriva l'header intero. Due blob con lo stesso payload e header diverso
+ricevevano quindi **lo stesso nonce** e AAD diversi: due messaggi GCM sotto la
+stessa coppia (chiave, nonce), cioè di nuovo il recupero della chiave GHASH.
+`Codec` non era l'innesco realistico — un codec diverso produce byte diversi,
+quindi nonce diverso — ma `Version` sì: l'etichetta di dominio era la costante
+`"backimage/nonce/v2\0"`, indipendente da `envelopeVersion`, e il giorno in cui
+la versione fosse cambiata senza toccarla, su un repository con chiave riusata
+e `--dedup`, la collisione sarebbe stata sistematica.
+
+Correzione in due parti. Il nonce è derivato dall'AAD, quindi da tutti i campi
+autenticati; e l'etichetta è **derivata** da `envelopeVersion`
+(`"backimage/nonce/v" + envelopeVersion + "\0"`), così incrementare la versione
+senza cambiare la derivazione non è esprimibile. La regola è fissata da
+`TestTheNonceLabelFollowsTheEnvelopeVersion` in `pkg/crypt`.
+
+Costo sulla deduplica: nullo. A parità di configurazione i campi dell'header
+sono costanti, quindi payload identici continuano a produrre nonce identici;
+`TestConvergentBlobsStillDeduplicate` lo fissa. Fra epoche diverse invece i
+blob cambiano, ed è il motivo per cui una chiave non attraversa un bump di
+`envelopeVersion`.
 
 #### Il riuso di nonce corretto nella 0.2.4 (era critico)
 
@@ -160,8 +187,11 @@ cifrato (quindi un profilo grossolano di comprimibilità), oltre a quanto
 
 ### AAD (authenticated data)
 
-Envelope v2, per ogni blob:
+Envelope v2 e v3, per ogni blob:
 `magic(8) | version | codec | aead | flags | role | uint32be(chunkIndex)` (17 byte).
+Il byte `version` è dentro l'AAD, e da v3 l'AAD è anche l'ingresso della
+derivazione del nonce: un bump di versione sposta insieme dati autenticati e
+nonce.
 
 `role` vale 0 per un chunk dati, 1 per `index.json.zst`, 2 per
 `private.json.zst`. Fino alla 0.2.3 il ruolo non esisteva e i tre blob erano

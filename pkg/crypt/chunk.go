@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
+	"strconv"
 
 	"github.com/manprint/backimage/pkg/compress"
 )
@@ -23,10 +24,13 @@ const (
 	NonceConvergent NonceMode = 1
 )
 
-// nonceLabel domain-separates the convergent nonce derivation. The "v2" is the
-// derivation, not the tool version: it changed in 0.2.4 together with the
-// envelope version.
-const nonceLabel = "backimage/nonce/v2\x00"
+// nonceLabel domain-separates the convergent nonce derivation. It is derived
+// from envelopeVersion rather than written by hand, so the two cannot drift
+// apart: bumping the envelope without changing the derivation is what would
+// let one key produce the same nonce for two different authenticated headers,
+// and here it is not expressible. TestTheNonceLabelFollowsTheEnvelopeVersion
+// states the rule.
+var nonceLabel = "backimage/nonce/v" + strconv.Itoa(envelopeVersion) + "\x00"
 
 // ErrIntegrity is returned when authentication fails. It maps to exit code 5.
 var ErrIntegrity = errors.New("blob authentication failed")
@@ -150,11 +154,23 @@ func (s *sealer) Overhead() int { return s.overhead }
 // Keying the nonce on the sealed bytes makes that impossible by construction:
 // equal nonce now means equal payload, which is exactly the case deduplication
 // wants, so nothing is lost.
-func convergentNonce(nonceKey []byte, role Role, payload []byte) []byte {
+//
+// The nonce is derived from the AAD as well, and that is the second half of
+// the same rule. The AAD is every authenticated field of the header — version,
+// codec, aead, flags — plus the role and, outside convergent mode, the chunk
+// index. Deriving the nonce from role and payload only meant two blobs with
+// the same payload and a different header got one nonce and two different
+// AADs: two GCM messages under one (key, nonce) pair, which is the whole
+// GHASH-recovery failure again. The realistic trigger was a bump of
+// envelopeVersion, which is exactly what this release does.
+//
+// Cost for deduplication: none. At equal configuration the header fields are
+// constant, so identical payloads keep producing identical nonces.
+func convergentNonce(nonceKey, aad []byte, payload []byte) []byte {
 	sum := sha256.Sum256(payload)
 	mac := hmac.New(sha256.New, nonceKey)
 	mac.Write([]byte(nonceLabel))
-	mac.Write([]byte{byte(role)})
+	mac.Write(aad)
 	mac.Write(sum[:])
 	return mac.Sum(nil)[:nonceLen]
 }
@@ -187,6 +203,10 @@ func (s *sealer) Seal(dst []byte, role Role, chunkIndex uint32, codec compress.C
 	if s.mode == NonceConvergent {
 		h.Flags |= flagConvergent
 	}
+	// The AAD is fixed before the nonce because the nonce is derived from it.
+	// The nonce itself is not in the AAD: it travels in the clear in the
+	// header, and GCM already binds it.
+	aad := AAD(h, role, chunkIndex)
 	var nonce [nonceLen]byte
 	switch s.mode {
 	case NonceRandom:
@@ -194,7 +214,7 @@ func (s *sealer) Seal(dst []byte, role Role, chunkIndex uint32, codec compress.C
 			return dst, fmt.Errorf("crypto/rand (nonce): %w", err)
 		}
 	case NonceConvergent:
-		copy(nonce[:], convergentNonce(s.km.NonceKey, role, payload))
+		copy(nonce[:], convergentNonce(s.km.NonceKey, aad, payload))
 	}
 	h.Nonce = nonce
 
@@ -202,7 +222,7 @@ func (s *sealer) Seal(dst []byte, role Role, chunkIndex uint32, codec compress.C
 	if _, err := MarshalHeader(dst[start:], h); err != nil {
 		return dst, err
 	}
-	dst = s.ae.Seal(dst, nonce[:], payload, AAD(h, role, chunkIndex))
+	dst = s.ae.Seal(dst, nonce[:], payload, aad)
 	return dst, nil
 }
 

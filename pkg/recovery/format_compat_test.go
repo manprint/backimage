@@ -39,7 +39,10 @@ var formatFixtures = []struct {
 	envelope int
 }{
 	{dir: "schema1-plain", encrypted: false, schema: 1, envelope: 0},
-	{dir: "schema2-encrypted", encrypted: true, schema: 2, envelope: crypt.EnvelopeVersion},
+	// Envelope 2 is what 0.2.4 through 0.4.0 wrote. It is deliberately not
+	// crypt.EnvelopeVersion: the day this project writes a new envelope, this
+	// fixture must keep saying 2 and keep opening.
+	{dir: "schema2-encrypted", encrypted: true, schema: 2, envelope: 2},
 	{dir: "legacy-envelope1", encrypted: true, schema: 2, envelope: 0},
 }
 

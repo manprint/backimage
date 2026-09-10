@@ -28,8 +28,10 @@ const (
 	// actually encrypts. It is still read, so existing backups keep restoring,
 	// and never written.
 	envelopeVersionLegacy = 1
+	// envelopeVersionRole is the first version whose AAD names the role.
+	envelopeVersionRole = 2
 	// envelopeVersion is the version Seal writes.
-	envelopeVersion = 2
+	envelopeVersion = 3
 	aeadNone        = 0
 	aeadAES256GCM   = 1
 	flagConvergent  = 1 << 0
@@ -39,9 +41,10 @@ const (
 	headerMaxSize   = headerEndSize + headerNonceSize // 24
 )
 
-// EnvelopeVersion is the envelope version this build writes. The manifest
-// records it so a later backup can tell whether the key it is about to reuse
-// ever sealed a blob with the legacy derivation.
+// EnvelopeVersion is the envelope version this build writes. It is the crypto
+// epoch: key material attests the version it was made for, and material from
+// another epoch is never reused (see KeyMaterial.ReusableFor). The manifest
+// records it too, as a hint for planning a run.
 const EnvelopeVersion = envelopeVersion
 
 // Role names what a sealed blob is. Version 2 authenticates it, so the file
@@ -132,7 +135,7 @@ func ParseHeader(src []byte) (Header, int, error) {
 		AEAD:    src[10],
 		Flags:   src[11],
 	}
-	if h.Version != envelopeVersion && h.Version != envelopeVersionLegacy {
+	if h.Version < envelopeVersionLegacy || h.Version > envelopeVersion {
 		return Header{}, 0, fmt.Errorf("unsupported blob version %d (support %d-%d)",
 			h.Version, envelopeVersionLegacy, envelopeVersion)
 	}
@@ -154,10 +157,15 @@ func ParseHeader(src []byte) (Header, int, error) {
 
 // AAD builds the additional authenticated data for one blob.
 //
-// Version 2 authenticates the role, so a data chunk cannot be accepted where
-// the file index or the private metadata is expected. Before that the three
-// were sealed with an identical AAD at chunk index 0, which made them
-// interchangeable under one key.
+// From version 2 on the role is authenticated, so a data chunk cannot be
+// accepted where the file index or the private metadata is expected. Before
+// that the three were sealed with an identical AAD at chunk index 0, which
+// made them interchangeable under one key.
+//
+// The version byte is inside the AAD, and from 0.4.1 the convergent nonce is
+// derived from the AAD: a bump of envelopeVersion therefore moves both the
+// authenticated data and the nonce of every blob, and two epochs of the same
+// key can never land on one nonce.
 //
 // Random-nonce blobs also bind their position, to detect a reordered chunk
 // table. Convergent blobs deliberately omit the position: a CDC boundary may
@@ -169,7 +177,7 @@ func ParseHeader(src []byte) (Header, int, error) {
 // The version 1 layout is reproduced byte for byte, or backups written before
 // 0.2.4 would stop opening.
 func AAD(h Header, role Role, chunkIndex uint32) []byte {
-	if h.Version == envelopeVersionLegacy {
+	if h.Version < envelopeVersionRole {
 		out := make([]byte, 16)
 		copy(out[0:8], envelopeMagic)
 		out[8] = h.Version
