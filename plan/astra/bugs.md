@@ -10,8 +10,9 @@ nessuna fase. Ognuno ha un ID stabile, non riusato.
 | B-A003 | CI (job windows, aggiunto in A1) | RISOLTO | su Windows `readMeta` falliva se si chiedevano gli xattr: ogni entry veniva scartata e il backup usciva vuoto |
 | B-A004 | CI (job macos, aggiunto in A1) | RISOLTO | fuori da Linux il writer non riconosceva hardlink e device e azzerava atime/ctime |
 | B-A005 | CI (e2e A1 e A3, dopo A6.3) | RISOLTO | `forgeclear` invalidava il legame sigillato riparando i numeri pubblici, e il rifiuto arrivava prima della regola che la fixture misura |
-| B-A006 | CI (e2e 09) | APERTO | la fase 09 fallisce a intermittenza nell'ultima sezione, e le sue asserzioni sono mute: il log non dice quale sia caduta |
+| B-A006 | CI (e2e 09) | RISOLTO | una sessione remota annullata dentro il rate limiter usciva senza smontare la pipeline e lasciava lo spool del layer in `--work-dir` |
 | B-A007 | preparazione della release 0.5.0 | RISOLTO | `release.yml` installava golangci-lint v1 e nessun govulncheck: il suo `make check` sarebbe fallito al primo gate, quindi nessun tag poteva pubblicare |
+| B-A008 | CI (e2e A6, sul tag v0.5.0) | RISOLTO | la fixture A20 scambiava anche le dimensioni memorizzate: quando i due chunk cadevano in layer diversi il rifiuto arrivava dal controllo delle somme (A7.1), non dal legame sigillato |
 
 ---
 
@@ -225,7 +226,7 @@ falsificate, non solo su quella della fase corrente.
 
 ---
 
-## B-A006 — la fase 09 flaka e il log non dice dove
+## B-A006 — la fase 09 flaka, il log non dice dove, e la causa e' uno spool orfano
 
 **Trovato**: CI, run 34453581698 su `ef7c23c`. Il commit cambia **solo**
 `plan/astra/resume.md` (sette righe di markdown): il run precedente,
@@ -248,12 +249,53 @@ verifica del work dir elenca i file che ha trovato invece di limitarsi a
 fallire, e il trap dumpa anche `server.out` e `noauth-server.err`, che prima
 esistevano e non venivano mai stampati.
 
-**Non fatto**: la causa. L'ipotesi piu' probabile e' l'invariante «il work dir
-del server resta vuoto»: la sezione precedente uccide il server **mentre** sta
-ricevendo un layer (e' il punto del test di resume), e un processo terminato
-mentre scrive il proprio spool puo' lasciarlo li'. E' un'ipotesi, non una
-diagnosi: la prossima corsa rossa lo dira' da sola, ed e' esattamente per
-questo che la diagnosticabilita' viene prima del fix.
+**La corsa rossa successiva l'ha detto da sola**, che era il punto: run
+34469867722 sul tag `v0.5.0`,
+
+```
+FAIL: the server work directory must be empty, it holds:
+/tmp/tmp.2GRRwCf80R/server-work/backimage-stream-3110841173.blob.tmp
+```
+
+Ipotesi confermata nella forma, sbagliata nella causa: non e' il processo
+ucciso «troppo presto», e' il processo che si smonta **regolarmente** senza
+smontare la sessione.
+
+**Il difetto**, in `pkg/server/session.go`. `Session.Run` liberava la
+pipeline della sessione — l'ingest, che possiede lo spool del layer in
+costruzione, e il receiver, che possiede un upload aperto verso il registry —
+scrivendo `s.abort(...)` a ogni `return` che ne aveva bisogno. Vale finche'
+un `return` non se ne dimentica, e uno se ne dimentica: `throttle`, il rate
+limiter, aspetta sul contesto e ritorna `ctx.Err()` **senza** passare da
+`fail()`. E' persino ragionevole — un contesto annullato non e' un errore di
+protocollo da riferire a un client che non c'e' piu' — ma `Run` propagava
+quell'errore e usciva con la pipeline ancora in piedi. La goroutine
+dell'ingest restava viva con il suo file aperto e il processo usciva: lo
+spool restava in `--work-dir`, che e' proprio la directory che il server
+successivo riusa.
+
+Perche' a intermittenza: serve che lo SIGTERM cada mentre la sessione dorme
+nel limiter. La fase 09 ci passa quasi tutto il tempo (`--rate-limit 4MiB`
+contro 96 MiB di payload), ma non tutto: se l'annullamento arriva mentre la
+sessione e' ferma su `ReadFrame`, il ramo che chiama `abort` funziona e la
+corsa e' verde.
+
+**Fatto**: `Run` smonta la pipeline con un `defer`, non a ogni uscita. Il
+teardown non e' piu' una cosa da ricordarsi: `abort` azzera cio' che libera,
+quindi chiamarlo anche dove gia' lo si chiamava non costa nulla, e una
+sessione conclusa ha ceduto ingest e receiver molto prima. Il caso e' fissato
+da `TestACancelledSessionInsideTheRateLimiterLeavesNoSpool`, che congela
+l'orologio della sessione perche' l'annullamento cada nel limiter e non
+altrove: senza il `defer` fallisce dicendo quale file e' rimasto.
+
+**Non fatto, per scelta**: nessuna pulizia degli spool orfani all'avvio. Un
+processo ucciso con SIGKILL continua a poter lasciare un file, e li' non c'e'
+codice che possa rimediare dall'interno; ripulire `--work-dir` all'avvio
+sembra la risposta ovvia ed e' la piu' pericolosa, perche' quella directory e'
+condivisa fra server concorrenti e un file «vecchio» puo' essere lo spool vivo
+di un'altra sessione. La proprieta' che il prodotto puo' garantire — e ora
+garantisce — e' che nessuna sessione che termina da sola lasci qualcosa
+dietro.
 
 ---
 

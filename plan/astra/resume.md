@@ -110,7 +110,7 @@ uno stato.
 | ID | — |
 | Stato | none |
 | Intento | il piano astra e' completo: A0-A7 chiuse, nessuna sub-fase aperta |
-| Prossima azione | nessuna sul piano. Fuori dal piano restano B-A001, B-A002 e B-A006 nel ledger bug; la release e' T-A001, pubblicata come 0.5.0 (DA-06) |
+| Prossima azione | nessuna sul piano. Fuori dal piano restano aperti B-A001 e B-A002; B-A006 e B-A008 sono chiusi, la release e' T-A001 (0.5.0, DA-06) |
 | Lavoro a metà | none — tree consistent |
 
 CI su `main`: run **34450479510** (`37d400f`) verde su tutti e 22 i job — quality, cross-build,
@@ -169,6 +169,7 @@ gruppo di concorrenza quando ne parte un'altra: fa fede l'ultima.
 | 43 | bug | B-A007 | `release.yml` eseguiva `make check` installando golangci-lint **v1**.64.8 (il Makefile pretende `v2.1.6` e `.golangci.yml` e' schema v2) e nessun `govulncheck` (il target `vuln`, aggiunto in A0.3, fallisce se manca): nessun tag avrebbe potuto pubblicare. Allineato a `ci.yml`, piu' `BACKIMAGE_REQUIRE_PROTOC=1` sul gate | trovato leggendo il workflow prima di usarlo, non da una corsa rossa: dalla v0.4.0 non e' stato pubblicato niente; la prova e' la corsa di release del tag v0.5.0 | 855bbec |
 | 44 | task | T-A001 | la release del piano si chiama 0.5.0: `0.4.1` → `0.5.0` in 21 file fuori da `plan/`, sezione changelog `## [0.5.0] - 2026-09-10`, preambolo riscritto sulla compatibilita' reale (envelope 3, materiale di chiave schema 2, legame nel blob privato; cosa una 0.4.0 non legge piu'; il costo del primo incrementale cifrato), decisione DA-06 | make check verde (fmt, vet, lint 0 issues, build, test, race, deps-check, docs-check, proto-check SKIP, vuln 0 raggiungibili); la versione di v0.4.0 verificata sui sorgenti del tag (`envelopeVersion = 2`, accetta 1 e 2) invece che a memoria | 855bbec |
 | 45 | bug | B-A008 | la fixture A20 di `test/e2e/phase_A6.sh` scambiava fra due chunk sia `ss` sia `sb`: quando i due cadevano in layer diversi la somma per layer si muoveva e `index.ValidateChunkTable` (A7.1) rifiutava prima del legame sigillato, misurando un'altra proprieta'. La forgia scambia ora solo il digest memorizzato, che nessun controllo di quantita' guarda | `make e2e PHASE=A6` verde in locale; `make check` verde (fmt, vet, lint, build, test, race, deps-check, docs-check, proto-check, vuln) | uncommitted |
+| 46 | bug | B-A006 | `Session.Run` liberava la pipeline a ogni `return` che ne aveva bisogno, e `throttle` ritorna `ctx.Err()` senza passare da `fail()`: una sessione annullata dentro il rate limiter usciva con l'ingest ancora vivo e lo spool del layer restava in `--work-dir`. Il teardown e' ora un `defer` di `Run` | `TestACancelledSessionInsideTheRateLimiterLeavesNoSpool` rosso senza il `defer` (anche sotto `-race`, con il nome del file rimasto) e verde con; `make check` verde; `make e2e PHASE=09` verde 3 volte su 3 | uncommitted |
 
 ### Deviazioni a runtime
 

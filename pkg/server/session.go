@@ -229,7 +229,20 @@ func (s *Session) Run(ctx context.Context, raw transport.Stream) error {
 	stream := &sessionStream{Stream: raw}
 	defer stream.Close()
 	rs := &runState{state: stateNew}
-	defer func() { rs.heartbeat.Stop() }()
+	// The pipeline of a session belongs to the session, and nothing outside
+	// this function will free it: the ingest goroutine holds the spool of the
+	// layer it is assembling, and the blob receiver holds an upload the
+	// registry is waiting to be told about. Every return used to release them
+	// by hand, which held until one return did not — the rate limiter waits on
+	// the context, and a cancelled context is not a protocol failure to report
+	// to a client that is already gone, so it returns without going through
+	// fail(). A shutdown that lands in that sleep therefore left a spool
+	// behind in --work-dir, which is a directory the next server reuses.
+	//
+	// abort clears what it releases, so calling it here as well as on the
+	// paths that already do costs nothing, and a session that completed has
+	// handed both away long before this runs.
+	defer func() { s.abort(ctx, rs) }()
 	buf := make([]byte, 0, 64<<10)
 	lastProgress := s.cfg.Now()
 	for rs.state != stateClosed {

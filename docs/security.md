@@ -454,7 +454,14 @@ Conseguenze operative della modalità `stream`:
 - DEK e NonceKey vivono solo nella memoria della sessione (`KeyMaterial.Wipe()`
   alla chiusura) e non finiscono mai in `--work-dir` né nei log;
 - lo spool di layer del server contiene chunk già compressi e cifrati, con
-  permessi 0600, ed è rimosso anche sui percorsi di errore e cancellazione;
+  permessi 0600, ed è rimosso su ogni uscita della sessione — successo,
+  errore di protocollo, fallimento del registry, annullamento del client e
+  arresto del server (Ctrl-C o SIGTERM) mentre la ricezione è in corso: lo
+  smontaggio della pipeline è un `defer` della sessione, non una riga scritta
+  a ogni `return`. Un processo ucciso con SIGKILL resta l'unico caso in cui
+  un file può sopravvivere, e nessuna pulizia all'avvio lo rimuove: la stessa
+  `--work-dir` può essere condivisa con un altro server, e un file «vecchio»
+  può essere lo spool vivo di una sessione altrui;
 - chi non può concedere questa fiducia deve usare `--remote-mode layers`, che
   mantiene l'intera pipeline crittografica sul client.
 

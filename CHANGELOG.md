@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Una sessione remota annullata mentre il rate limiter la teneva ferma usciva
+  senza smontare la propria pipeline, e lo spool del layer in costruzione
+  restava in `--work-dir`. Chiudere un server con Ctrl-C o SIGTERM durante una
+  ricezione poteva quindi lasciare un `backimage-stream-*.blob.tmp` nella
+  directory che il server successivo riusa.
+
 ## [0.5.0] - 2026-09-10
 
 Release di sicurezza. Chiude i venti rilievi di una review esterna e, per
