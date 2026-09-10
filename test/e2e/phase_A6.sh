@@ -189,18 +189,42 @@ grep -q 'envelopeVersion' "$work/forged-manifest.err" \
 
 echo "==> and a chunk table repaired so every count still agrees (A20)"
 # The only cross-check that ever existed was that the chunk counts matched.
-# This edit keeps them matching: two entries trade their stored digest and
-# stored size, so the table describes the same number of chunks and the same
-# number of bytes as before.
+# This edit keeps them matching, and keeps everything else matching too: two
+# entries trade their stored digest and nothing else, so every number in the
+# file — the count, each stored size, each layer total — is exactly what it
+# was. Only the sealed binding can tell that this is not the chunk table of
+# this backup.
+#
+# The earlier version of this fixture also traded the stored sizes. That was
+# fine until A7.1, which cross-checks the per-layer totals against the
+# manifest before anything else: whenever the two chosen entries happened to
+# live in different layers — and with content-defined boundaries that is a
+# coin toss between runs — the sums moved and the refusal came from the
+# layer check instead of from the binding. Also a correct refusal, but not
+# the one this case exists to measure. Swapping only the digest cannot move
+# a byte between layers.
 table="$work/root-lying/backup/chunks.json"
 before=$(jq -er '.chunks | length' "$table")
 [ "$before" -ge 2 ] || { echo "FAIL: the fixture has $before chunks, too few to compose anything"; exit 1; }
-jq '.chunks as $c
-	| .chunks = ([($c[0] + {ss: $c[1].ss, sb: $c[1].sb}),
-	              ($c[1] + {ss: $c[0].ss, sb: $c[0].sb})] + $c[2:])' \
+# The first entry whose stored digest differs from the first chunk's: two
+# identical digests are the same deduplicated blob, and trading them would
+# leave the file byte for byte as it was.
+other=$(jq -er 'first(.chunks | to_entries[] | select(.key > 0 and .value.ss != $c0) | .key)' \
+	--arg c0 "$(jq -er '.chunks[0].ss' "$table")" "$table" 2>/dev/null || true)
+[ -n "$other" ] || { echo "FAIL: every chunk of the fixture has the same stored digest, nothing to trade"; exit 1; }
+jq --argjson j "$other" '.chunks as $c
+	| .chunks = ($c
+		| .[0]  = ($c[0]  + {ss: $c[$j].ss})
+		| .[$j] = ($c[$j] + {ss: $c[0].ss}))' \
 	"$table" >"$work/chunks-repaired.json"
 [ "$(jq -er '.chunks | length' "$work/chunks-repaired.json")" = "$before" ] \
 	|| { echo "FAIL: the fixture changed the chunk count, so it proves nothing"; exit 1; }
+if cmp -s "$table" "$work/chunks-repaired.json"; then
+	echo "FAIL: the forged chunk table is identical to the honest one"
+	exit 1
+fi
+[ "$(jq -erS '[.chunks[].sb]' "$table")" = "$(jq -erS '[.chunks[].sb]' "$work/chunks-repaired.json")" ] \
+	|| { echo "FAIL: the forge moved stored bytes, so the layer totals refuse before the binding"; exit 1; }
 "$work/forgeclear" -layout "$work/layout" -root "$work/root-chunks" \
 	-graft-chunks "$work/chunks-repaired.json" \
 	-out-layout "$work/layout-chunks" -out-ref "${LAYOUT_REF}:chunks" >/dev/null

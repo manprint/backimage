@@ -287,3 +287,50 @@ protobuf sarebbe un controllo mai eseguito.
 **Come si evita la prossima volta**: i due workflow eseguono lo stesso
 `make check` e devono installare lo stesso insieme di strumenti. Finche' sono
 due elenchi copiati a mano, il secondo si scopre rotto solo quando serve.
+
+---
+
+## B-A008 — la fixture A20 misurava il rifiuto sbagliato, a volte
+
+**Trovato**: CI, run 34469867722 sul tag `v0.5.0` (commit `20aa655`), job
+`e2e phase A6`:
+
+```
+==> and a chunk table repaired so every count still agrees (A20)
+error: invalid backup metadata: the chunks of layer 0 add up to 218, the layer declares 8389279
+FAIL: the refusal did not name the file that does not belong
+```
+
+Lo stesso script era verde sul run precedente con lo stesso codice: la fase
+non e' deterministica.
+
+**Il difetto e' nostro e sta nella fixture, non nel prodotto.** Il caso A20
+esiste per dimostrare una cosa sola: che il legame sigillato riconosce una
+`chunks.json` che non appartiene a questo backup **anche quando tutti i
+conteggi pubblici tornano**. Per costruirla, lo script scambiava fra due
+chunk sia il digest memorizzato (`ss`) sia la dimensione memorizzata (`sb`).
+
+A7.1 ha aggiunto `index.ValidateChunkTable`, che confronta la somma degli
+`sb` di ogni layer con gli `storedBytes` dichiarati nel manifest, e lo fa
+**prima** che il blob privato venga aperto. Finche' i due chunk scambiati
+cadevano nello stesso layer le somme non si muovevano e il rifiuto arrivava
+dal legame; quando cadevano in layer diversi le somme si muovevano e il
+rifiuto arrivava dal controllo dei layer. Quale dei due casi capiti dipende
+da dove il chunker a confini variabili taglia gli 8 MiB casuali della
+fixture, cioe' cambia a ogni corsa. Entrambi i rifiuti sono corretti — il
+prodotto non ha mai consegnato un byte — ma solo il primo e' quello che
+questo caso deve misurare.
+
+**Fatto**: la forgia scambia ora **solo** `ss`, fra il chunk 0 e il primo
+chunk con un digest diverso dal suo. Un digest non e' un byte: nessuna somma
+si muove, nessun layer cambia, `ValidateChunkTable` non ha niente da
+ridire, e l'unico a poter distinguere il file e' il legame. Lo script
+verifica esplicitamente le due proprieta' che glielo garantiscono — la
+tabella forgiata differisce dall'originale, e la lista degli `sb` e'
+identica — e fallisce dicendolo se una delle due venisse meno.
+
+**Come si evita la prossima volta**: una fixture negativa deve rendere
+impossibile il rifiuto che non sta misurando, non sperare di non
+incontrarlo. Quando un controllo nuovo si mette davanti a uno vecchio, i
+casi che misuravano il vecchio vanno riletti: la prova non e' che il comando
+fallisca, e' che fallisca per la ragione dichiarata.
