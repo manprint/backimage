@@ -9,8 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [0.4.1] - non ancora rilasciata
 
-Release di sicurezza e di gate. Nessun cambio del formato immagine: un backup
-prodotto dalla 0.4.1 resta leggibile dalla 0.4.0 e viceversa.
+Release di sicurezza e di gate. Il formato dei metadati dell'immagine non
+cambia — manifest, chunk table, indice e blob privato sono quelli della 0.4.0,
+e ogni backup già pubblicato resta leggibile. Cambia il **materiale di
+chiave**: da questa versione il JSON avvolto da age porta l'attestazione della
+propria epoca crittografica (`schemaVersion` 2), quindi un backimage 0.4.0
+apre i backup vecchi ma non il keyfile di un backup nuovo.
 
 ### Nota sulle release già pubblicate (v0.1.0 → v0.4.0)
 
@@ -94,6 +98,28 @@ cambiano se i dati non sono cambiati, quindi il costo è il solo layer tool.
   configurazione v1 non abilitava, restano disattivate.
 
 ### Security
+
+- **L'epoca crittografica di una chiave sta dentro la chiave, non nel manifest.**
+  Se una `KeyMaterial` potesse sigillare di nuovo lo decideva
+  `manifest.Encryption.EnvelopeVersion`, un campo di `manifest.json`: chiunque
+  potesse pubblicare un tag nel repository poteva dichiarare `envelopeVersion: 2`
+  su un backup vecchio e rimettere al lavoro una chiave bruciata dalla
+  derivazione nonce precedente alla 0.2.4, con lo stesso file age intatto. Il
+  materiale avvolto porta ora la propria attestazione — `envelopeVersion`,
+  `nonceMode`, `reuse` — dentro l'involucro age, dove è autenticata da esso, e
+  la decisione di riuso si prende solo da lì. Il campo pubblico resta come
+  suggerimento per pianificare la corsa prima di aprire alcunché, e non può più
+  contraddire nulla: riscriverlo in un senso non riabilita una chiave bruciata,
+  riscriverlo nell'altro non brucia una chiave sana. Un materiale senza
+  attestazione (scritto fino alla 0.4.0) apre il proprio backup e non ne sigilla
+  mai un altro.
+
+  Costo, misurato su 8 MiB incomprimibili
+  (`TestRotationCostsOneFullReupload`): il primo backup con una chiave nuova
+  carica 8 402 162 byte, quello successivo che la riusa ne carica 9 091 e ne
+  salta 8 393 071. Un repository con chiave legacy paga quindi **un solo**
+  ricaricamento completo al primo backup dopo l'aggiornamento, poi la dedup
+  torna quella di prima.
 
 - **Il server remoto non sceglie più cosa il client chiede al proprio provider
   di credenziali.** Repository e azioni arrivavano nel `TokenRequest` e
@@ -234,6 +260,12 @@ cambiano se i dati non sono cambiati, quindi il costo è il solo layer tool.
   saltato invece di essere inventato.
 
 ### Added
+
+- **`backimage backup --dedup --rotate-key`**: genera materiale di chiave nuovo
+  anche quando quello precedente sarebbe ancora riusabile. La rotazione è una
+  decisione, quindi si scrive; il comando la annuncia insieme al suo costo (un
+  ricaricamento completo, una volta sola). Senza `--dedup` è un errore d'uso:
+  ogni altro backup genera già una chiave nuova.
 
 - **`--expect-digest sha256:…` sui comandi di lettura del binario host**
   (`restore`, `verify`, `ls`, `find`, `inspect`). Ancora la lettura a un digest

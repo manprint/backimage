@@ -166,6 +166,7 @@ func newBackupCommand() *cobra.Command {
 	f.String("dedup-chunk-avg", "", "advanced CDC average chunk size, e.g. 1MiB (default: codec choice)")
 	f.String("dedup-chunk-max", "", "advanced CDC maximum chunk size, e.g. 4MiB (default: codec choice)")
 	f.String("dedup-polynomial", "", "advanced Rabin polynomial (0x...) for CDC")
+	f.Bool("rotate-key", false, "generate fresh key material instead of reusing the previous one (re-uploads every blob once)")
 	f.Bool("local-repo", false, "output to the Docker daemon instead of a registry")
 	f.String("output", "registry", "registry|daemon|oci-layout|tar")
 	f.String("output-path", "", "destination for oci-layout/tar")
@@ -260,6 +261,10 @@ func runBackup(cmd *cobra.Command, args []string) error {
 	}
 	if !encrypt && (passfile != "" || passStdin || password != "" || len(recipients) > 0 || ageIdentity != "") {
 		return New(KindUsage, "", "passphrase/recipient given but encryption disabled")
+	}
+	rotateKey := getFlagBool(cmd, "rotate-key")
+	if rotateKey && !dedup {
+		return New(KindUsage, "", "--rotate-key requires --dedup: without it every backup already gets fresh key material")
 	}
 	if ageIdentity != "" && !dedup {
 		return New(KindUsage, "", "--age-identity requires --dedup")
@@ -396,6 +401,7 @@ func runBackup(cmd *cobra.Command, args []string) error {
 		Dedup:           dedup,
 		DedupParams:     dedupParams,
 		AgeIdentity:     ageIdentity,
+		RotateKey:       rotateKey,
 		Exclude:         excludes,
 		OneFileSystem:   oneFS,
 		NumericOwner:    numOwner,

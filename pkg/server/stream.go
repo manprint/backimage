@@ -973,6 +973,10 @@ func cdcFromWire(p *protocol.CDCParams) chunk.CDCParams {
 }
 
 func keyMaterialFromWire(enc *protocol.EncryptionConfig) (*crypt.KeyMaterial, error) {
+	// Schema 1: secrets only. The attestation belongs to the material the
+	// client generated and wrapped — this copy exists to seal the session and
+	// is never written to a key file, so attesting it here would invent an
+	// epoch nobody signed.
 	km := &crypt.KeyMaterial{
 		SchemaVersion: 1,
 		DEK:           append([]byte(nil), enc.GetDek()...),

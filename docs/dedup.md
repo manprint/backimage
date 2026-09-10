@@ -83,6 +83,31 @@ backimage backup ./tree --repo registry.example/acme/data --tag t2 --dedup \
 Con `--no-encrypt --dedup` non esistono chiavi o nonce: CDC e layer
 content-defined restano attivi.
 
+### Quando la chiave non viene riusata
+
+Il riuso della chiave è deciso dall'**attestazione** dentro il materiale
+avvolto da age, non dal manifest pubblico: `envelopeVersion`, `nonceMode` e
+`reuse` viaggiano dentro l'involucro e nessuna riscrittura di `manifest.json`
+li può contraddire. La corsa rifiuta di riusare la chiave, lo dice e ne
+dichiara il costo, in quattro casi:
+
+- il backup precedente è stato scritto prima della 0.4.1 e la sua chiave non
+  attesta nulla;
+- attesta un'altra versione dell'envelope (in entrambe le direzioni);
+- attesta un'altra modalità nonce, per esempio un backup senza `--dedup`;
+- è stato chiesto `--rotate-key`.
+
+**Costo, misurato** (`TestRotationCostsOneFullReupload`, 8 MiB incomprimibili):
+il primo backup carica 8 402 162 byte; il secondo con la stessa chiave ne
+carica 9 091 e ne salta 8 393 071; quello che rigenera la chiave torna a
+caricarne 8 402 935; il successivo ne carica di nuovo 9 200. Un ricaricamento
+completo, una volta sola, poi la deduplica riprende come prima.
+
+```sh
+backimage backup ./tree --repo registry.example/acme/data --tag t3 --dedup \
+  --rotate-key --passphrase-file ./backup.pass
+```
+
 Per misurare i blob condivisi già raggiungibili dai tag:
 
 ```sh

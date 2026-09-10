@@ -61,6 +61,10 @@ type Config struct {
 	// AgeIdentity lets --dedup reopen a previous keys.age file. Recipients are
 	// public keys and therefore cannot perform that operation by themselves.
 	AgeIdentity string
+	// RotateKey forces fresh key material even when the previous one is still
+	// allowed to seal. Rotation is a decision, so it is spelled out rather
+	// than inferred: this backup re-uploads every blob once.
+	RotateKey bool
 
 	Exclude       []string
 	OneFileSystem bool
@@ -369,14 +373,18 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 			}()
 		}
 		if cfg.Dedup {
-			var reused bool
-			km, reused = reuseDedupKey(previous, cfg, passphrase)
-			if !reused && previous != nil && cfg.Progress != nil {
-				cfg.Progress(dedupKeyWarning(previous, cfg))
+			var refusal string
+			km, refusal = reuseDedupKey(previous, cfg, passphrase)
+			if refusal != "" && cfg.Progress != nil {
+				cfg.Progress(refusal)
 			}
 		}
 		if km == nil {
-			km, err = crypt.NewKeyMaterial()
+			if cfg.Dedup {
+				km, err = crypt.NewDedupKeyMaterial()
+			} else {
+				km, err = crypt.NewKeyMaterial()
+			}
 			if err != nil {
 				return res, err
 			}
@@ -690,26 +698,22 @@ func compressionDedupWarning(previous *dedupBase, codecName string, level int) s
 	return ""
 }
 
-// legacyEnvelopeKey reports whether previous sealed its blobs with the
-// pre-0.2.4 convergent nonce derivation.
+// reuseDedupKey returns the key material of the base backup when that material
+// itself says it may seal again, and otherwise the reason it may not.
 //
-// Such a key must never seal anything again. Those backups derived the nonce
-// from the plaintext digest while encrypting the compressed bytes, so the
-// repository may already hold two different byte strings sealed under one
-// nonce — enough to recover the GHASH authentication key of that DEK. Reusing
-// it would extend a possible compromise to fresh data, so the key is treated
-// as burned and a new one is generated. Cost: the next backup re-uploads its
-// blobs once.
-func legacyEnvelopeKey(previous *dedupBase) bool {
-	return previous.manifest.Encryption.EnvelopeVersion < crypt.EnvelopeVersion
-}
-
-func reuseDedupKey(previous *dedupBase, cfg Config, passphrase []byte) (*crypt.KeyMaterial, bool) {
-	if previous == nil || !previous.manifest.Encryption.Enabled || previous.manifest.Encryption.NonceMode != "convergent" {
-		return nil, false
+// The decision is taken from the attestation inside the age blob, never from
+// manifest.json. The public envelopeVersion, nonceMode and creation time are a
+// planning hint and nothing more: rewriting any of them, or picking a
+// different base tag, must not put a burned key back to work. Cost of a
+// refusal: this backup re-uploads its blobs once, and dedup is normal again
+// from the next one.
+func reuseDedupKey(previous *dedupBase, cfg Config, passphrase []byte) (*crypt.KeyMaterial, string) {
+	if previous == nil {
+		return nil, ""
 	}
-	if legacyEnvelopeKey(previous) {
-		return nil, false
+	if cfg.RotateKey {
+		return nil, "dedup: rotazione della chiave richiesta con --rotate-key: " +
+			"questo backup ricarica tutti i blob una volta"
 	}
 	identity := crypt.Identity{Passphrase: passphrase, AgeKeyFile: cfg.AgeIdentity}
 	for _, keyName := range []string{"keys.pass.age", "keys.age"} {
@@ -718,23 +722,50 @@ func reuseDedupKey(previous *dedupBase, cfg Config, passphrase []byte) (*crypt.K
 			continue
 		}
 		km, err := crypt.UnwrapKeys(bytes.NewReader(data), identity)
-		if err == nil {
-			return km, true
+		if err != nil {
+			continue
 		}
+		if reuseErr := km.ReusableFor(crypt.EnvelopeVersion, crypt.NonceConvergent); reuseErr != nil {
+			km.Wipe()
+			return nil, keyRefusalWarning(reuseErr)
+		}
+		return km, ""
 	}
-	return nil, false
+	// No key file opened at all: the reason is about the credential, not about
+	// the key.
+	return nil, dedupKeyWarning(previous, cfg)
 }
 
+// keyRefusalWarning turns the refusal into the sentence the operator needs:
+// what was refused, and that the cost is one full re-upload.
+func keyRefusalWarning(err error) string {
+	const cost = "; questo backup ricarica tutti i blob una volta"
+	switch {
+	case errors.Is(err, crypt.ErrKeyNotAttested):
+		return "dedup: la chiave del backup precedente non dichiara con quale epoca crittografica " +
+			"e' stata creata (formato anteriore alla 0.4.1): non viene riusata" + cost
+	case errors.Is(err, crypt.ErrKeyEpoch):
+		return "dedup: la chiave del backup precedente e' stata creata per un'altra versione " +
+			"dell'envelope: non viene riusata" + cost
+	case errors.Is(err, crypt.ErrKeyNonceMode):
+		return "dedup: modalita' nonce precedente diversa; generata una nuova chiave" + cost
+	case errors.Is(err, crypt.ErrKeyNotReusable):
+		return "dedup: la chiave del backup precedente e' dichiarata non riusabile; " +
+			"generata una nuova chiave" + cost
+	default:
+		return "dedup: la chiave del backup precedente non e' utilizzabile; generata una nuova chiave" + cost
+	}
+}
+
+// dedupKeyWarning explains why no key file of the base backup could be opened.
+// It speaks about the credential, because that is the only thing left once the
+// attestation has not even been reached.
 func dedupKeyWarning(previous *dedupBase, cfg Config) string {
 	if previous == nil {
 		return ""
 	}
-	if !previous.manifest.Encryption.Enabled || previous.manifest.Encryption.NonceMode != "convergent" {
-		return "dedup: modalita' nonce precedente diversa; generata una nuova chiave"
-	}
-	if legacyEnvelopeKey(previous) {
-		return "dedup: il backup precedente usa la derivazione nonce precedente alla 0.2.4; " +
-			"quella chiave non viene piu' riusata e questo backup ricarica tutti i blob una volta"
+	if !previous.manifest.Encryption.Enabled {
+		return "dedup: il backup precedente non e' cifrato; generata una nuova chiave"
 	}
 	if cfg.Passphrase != nil {
 		return "dedup: passphrase diversa: la dedup con i backup precedenti non sara' possibile" //nolint:misspell // Messaggio CLI italiano richiesto dal contratto della fase 10.

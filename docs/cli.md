@@ -106,6 +106,7 @@ backimage backup <PATH...> --repo IMAGE [flags]
       --remote-mode string         stream: the server runs the whole pipeline (default); layers: legacy client-side pipeline (default "stream")
       --repo string                target repository without a tag, e.g. ghcr.io/me/dumps (required)
       --resume                     resume from the checkpoint if present (default true)
+      --rotate-key                 generate fresh key material instead of reusing the previous one (re-uploads every blob once)
       --runnable                   build runnable images (false allows non-standard codecs) (default true)
       --server-side-compress       deprecated alias of --remote-mode stream (already the default)
       --tag string                 tag to publish; combine with --timestamp for one tag per run (default "latest")

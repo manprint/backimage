@@ -96,11 +96,13 @@ type EncryptionInfo struct {
 	Enabled bool   `json:"enabled"`
 	KDF     string `json:"kdf"`
 	AEAD    string `json:"aead"`
-	// EnvelopeVersion is the crypt envelope this backup was sealed with. It is
-	// public on purpose: a later --dedup run must be able to tell, before
-	// unwrapping anything, whether the key it is about to reuse ever sealed a
-	// blob with the pre-0.2.4 convergent nonce derivation. Absent (0) means a
-	// backup written by 0.2.3 or earlier.
+	// EnvelopeVersion is the crypt envelope this backup was sealed with.
+	// Absent (0) means a backup written by 0.2.3 or earlier.
+	//
+	// It is public so a run can plan before unwrapping anything, and it is a
+	// hint only: the decision whether a key may seal again is taken from the
+	// attestation inside the age-wrapped material (crypt.KeyMaterial), which
+	// this field cannot contradict because rewriting it changes nothing.
 	EnvelopeVersion int      `json:"envelopeVersion,omitempty"`
 	NonceMode       string   `json:"nonceMode"`
 	KeyFingerprint  string   `json:"keyFingerprint,omitempty"`

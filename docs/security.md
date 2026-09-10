@@ -1,6 +1,6 @@
 # Modelo di sicurezza
 
-Versione: 2 · Aggiornato: 0.2.4 · Applicabile a: envelope `BIMGCHK1` v2, keyfile age, CLI (`--dedup`, `genpass`).
+Versione: 3 · Aggiornato: 0.4.1 · Applicabile a: envelope `BIMGCHK1` v2, keyfile age (schema 2, attestato), CLI (`--dedup`, `--rotate-key`, `genpass`).
 
 ## Catena di elaborazione (ordine invariabile)
 
@@ -61,11 +61,23 @@ mai più **scritta**. Un `backimage` precedente alla 0.2.4 rifiuta un blob v2 co
   identici → dedup. La chiave HMAC impedisce di ricavare il nonce da un
   dizionario pubblico. Questa modalità rivela comunque l'uguaglianza dei chunk a
   chi osserva il registry.
-- No riutilizzo nonce tra modalità: il client riusa una `KeyMaterial` solo se il
-  manifest precedente dichiara già `nonceMode: convergent` **e**
-  `envelopeVersion: 2`; da `random` a `convergent`, o da una chiave legacy,
-  genera sempre una nuova chiave. GCM con nonce ripetuti sotto la stessa DEK
-  sarebbe una perdita totale di confidenzialità.
+- No riutilizzo nonce tra modalità: il client riusa una `KeyMaterial` solo se
+  **quel materiale lo dichiara di sé**. Da 0.4.1 il JSON avvolto da age porta
+  `envelopeVersion`, `nonceMode` e `reuse`, ed è l'unica autorità sul riuso; da
+  `random` a `convergent`, da un'altra epoca dell'envelope, o da una chiave
+  senza attestazione, genera sempre una nuova chiave. GCM con nonce ripetuti
+  sotto la stessa DEK sarebbe una perdita totale di confidenzialità.
+- Perché non basta il manifest: `manifest.json` non è autenticato, e chiunque
+  possa pubblicare un tag nel repository può riscriverne i campi. Fino alla
+  0.4.0 la decisione dipendeva solo da `encryption.envelopeVersion`, quindi
+  dichiarare `2` su un backup vecchio bastava a far tornare al lavoro una
+  chiave bruciata, con lo stesso file age intatto. L'attestazione sta dentro
+  l'involucro age: modificarla richiede l'identità che lo apre, e a quel punto
+  l'attaccante ha già la DEK. Il campo pubblico resta come suggerimento per
+  pianificare la corsa prima di aprire alcunché.
+- Rotazione esplicita: `backimage backup --dedup --rotate-key` genera comunque
+  materiale nuovo. Il costo è un ricaricamento completo, una volta sola,
+  annunciato sull'output e misurato in [dedup.md](dedup.md).
 
 I blob di metadati (`index.json.zst`, `private.json.zst`) sono sigillati con lo
 stesso schema e con un `role` distinto, quindi il nonce dipende dal contenuto e

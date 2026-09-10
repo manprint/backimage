@@ -12,36 +12,33 @@ import (
 	"time"
 )
 
-// heldSink blocks the first layer push and records how many bytes the client
-// managed to hand over while it was held.
+// heldSink blocks the first layer push until the client says it has handed
+// over everything, or until the deadline.
 //
-// Sampling reception inside a fixed sleep is what this replaces, and it does
+// Sampling reception during a fixed sleep is what this replaces, and it does
 // not measure the overlap: the pipeline is one layer deep on purpose, so a
-// receiver fast enough to fill the next layer before the sample opens is
-// parked on the hand-off for the whole window. It looks blocked while it is
-// only full, and how often that happens depends on the speed of the runner —
-// the same test passed on Linux and failed on macOS and Windows for that
-// reason alone. Holding the push instead makes the question exact: with a
-// whole layer of room free, does the wire keep moving?
+// receiver fast enough to fill the next layer parks on the hand-off and looks
+// blocked while it is only full. How often that happened depended on the speed
+// of the runner, which is why the same test was green on Linux and red on
+// macOS and Windows. Holding the push turns the question into one with a
+// single answer: with one push stopped for as long as it takes, can the rest
+// of the stream still reach the server?
 type heldSink struct {
 	*streamSink
-	// received counts the bytes the client has handed over so far, sending
-	// says whether it still has any left.
-	received *atomic.Uint64
-	sending  *atomic.Bool
+	// sending is false once the client has written its last byte.
+	sending *atomic.Bool
 
 	pushes atomic.Int32
-	moved  atomic.Uint64
+	// freed records whether the client got there before the deadline.
+	freed atomic.Bool
 }
 
-func newHeldSink(received *atomic.Uint64, sending *atomic.Bool) *heldSink {
-	return &heldSink{streamSink: newStreamSink(), received: received, sending: sending}
+func newHeldSink(sending *atomic.Bool) *heldSink {
+	return &heldSink{streamSink: newStreamSink(), sending: sending}
 }
 
-// OpenBlob holds the first push at its very first step, before the layer body
-// is even read, so the receiver still has its full layer budget available.
-// Every later blob — the remaining layers, the config, the manifest — goes
-// straight through.
+// OpenBlob holds the first push at its first step, before the layer body is
+// even read. Every later blob goes straight through.
 func (s *heldSink) OpenBlob(ctx context.Context, ref, digest string, size int64) (BlobWriter, error) {
 	if s.pushes.Add(1) == 1 {
 		s.hold()
@@ -49,32 +46,19 @@ func (s *heldSink) OpenBlob(ctx context.Context, ref, digest string, size int64)
 	return s.streamSink.OpenBlob(ctx, ref, digest, size)
 }
 
-// hold keeps the push in place until reception stops moving on its own —
-// the receiver has filled its one layer of room and parked on the hand-off —
-// or until the client has nothing left to send. A push that stops the wire
-// never moves a byte, so it releases on the deadline with nothing recorded.
 func (s *heldSink) hold() {
-	// Long enough that a runner scheduling the receiver late still counts as
-	// movement, short enough that the passing case costs a fraction of a
-	// second.
-	const stall = 250 * time.Millisecond
-	const limit = 10 * time.Second
+	// Generous: the deadline is only reached when the test is failing, and
+	// the passing case leaves as soon as the client is done.
+	const limit = 30 * time.Second
 
-	before := s.received.Load()
-	last := before
-	changed := time.Now()
-	deadline := changed.Add(limit)
+	deadline := time.Now().Add(limit)
 	for time.Now().Before(deadline) {
-		now := s.received.Load()
-		if now != last {
-			last, changed = now, time.Now()
-		}
-		if !s.sending.Load() || (now > before && time.Since(changed) > stall) {
-			break
+		if !s.sending.Load() {
+			s.freed.Store(true)
+			return
 		}
 		time.Sleep(5 * time.Millisecond)
 	}
-	s.moved.Store(last - before)
 }
 
 // TestReceptionOverlapsTheRegistryPush is the bandwidth contract of the
@@ -82,20 +66,23 @@ func (s *heldSink) hold() {
 // receive path the push leaves the link idle for exactly as long as the
 // slowest stage of the pipeline runs, which on a real registry is most of a
 // backup.
+//
+// The payload is two layers, which is what the one-layer-deep pipeline can
+// absorb: the first push is held, and the whole second layer still has to
+// reach the server while it is. Serialise the two halves and the client stops
+// at the first layer boundary instead.
 func TestReceptionOverlapsTheRegistryPush(t *testing.T) {
 	if testing.Short() {
-		t.Skip("needs enough payload for several 16 MiB layers")
+		t.Skip("needs enough payload for two 16 MiB layers")
 	}
-	// chunk.DefaultLimits clamps a layer to 16 MiB, so the payload has to be
-	// large enough to produce several of them.
-	stream, raw := testArchive(t, 80<<20)
+	const layerBytes = 16 << 20
+	stream, raw := testArchive(t, 28<<20)
 	start, _ := streamStartFor(t, int(raw), false)
-	start.MaxLayerBytes = 16 << 20
+	start.MaxLayerBytes = layerBytes
 
-	var received atomic.Uint64
 	var sending atomic.Bool
 	sending.Store(true)
-	sink := newHeldSink(&received, &sending)
+	sink := newHeldSink(&sending)
 	tempDir := t.TempDir()
 	in, err := startIngest(context.Background(), ingestConfig{
 		Start: start, SessionID: "overlap", Reference: start.Reference,
@@ -110,19 +97,18 @@ func TestReceptionOverlapsTheRegistryPush(t *testing.T) {
 		if err := in.Write(stream[offset:end]); err != nil {
 			t.Fatalf("write at %d: %v", offset, err)
 		}
-		received.Add(uint64(end - offset))
 	}
 	sending.Store(false)
 	res, err := in.Finish()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Layers < 3 {
-		t.Fatalf("layers = %d, want several so an upload can overlap the next one", res.Layers)
+	if res.Layers < 2 {
+		t.Fatalf("layers = %d, want two so a push can overlap the next one", res.Layers)
 	}
-	t.Logf("pushes=%d received-while-the-first-push-was-held=%d", sink.pushes.Load(), sink.moved.Load())
-	if sink.moved.Load() == 0 {
-		t.Fatal("no byte was received while the first layer push was held: the push still blocks reception")
+	t.Logf("pushes=%d layers=%d", sink.pushes.Load(), res.Layers)
+	if !sink.freed.Load() {
+		t.Fatal("the client could not finish while one layer push was held: the push still blocks reception")
 	}
 	assertNoSpool(t, tempDir)
 }

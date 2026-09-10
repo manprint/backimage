@@ -66,10 +66,11 @@ riservati stanno nel blob privato:
   `nonceMode`, `envelopeVersion`). In schema 2 contiene anche `private` (ref al
   blob privato) e **non** contiene `sources`, `host`, `totals`,
   `encryption.keyFingerprint` né `encryption.recipients`.
-  `encryption.envelopeVersion` è pubblico per necessità: un backup `--dedup`
-  successivo deve poter decidere, prima di aprire qualsiasi cosa, se la chiave
-  che sta per riusare ha mai sigillato con la derivazione nonce precedente alla
-  0.2.4 (vedi [security.md](security.md)). Assente significa envelope v1.
+  `encryption.envelopeVersion` è pubblico perché una corsa possa pianificare
+  prima di aprire qualsiasi cosa. È un **suggerimento**: da 0.4.1 la decisione
+  se una chiave può ancora sigillare si prende dall'attestazione dentro il
+  materiale avvolto, non da qui (vedi [security.md](security.md)). Assente
+  significa envelope v1.
 - `chunks.json`: `index.ChunkTable` — chunk→blob: `i`, path, sha e byte del
   blob **memorizzato** (`ss`, `sb`), che servono a localizzare e verificare i
   chunk senza chiave. In schema 2 `ps` e `pb` (sha e byte del **plaintext**)
@@ -81,7 +82,13 @@ riservati stanno nel blob privato:
   della chiave e la coppia `ps`/`pb` di ogni chunk. Dopo lo sblocco
   `pkg/recovery` lo fonde in memoria nel manifest e nella chunk table, così i
   lettori a valle vedono la forma di sempre.
-- `keys.age` etc.: file chiavi (solo se cifrato).
+- `keys.age` / `keys.pass.age`: materiale di chiave avvolto da age (solo se
+  cifrato). Il JSON dentro l'involucro ha `schemaVersion` **2** da 0.4.1:
+  oltre a `dek` e `nonceKey` porta l'**attestazione** — `envelopeVersion`
+  (l'epoca crittografica in cui è stato generato), `nonceMode` e `reuse`
+  (`never` o `convergent-dedup`). È dentro l'involucro, quindi è autenticata
+  dall'involucro stesso. Lo `schemaVersion` 1 (senza attestazione) continua a
+  essere letto: apre il proprio backup e non ne sigilla mai un altro.
 
 Un backimage che legge un'immagine di schema 1 la restaura come prima; un
 backimage precedente allo schema 2 rifiuta un'immagine nuova con
