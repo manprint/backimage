@@ -154,9 +154,9 @@ func TestOpenDevTTY(t *testing.T) {
 	}
 	// deterministic coverage without a controlling terminal: a plain file
 	// succeeds, a missing path fails.
-	f, err := openTTYAt("/dev/null")
+	f, err := openTTYAt(os.DevNull)
 	if err != nil || f == nil {
-		t.Fatalf("openTTYAt(/dev/null): %v", err)
+		t.Fatalf("openTTYAt(%s): %v", os.DevNull, err)
 	}
 	f.Close()
 	if _, err := openTTYAt("/definitely/not/a/tty"); err == nil {

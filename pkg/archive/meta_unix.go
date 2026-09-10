@@ -31,7 +31,11 @@ func readMeta(path string, fi os.FileInfo, opts Options, e *Entry) error {
 	if opts.PreserveXattrs {
 		xs, err := readXattrs(path)
 		if err != nil {
-			return err
+			// Only the attributes are lost, and only for this path: the
+			// caller decides whether that is fatal. Dropping the entry
+			// instead would turn an unreadable attribute into a missing
+			// file.
+			return &xattrLossError{Path: path, Err: err}
 		}
 		if len(xs) > 0 {
 			e.Xattrs = xs
@@ -88,7 +92,7 @@ func readXattrs(path string) (map[string][]byte, error) {
 func readOneXattr(path, name string) ([]byte, error) {
 	size, err := unix.Lgetxattr(path, name, nil)
 	if err != nil {
-		if err == unix.ENODATA {
+		if isMissingXattr(err) {
 			return nil, nil
 		}
 		return nil, fmt.Errorf("Lgetxattr %s.%s: %w", path, name, err)

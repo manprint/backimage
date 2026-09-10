@@ -7,6 +7,10 @@ import (
 	"time"
 )
 
-// Some Unix targets expose different Stat_t timestamp field names. Preserve
-// portable metadata and leave unavailable birth/change times unset.
-func statTimes(*syscall.Stat_t) (time.Time, time.Time) { return time.Time{}, time.Time{} }
+// Darwin and the BSDs name the timestamp fields *timespec instead of *tim.
+// Returning zero times here used to drop the access and change time of every
+// entry archived outside Linux.
+func statTimes(st *syscall.Stat_t) (time.Time, time.Time) {
+	return time.Unix(st.Atimespec.Sec, st.Atimespec.Nsec),
+		time.Unix(st.Ctimespec.Sec, st.Ctimespec.Nsec)
+}

@@ -81,6 +81,11 @@ func TestStoreInsecurePerms(t *testing.T) {
 }
 
 func TestStoreAtomicWriteNoCorruption(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		// A Windows directory has no write bit to clear, so there is no way
+		// to make the write fail from here.
+		t.Skip("no unwritable directory on windows")
+	}
 	dir := t.TempDir()
 	p := filepath.Join(dir, "auth.json")
 	s, err := NewStore(p)

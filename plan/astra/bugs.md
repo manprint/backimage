@@ -7,6 +7,8 @@ nessuna fase. Ognuno ha un ID stabile, non riusato.
 | --- | --- | --- | --- |
 | B-A001 | A1 (e2e) | APERTO | `restore --local-repo` non riesce a leggere nessun backup dal daemon Docker |
 | B-A002 | A2.3 | APERTO | l'indice sostituisce con U+FFFD i byte non-UTF-8 dei nomi (il tar li conserva) |
+| B-A003 | CI (job windows, aggiunto in A1) | RISOLTO | su Windows `readMeta` falliva se si chiedevano gli xattr: ogni entry veniva scartata e il backup usciva vuoto |
+| B-A004 | CI (job macos, aggiunto in A1) | RISOLTO | fuori da Linux il writer non riconosceva hardlink e device e azzerava atime/ctime |
 
 ---
 
@@ -86,3 +88,96 @@ fase.
 **Stato**: APERTO, limite documentato in `docs/FIDELITY.md` e fissato da
 `TestNonUTF8NamesDoNotSurviveTheIndex` (`pkg/index`), che fallirà il giorno in
 cui la codifica cambia.
+
+---
+
+## B-A003 — su Windows il backup non archiviava niente
+
+**Trovato**: al primo giro dei job `windows` e `macos`, aggiunti alla CI in
+fase A1. Prima di quei job nessun gate eseguiva la suite fuori da Linux, quindi
+il difetto era invisibile.
+
+**Sintomo**, sei test di `pkg/backup` più uno di `pkg/server`:
+
+```
+--- FAIL: TestPipelineToOCILayout
+    result incoerente: {... Files:0 BytesRaw:0 BytesStored:16 Layers:1 Chunks:1 ...}
+--- FAIL: TestFullReadBackCatchesCorruptedLayerOverHTTP
+    the corrupted layer must be reported, got metadata tar: archive/tar: invalid tar header
+--- FAIL: TestScanArchiveMatchesLocalWriter
+    metadata "C:\...\001": xattrs are not supported on windows for "C:\...\001"
+```
+
+**Causa**: `pkg/archive/meta_windows.go` restituiva un errore quando
+`Options.PreserveXattrs` era vero, e `PreserveXattrs` è vero per default in
+`pkg/backup`. In `writer.emitOne` l'errore di `readMeta` passa per
+`handleWalkError`, che in modo degradato registra e **salta la entry**: saltate
+tutte, l'archivio conteneva solo la directory radice.
+
+**Correzione**: Windows non ha attributi estesi POSIX, quindi chiederli non è
+un errore — non c'è niente da perdere. `readMeta` compila i campi che la
+piattaforma ha e non fallisce; il writer dichiara la lacuna una volta sola
+(`xattrsSupported`, `warnOnce`) invece che a ogni entry.
+
+**Correzione collegata**: un errore di `llistxattr` su una singola entry ora è
+un `*xattrLossError`, che il writer conta come degradazione (`XattrsSkipped`)
+lasciando la entry nell'archivio, invece di scartarla. Con `--strict` resta
+fatale. È lo stesso difetto visto da un'altra angolazione: la fedeltà degli
+attributi non deve poter cancellare un file.
+
+---
+
+## B-A004 — fuori da Linux il writer perdeva hardlink, device e tempi
+
+**Trovato**: stesso giro di CI, job `macos`.
+
+**Sintomo**:
+
+```
+--- FAIL: TestWriterHardlinkSinglePayload
+    expected exactly 1 data payload in hard/, got 3
+--- FAIL: TestReaderAtimeCtimeRoundTrip
+    atime = 0001-01-01 00:00:00 +0000 UTC want 2024-03-09 16:00:01.444555666 +0000 UTC
+    ctime not read
+--- FAIL: TestRoundTrip/full-non-root
+    [{Path:hard/orig.txt Field:hardlink-group Want:... Got:missing} ...]
+```
+
+**Causa**: `fileIdentity`, `unixFileDevice` e `statTimes` avevano una sola
+implementazione reale, sotto `//go:build linux`. Il file di fallback copriva
+`(unix && !linux) || windows` e restituiva sempre «non disponibile». Su darwin
+i campi esistono, hanno solo nomi e ampiezze diverse (`Atimespec`/`Ctimespec`,
+`Dev` con segno, `Nlink` a 16 bit).
+
+**Effetto sui dati**: tre hardlink allo stesso inode venivano archiviati come
+tre copie complete del contenuto — non una perdita di dati, ma una moltiplicazione
+silenziosa della dimensione del backup e la perdita della struttura al restore.
+
+**Correzione**: implementazioni reali in `file_identity_other_unix.go`,
+`file_stat_other_unix.go` e `stat_times_other_unix.go`; il fallback che
+restituisce «non disponibile» resta solo per Windows, dove Go non espone
+alcuna identità di inode.
+
+---
+
+## Portabilità della suite (stessa unità di lavoro)
+
+I due job nuovi hanno anche mostrato test che asserivano semantica Linux o di
+POSIX su piattaforme che non ce l'hanno. Nessuno di questi era un difetto del
+prodotto, e nessuna asserzione è stata rimossa su Linux:
+
+| Test | Perché falliva fuori da Linux | Cosa è cambiato |
+| --- | --- | --- |
+| `TestExtract{Trusted,Security,UnsupportedNamespace}Xattr*` | `trusted.*` e `security.*` sono namespace del kernel Linux; altrove sono nomi qualunque | `t.Skip` fuori da Linux |
+| `TestExtractHeterogeneousTreeNeverFails` | le due classi `xattr.*` non degradano su macOS | le classi attese includono `xattr.*` solo su Linux |
+| `TestHostileNamesRoundTripByteForByte` | APFS rifiuta i nomi non UTF-8 (`EILSEQ`) | il nome rifiutato dal filesystem viene registrato e saltato |
+| `TestWriterTarTvGated` | `tar` su macOS è bsdtar e rifiuta `--acls` in `-t` | il test richiede GNU tar |
+| `TestReaderAtimeCtimeRoundTrip` | NTFS ha tick da 100 ns e nessun ctime | `t.Skip` su Windows |
+| `TestExtractFifoAndSymlinkChain` | Windows non ha fifo | `t.Skip` su Windows |
+| `TestOpenDevTTY` | `/dev/null` non esiste su Windows | usa `os.DevNull` |
+| `TestGoldenFiles` | il checkout Windows riscriveva i golden in CRLF | `.gitattributes` fissa LF |
+| `TestStoreAtomicWriteNoCorruption` | una directory Windows non ha bit di scrittura da togliere | `t.Skip` su Windows |
+| `TestSpoolNamesAreUnique`, `TestSelfSignedCertificatePersistsInWorkDir` | Windows riporta sempre modo 666 | l'asserzione sul modo vale solo dove i permessi esistono |
+| `TestNetworkErrorsAndAuthPath`, `TestAuthHomePromptAndDirectLogoutBranches` | separatore di path | `filepath.Join` nell'attesa |
+| `TestPipelineTarRecipientAndTempCleanup` | l'output `tar` porta l'immagine della piattaforma host | il test costruisce per la piattaforma host |
+| `TestBackup*ToOCILayout` | i job non costruivano gli asset self-extract | i due job li costruiscono prima dei test |

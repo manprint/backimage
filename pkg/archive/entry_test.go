@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -92,6 +93,11 @@ func TestReaderEOFAndUnsupported(t *testing.T) {
 func TestReaderAtimeCtimeRoundTrip(t *testing.T) {
 	src := t.TempDir()
 	f := filepath.Join(src, "f")
+	if runtime.GOOS == "windows" {
+		// NTFS stores 100ns ticks and no change time at all, so there is no
+		// POSIX triple to round-trip here.
+		t.Skip("windows keeps no ctime and truncates mtime to 100ns")
+	}
 	os.WriteFile(f, []byte("x"), 0o644)
 	mt := time.Unix(1710000000, 111222333)
 	at := time.Unix(1710000001, 444555666)
@@ -132,6 +138,9 @@ func TestReaderAtimeCtimeRoundTrip(t *testing.T) {
 }
 
 func TestExtractFifoAndSymlinkChain(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("windows has no fifo and needs a privilege to create a symlink")
+	}
 	dst := t.TempDir()
 	var buf bytes.Buffer
 	tw := tar.NewWriter(&buf)

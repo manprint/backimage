@@ -101,6 +101,16 @@ jobs:
           cache: true
       - name: Build
         run: go build ./cmd/... ./pkg/... ./internal/...
+      - name: Build embedded self-extract assets
+        # The assets are Linux binaries whatever the runner is: without them
+        # the CLI tests that build a runnable image fail on a placeholder.
+        shell: bash
+        run: |
+          for arch in amd64 arm64; do
+            GOOS=linux GOARCH=$arch go build \
+              -o internal/embedded/backimage-selfextract-linux-$arch \
+              ./cmd/backimage-selfextract
+          done
       - name: Unit tests
         # The extraction path is a different implementation on Windows, and a
         # green Linux run says nothing about it: until this job existed, the
@@ -131,6 +141,16 @@ jobs:
         run: |
           GOOS=darwin GOARCH=amd64 go build ./cmd/... ./pkg/... ./internal/...
           GOOS=darwin GOARCH=arm64 go build ./cmd/... ./pkg/... ./internal/...
+      - name: Build embedded self-extract assets
+        # The assets are Linux binaries whatever the runner is: without them
+        # the CLI tests that build a runnable image fail on a placeholder.
+        shell: bash
+        run: |
+          for arch in amd64 arm64; do
+            GOOS=linux GOARCH=$arch go build \
+              -o internal/embedded/backimage-selfextract-linux-$arch \
+              ./cmd/backimage-selfextract
+          done
       - name: Unit tests
         # internal/embedded is left out for the same reason as on Windows.
         shell: bash

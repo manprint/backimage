@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"syscall"
 	"testing"
@@ -69,7 +70,7 @@ func TestNetworkErrorsAndAuthPath(t *testing.T) {
 	}
 	t.Setenv("BACKIMAGE_AUTH_FILE", "")
 	t.Setenv("XDG_CONFIG_HOME", "/tmp/config-home")
-	if authFilePath() != "/tmp/config-home/backimage/auth.json" {
+	if authFilePath() != filepath.Join("/tmp/config-home", "backimage", "auth.json") {
 		t.Fatalf("xdg auth path = %q", authFilePath())
 	}
 }
@@ -78,7 +79,7 @@ func TestAuthHomePromptAndDirectLogoutBranches(t *testing.T) {
 	t.Setenv("BACKIMAGE_AUTH_FILE", "")
 	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("HOME", t.TempDir())
-	if !strings.HasSuffix(authFilePath(), "/.config/backimage/auth.json") {
+	if !strings.HasSuffix(authFilePath(), filepath.Join(".config", "backimage", "auth.json")) {
 		t.Fatalf("home auth path = %q", authFilePath())
 	}
 

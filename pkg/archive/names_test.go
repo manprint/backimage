@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"syscall"
 	"testing"
 )
 
@@ -38,10 +39,22 @@ var hostileNames = []string{
 // the same bytes, through the writer, the reader and the extractor.
 func TestHostileNamesRoundTripByteForByte(t *testing.T) {
 	src := t.TempDir()
+	// A name the filesystem itself refuses is not a bug in the archiver:
+	// APFS rejects any name that is not valid UTF-8. Archive what the
+	// platform accepts and hold that to the byte-for-byte rule.
+	names := make([]string, 0, len(hostileNames))
 	for _, name := range hostileNames {
 		if err := os.WriteFile(filepath.Join(src, name), []byte(name), 0o644); err != nil {
+			if errors.Is(err, syscall.EILSEQ) || errors.Is(err, syscall.EINVAL) {
+				t.Logf("filesystem refuses the name %q: %v", name, err)
+				continue
+			}
 			t.Fatalf("create %q: %v", name, err)
 		}
+		names = append(names, name)
+	}
+	if len(names) == 0 {
+		t.Fatal("the filesystem accepted none of the hostile names")
 	}
 
 	var buf bytes.Buffer
@@ -73,8 +86,8 @@ func TestHostileNamesRoundTripByteForByte(t *testing.T) {
 			got = append(got, e.Path)
 		}
 	}
-	want := make([]string, 0, len(hostileNames))
-	for _, name := range hostileNames {
+	want := make([]string, 0, len(names))
+	for _, name := range names {
 		want = append(want, base+"/"+name)
 	}
 	sort.Strings(got)
@@ -104,7 +117,7 @@ func TestHostileNamesRoundTripByteForByte(t *testing.T) {
 			restored = append(restored, e.Name())
 		}
 	}
-	sorted := append([]string(nil), hostileNames...)
+	sorted := append([]string(nil), names...)
 	sort.Strings(sorted)
 	sort.Strings(restored)
 	if len(restored) != len(sorted) {
@@ -119,7 +132,7 @@ func TestHostileNamesRoundTripByteForByte(t *testing.T) {
 	if fi, err := os.Stat(filepath.Join(dst, base, "back")); err == nil && fi.IsDir() {
 		t.Error(`the name "back\slash.txt" was split into a directory`)
 	}
-	for _, name := range hostileNames {
+	for _, name := range names {
 		content, err := os.ReadFile(filepath.Join(dst, base, name))
 		if err != nil {
 			t.Errorf("read back %q: %v", name, err)

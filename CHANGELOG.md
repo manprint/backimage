@@ -262,6 +262,31 @@ cambiano se i dati non sono cambiati, quindi il costo è il solo layer tool.
 
 ### Fixed
 
+- **Un backup su Windows non archiviava più niente.** `readMeta` restituiva un
+  errore ogni volta che veniva chiesto di preservare gli attributi estesi — che
+  è il default — e ogni entry finiva scartata: l'archivio usciva vuoto, con
+  `Files: 0`, e il `verify` successivo riportava «archive/tar: invalid tar
+  header». Windows non ha attributi estesi POSIX: chiederli non è un errore, non
+  c'è nulla da perdere. Ora il writer lo dichiara una volta sola fra i
+  `Warnings` e archivia tutto il resto.
+- **Su macOS il writer perdeva hardlink, device e i tempi di accesso e di
+  cambio.** `fileIdentity`, `unixFileDevice` e `statTimes` avevano una sola
+  implementazione reale, quella Linux, e fuori da Linux restituivano «non
+  disponibile»: tre hardlink allo stesso inode venivano archiviati come tre
+  copie del contenuto, il numero di device andava perso e `atime`/`ctime`
+  uscivano azzerati. I campi di `Stat_t` hanno nomi e ampiezze diverse su
+  darwin (`Atimespec`, `Dev` con segno, `Nlink` a 16 bit), che è l'unico motivo
+  per cui servono file separati.
+- **Un attributo esteso illeggibile non fa più sparire il file.** Se
+  `llistxattr` falliva su una entry — su macOS succede con un file in modo
+  `0000` — l'errore risaliva come errore di metadati e l'intera entry veniva
+  scartata. Ora, senza `--strict`, la perdita è contata (`XattrsSkipped`) e la
+  entry resta: perdere un attributo è un rapporto di fedeltà, perdere il file è
+  perdita di dati.
+- **`Lgetxattr` riconosce l'assenza di un attributo anche fuori da Linux.** Il
+  controllo era su `ENODATA`; i BSD, macOS compreso, rispondono `ENOATTR`, che
+  è un errno diverso, e un attributo elencato ma sparito nel frattempo
+  diventava un errore.
 - **Il recupero parziale non tiene più in memoria l'entry più grande del
   backup.** `readRange` raccoglieva l'intera entry prima di scriverla, per
   poterla scartare intera se un chunk era danneggiato: una entry da 1 GiB

@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"runtime"
 
 	"os"
 	"path/filepath"
@@ -420,6 +421,12 @@ func tarWithXattr(t *testing.T, name, value string) *bytes.Buffer {
 // attribute and keep going: overlayfs bookkeeping is not user data, and an 8 GB
 // extraction must not die at 76% because of it.
 func TestExtractTrustedXattrIsSkippedNotFatal(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		// trusted.* and security.* are Linux namespaces enforced by the
+		// kernel. Elsewhere they are ordinary attribute names and the rule
+		// under test does not exist.
+		t.Skip("xattr namespaces are a Linux rule")
+	}
 	if os.Geteuid() == 0 {
 		t.Skip("root holds CAP_SYS_ADMIN: trusted.* is writable")
 	}
@@ -445,6 +452,12 @@ func TestExtractTrustedXattrIsSkippedNotFatal(t *testing.T) {
 // A namespace the destination filesystem does not know is tolerated too: the
 // kernel answers EOPNOTSUPP/EINVAL and there is nothing to preserve.
 func TestExtractUnsupportedXattrNamespaceIsSkipped(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		// trusted.* and security.* are Linux namespaces enforced by the
+		// kernel. Elsewhere they are ordinary attribute names and the rule
+		// under test does not exist.
+		t.Skip("xattr namespaces are a Linux rule")
+	}
 	dst := t.TempDir()
 	buf := tarWithXattr(t, "bogusns.attr", "v")
 	x := NewExtractor(ExtractOptions{PreserveXattrs: true, Strict: true})
@@ -460,6 +473,12 @@ func TestExtractUnsupportedXattrNamespaceIsSkipped(t *testing.T) {
 // security.* carries real data: strict mode still fails, and the error must
 // name the remediation. --allow-degraded (Strict false) skips it instead.
 func TestExtractSecurityXattrHonoursStrict(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		// trusted.* and security.* are Linux namespaces enforced by the
+		// kernel. Elsewhere they are ordinary attribute names and the rule
+		// under test does not exist.
+		t.Skip("xattr namespaces are a Linux rule")
+	}
 	if os.Geteuid() == 0 {
 		t.Skip("root can write security.*")
 	}
@@ -580,7 +599,13 @@ func TestExtractHeterogeneousTreeNeverFails(t *testing.T) {
 	}
 	// Ownership, security.* xattrs and the device node are all out of reach
 	// unprivileged: each one must be a counted degradation, not a failure.
-	for _, class := range []string{"owner", "xattr.trusted", "xattr.security", "object"} {
+	degradedClasses := []string{"owner", "object"}
+	if runtime.GOOS == "linux" {
+		// Only Linux refuses these two namespaces to an unprivileged
+		// process; elsewhere they are written like any other attribute.
+		degradedClasses = append(degradedClasses, "xattr.trusted", "xattr.security")
+	}
+	for _, class := range degradedClasses {
 		if stats.Degraded[class] == 0 {
 			t.Errorf("class %q must be counted as degraded: %+v", class, stats.Degraded)
 		}
@@ -600,7 +625,11 @@ func TestExtractHeterogeneousTreeNeverFails(t *testing.T) {
 	if !strings.Contains(lines, "esito NON 1:1") {
 		t.Errorf("verdict missing from the evidence: %q", lines)
 	}
-	for _, want := range []string{"differenza owner", "differenza xattr.trusted", "entry NON estratte"} {
+	wantEvidence := []string{"differenza owner", "entry NON estratte"}
+	if runtime.GOOS == "linux" {
+		wantEvidence = append(wantEvidence, "differenza xattr.trusted")
+	}
+	for _, want := range wantEvidence {
 		if !strings.Contains(lines, want) {
 			t.Errorf("evidence missing %q: %q", want, lines)
 		}

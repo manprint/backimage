@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -178,7 +179,9 @@ func TestPipelineTarRecipientAndTempCleanup(t *testing.T) {
 	res, err := Run(context.Background(), Config{
 		RootPaths: []string{tree}, Ref: "example.test/repo/backup:t", Compression: "gzip", Level: 1,
 		Encrypt: true, Recipients: []string{id.Recipient().String()}, AllowDegraded: true,
-		Runnable: false, Platforms: []string{"linux/amd64"}, SelfExtract: stubSelf,
+		// A tar output carries the image for the host platform, so the
+		// platform to build is the host's, not a hardcoded linux/amd64.
+		Runnable: false, Platforms: []string{runtime.GOOS + "/" + runtime.GOARCH}, SelfExtract: stubSelf,
 		Output: "tar", OutputPath: out, TempDir: tempDir,
 		NoMetadata: true, Created: "2026-01-02T03:04:05Z",
 	})

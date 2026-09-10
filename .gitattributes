@@ -1,0 +1,6 @@
+# Golden files are compared byte for byte against what the code produces, so
+# a checkout must never rewrite their line endings. Without this the Windows
+# job read every golden file back with CRLF and the comparison failed.
+* text=auto eol=lf
+*.golden.json -text
+testdata/** -text

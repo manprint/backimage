@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -183,7 +184,7 @@ func TestSpoolNamesAreUnique(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if perm := info.Mode().Perm(); perm != 0o600 {
+		if perm := info.Mode().Perm(); perm != 0o600 && runtime.GOOS != "windows" {
 			t.Fatalf("spool mode = %o, want 600", perm)
 		}
 		t.Cleanup(spool.Remove)

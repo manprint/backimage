@@ -151,6 +151,13 @@ func TestWriterTarTvGated(t *testing.T) {
 	if _, err := exec.LookPath("tar"); err != nil {
 		t.Skip("tar not available")
 	}
+	// --xattrs and --acls are GNU extensions: bsdtar, which is what `tar` is
+	// on macOS, rejects them outright and would fail the archive for the
+	// wrong reason.
+	if ver, err := exec.Command("tar", "--version").Output(); err != nil ||
+		!strings.Contains(string(ver), "GNU tar") {
+		t.Skip("GNU tar not available")
+	}
 	src := t.TempDir()
 	writeTree(t, src, fixtures.FeatBasic|fixtures.FeatPerms|fixtures.FeatSymlinks|
 		fixtures.FeatHardlinks|fixtures.FeatNames)

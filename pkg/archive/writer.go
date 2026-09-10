@@ -46,7 +46,23 @@ func newWriter(w io.Writer, opts Options) *tarWriter {
 		rootBases: map[string]string{},
 	}
 	tw.tw = tar.NewWriter(&counterWriter{w: w, n: &tw.written})
+	if opts.PreserveXattrs && !xattrsSupported {
+		// Not a failure: the platform has no extended attributes, so there is
+		// nothing to preserve and nothing to lose. Said once, not per entry.
+		tw.warnOnce("questa piattaforma non ha attributi estesi: nessuno è stato archiviato")
+	}
 	return tw
+}
+
+// warnOnce records a non-fatal degradation, at most one line per distinct
+// cause: the same missing capability on ten thousand entries is one fact.
+func (w *tarWriter) warnOnce(msg string) {
+	for _, seen := range w.stats.Warnings {
+		if seen == msg {
+			return
+		}
+	}
+	w.stats.Warnings = append(w.stats.Warnings, msg)
 }
 
 // counterWriter forwards writes while maintaining the emitted offset.
@@ -220,7 +236,15 @@ func (w *tarWriter) emitOne(ctx context.Context, arcPath, fsPath string, st os.F
 		e.Mode |= os.ModeSticky
 	}
 	if err := readMeta(fsPath, st, w.opts, e); err != nil {
-		return w.handleWalkError(fmt.Errorf("metadata %q: %w", fsPath, err), fsPath)
+		var lost *xattrLossError
+		if !errors.As(err, &lost) || w.opts.Strict {
+			return w.handleWalkError(fmt.Errorf("metadata %q: %w", fsPath, err), fsPath)
+		}
+		// Degraded mode: keep the entry, count the attributes as lost. A file
+		// nobody can list the attributes of is still a file worth archiving.
+		w.stats.XattrsSkipped++
+		w.stats.Errors = append(w.stats.Errors, err)
+		w.warnOnce("attributi estesi non leggibili su alcune entry: sono stati esclusi dall'archivio")
 	}
 	if w.excluded(e.Path) {
 		w.stats.Skipped++

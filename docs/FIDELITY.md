@@ -53,11 +53,17 @@ mutable noise for backup workloads.
 | POSIX ACLs | ✅ (`system.posix_acl_*`) | ❌ (NFSv4 ACLs are not xattr-backed) | n/a (owner ACLs) |
 | security.capability | ✅ (root/CAP_SETFCAP) | n/a | n/a |
 | trusted.* xattrs (overlayfs) | archived always, restored only with CAP_SYS_ADMIN | n/a | n/a |
-| hardlinks | ✅ | ✅ | ✅ (NTFS; copy fallback otherwise) |
+| hardlinks | ✅ | ✅ | restore ✅ (NTFS; copy fallback otherwise), archiving ❌ (see below) |
 | symlinks | ✅ | ✅ | ⚠️ requires developer mode or `SeCreateSymbolicLinkPrivilege`, otherwise reported as skipped |
 | devices / fifos | ✅ (root) | ✅ | ❌ reported as skipped, never created as empty files |
 | names with `\ : * ? " < > \|`, or a trailing space or dot | ✅ | ✅ | ❌ reported as skipped |
 | atime/ctime round-trip | only with `PreserveTimes` | same | ctime not supported |
+
+Grouping hard links when archiving needs a stable inode identity for each
+path. Linux and macOS expose one through `Stat_t`; Windows exposes none, so a
+backup taken **on** Windows stores every link as its own regular file with its
+own copy of the payload. Reading such a backup back is unaffected, and a
+backup taken on Linux or macOS restores its groups on NTFS.
 
 ## Extraction order (mandatory)
 
