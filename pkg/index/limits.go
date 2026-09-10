@@ -1,6 +1,9 @@
 package index
 
-import "fmt"
+import (
+	"fmt"
+	"io"
+)
 
 // The public metadata of a backup decides how much memory a reader is about
 // to allocate: chunks.json says how many bytes one stored chunk holds, and a
@@ -144,4 +147,61 @@ func validateLayers(m *Manifest, t *ChunkTable) error {
 		return fmt.Errorf("%w: chunks %d-%d belong to no layer", ErrBadSchema, next, len(t.Chunks)-1)
 	}
 	return nil
+}
+
+// DefaultMaxMetadataBytes bounds one metadata blob read into memory when
+// nothing tighter is known about it.
+//
+// It is an absolute cap, and the only number here that no field of the backup
+// derives, so it is set from what the format can actually produce. The two
+// blobs that grow with the backup are the file index (one row per archived
+// file) and the confidential metadata (one row per chunk). A JSON row of
+// either is a couple of hundred bytes and compresses several times over, so
+// 512 MiB of *stored* bytes is already tens of millions of files or chunks —
+// far past any backup this tool can write within its own layer limits, and
+// still a bound a reader can hold.
+//
+// Callers that can measure the blob pass that instead: LimitMetadata takes
+// the smaller of the two.
+const DefaultMaxMetadataBytes = 512 << 20
+
+// LimitMetadata wraps r so that a metadata blob larger than max is a format
+// error instead of an allocation. A max of zero, or larger than
+// DefaultMaxMetadataBytes, means the default: a caller cannot widen the cap
+// by passing a number a hostile file supplied.
+//
+// what names the blob in the error, because the interesting part of the
+// refusal is which file lied about its size.
+func LimitMetadata(r io.Reader, max int64, what string) io.Reader {
+	if max <= 0 || max > DefaultMaxMetadataBytes {
+		max = DefaultMaxMetadataBytes
+	}
+	return &metadataLimiter{r: r, max: max, what: what}
+}
+
+type metadataLimiter struct {
+	r    io.Reader
+	max  int64
+	n    int64
+	what string
+}
+
+func (l *metadataLimiter) Read(p []byte) (int, error) {
+	if l.n > l.max {
+		return 0, l.exceeded()
+	}
+	if room := l.max - l.n + 1; int64(len(p)) > room {
+		p = p[:room]
+	}
+	n, err := l.r.Read(p)
+	l.n += int64(n)
+	if l.n > l.max {
+		return n, l.exceeded()
+	}
+	return n, err
+}
+
+func (l *metadataLimiter) exceeded() error {
+	return fmt.Errorf("%w: %s is larger than the %d bytes a reader will hold for it",
+		ErrBadSchema, l.what, l.max)
 }

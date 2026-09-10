@@ -158,7 +158,7 @@ func ReadPrivate(r io.Reader, opener crypt.Opener) (*Private, error) {
 	if !opener.RequiresAuthentication() {
 		return nil, fmt.Errorf("%w: private metadata requires the backup key", ErrBadSchema)
 	}
-	raw, err := io.ReadAll(r)
+	raw, err := io.ReadAll(LimitMetadata(r, 0, "the confidential metadata"))
 	if err != nil {
 		return nil, fmt.Errorf("reading private metadata: %w", err)
 	}

@@ -217,3 +217,29 @@ sul disco:
 
 In entrambi i casi, `offset + sb` oltre la fine del blob è un errore di formato
 prima di essere un'allocazione.
+
+### Blob di metadati (`index.LimitMetadata`)
+
+`manifest.json`, `chunks.json`, `index.json.zst` e `private.json.zst` venivano
+letti con `io.ReadAll` su un reader che arriva dall'immagine: nessun tetto, e
+il layer dei metadati è compresso, quindi i byte che il lettore avrebbe tenuto
+in memoria li produce il decoder, non chi ha pubblicato l'immagine.
+
+Ogni lettura passa ora da un tetto:
+
+| Sorgente | Tetto |
+| --- | --- |
+| backup locale, immagine autoestraente | la dimensione reale del file (`fstat`) |
+| layer dei metadati di un'immagine OCI | `DefaultMaxMetadataBytes`, come budget dell'intero layer e non della singola entry |
+| qualunque altro reader | `DefaultMaxMetadataBytes` |
+
+`DefaultMaxMetadataBytes` è **512 MiB** ed è l'unico tetto assoluto del
+lettore. La derivazione è la forma dei due blob che crescono col backup:
+l'indice ha una riga per file archiviato, i metadati riservati una riga per
+chunk, una riga JSON è dell'ordine dei duecento byte e si comprime più volte.
+512 MiB *memorizzati* sono quindi decine di milioni di file o di chunk, molto
+oltre quel che questo strumento può scrivere restando nei propri limiti di
+layer.
+
+Un tetto più stretto passato da chi sa misurare il blob vince; uno più largo
+no, perché i numeri che un chiamante potrebbe passare vengono dall'immagine.

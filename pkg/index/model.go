@@ -167,7 +167,7 @@ func WriteManifest(w io.Writer, m *Manifest) error {
 // ReadManifest parses and validates a manifest.
 func ReadManifest(r io.Reader) (*Manifest, error) {
 	m := &Manifest{}
-	if err := json.NewDecoder(r).Decode(m); err != nil {
+	if err := json.NewDecoder(LimitMetadata(r, 0, "manifest.json")).Decode(m); err != nil {
 		return nil, fmt.Errorf("parsing manifest: %w", err)
 	}
 	if err := checkSchema(m.SchemaVersion); err != nil {
@@ -235,7 +235,7 @@ func WriteChunkTable(w io.Writer, t *ChunkTable) error {
 // ReadChunkTable parses and validates a chunk table.
 func ReadChunkTable(r io.Reader) (*ChunkTable, error) {
 	t := &ChunkTable{}
-	if err := json.NewDecoder(r).Decode(t); err != nil {
+	if err := json.NewDecoder(LimitMetadata(r, 0, "chunks.json")).Decode(t); err != nil {
 		return nil, fmt.Errorf("parsing chunk table: %w", err)
 	}
 	if err := checkSchema(t.SchemaVersion); err != nil {
@@ -392,7 +392,7 @@ func ReadIndex(r io.Reader, opener crypt.Opener) (*Index, error) {
 	if opener == nil {
 		return nil, fmt.Errorf("%w: reading an index requires an opener stating the expected encryption", ErrBadSchema)
 	}
-	raw, err := io.ReadAll(r)
+	raw, err := io.ReadAll(LimitMetadata(r, 0, "the file index"))
 	if err != nil {
 		return nil, fmt.Errorf("reading index blob: %w", err)
 	}

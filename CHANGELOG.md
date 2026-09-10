@@ -111,6 +111,18 @@ cambiano se i dati non sono cambiati, quindi il costo è il solo layer tool.
 
 ### Security
 
+- **Nessun blob di metadati letto senza un tetto.** `manifest.json`,
+  `chunks.json`, `index.json.zst` e `private.json.zst` arrivavano da un
+  `io.ReadAll` senza limite. Il layer che li trasporta è compresso, quindi i
+  byte che il lettore avrebbe tenuto in memoria li produce il decoder: pochi
+  kilobyte pubblicati potevano diventare gigabyte allocati. Ora ogni lettura
+  ha un tetto — la dimensione reale del file dove è misurabile (backup
+  locale, immagine autoestraente), il budget dell'intero layer dei metadati
+  altrimenti — e superarlo è un errore di formato con codice 5. Il tetto
+  assoluto è 512 MiB, con la sua derivazione in
+  [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md); un chiamante può stringerlo,
+  mai allargarlo, perché i numeri che potrebbe passare vengono dall'immagine.
+
 - **Nessuna allocazione decisa da un campo pubblico.** `chunks.json` dichiara
   quanti byte occupa un chunk memorizzato, e il lettore allocava quella cifra
   con il massimo intero come unica guardia: un `chunks.json` che dichiarava

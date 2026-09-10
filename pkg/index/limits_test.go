@@ -2,9 +2,12 @@ package index
 
 import (
 	"errors"
+	"io"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/manprint/backimage/pkg/crypt"
 )
 
 // limitsManifest and limitsTable are one honest backup: two chunks in one
@@ -158,5 +161,48 @@ func TestAnEmptyBackupIsNotAnError(t *testing.T) {
 	m.Layers = []LayerInfo{{Index: 0, ChunkFrom: 0, ChunkTo: 0, StoredBytes: 10}}
 	if err := ValidateChunkTable(m, &ChunkTable{SchemaVersion: SchemaVersion}); !errors.Is(err, ErrBadSchema) {
 		t.Fatalf("a layer claiming chunks of an empty table = %v, want ErrBadSchema", err)
+	}
+}
+
+// TestAMetadataBlobIsBoundedByWhatTheReaderWillHold covers the primitive the
+// four metadata readers share. Reading exactly the cap is a normal blob;
+// one byte past it is a format error, not an allocation.
+func TestAMetadataBlobIsBoundedByWhatTheReaderWillHold(t *testing.T) {
+	body := strings.Repeat("m", 1024)
+	if got, err := io.ReadAll(LimitMetadata(strings.NewReader(body), 1024, "chunks.json")); err != nil || len(got) != 1024 {
+		t.Fatalf("a blob of exactly the cap must read: %d bytes, %v", len(got), err)
+	}
+	_, err := io.ReadAll(LimitMetadata(strings.NewReader(body+"!"), 1024, "chunks.json"))
+	if !errors.Is(err, ErrBadSchema) {
+		t.Fatalf("one byte past the cap = %v, want ErrBadSchema", err)
+	}
+	if !strings.Contains(err.Error(), "chunks.json") {
+		t.Fatalf("the refusal must name the blob: %v", err)
+	}
+}
+
+// TestTheCapCannotBeWidenedByTheFileItself is why the limit is not simply
+// "whatever was declared": the numbers a caller might pass come from the
+// image, and one of them saying "I am 40 GiB" must not raise the ceiling.
+func TestTheCapCannotBeWidenedByTheFileItself(t *testing.T) {
+	for _, max := range []int64{0, -1, DefaultMaxMetadataBytes + 1, 40 << 30} {
+		l, ok := LimitMetadata(strings.NewReader(""), max, "index.json.zst").(*metadataLimiter)
+		if !ok {
+			t.Fatal("LimitMetadata must return its own reader")
+		}
+		if l.max != DefaultMaxMetadataBytes {
+			t.Fatalf("max %d became a cap of %d, want the default %d", max, l.max, DefaultMaxMetadataBytes)
+		}
+	}
+}
+
+// TestATighterCapSurvivesTheReaders states the composition the callers rely
+// on: a reader that can measure the blob wraps it before handing it over,
+// and the default inside ReadIndex must not undo that.
+func TestATighterCapSurvivesTheReaders(t *testing.T) {
+	huge := strings.NewReader(strings.Repeat("x", 8192))
+	_, err := ReadIndex(LimitMetadata(huge, 64, "index.json.zst"), crypt.NewClearOpener())
+	if !errors.Is(err, ErrBadSchema) {
+		t.Fatalf("ReadIndex = %v, want the outer cap to refuse", err)
 	}
 }

@@ -269,6 +269,10 @@ func (s *imageSource) loadMeta() {
 	}
 	defer r.Close()
 	s.meta = make(map[string][]byte)
+	// The metadata layer arrives compressed, so a few kilobytes of blob can
+	// expand into as much as the decoder is willing to produce. Cap the whole
+	// layer, not only each entry: the sum is what ends up in memory.
+	budget := int64(index.DefaultMaxMetadataBytes)
 	tr := tar.NewReader(r)
 	for {
 		h, err := tr.Next()
@@ -286,11 +290,17 @@ func (s *imageSource) loadMeta() {
 		if !metadataNames[name] {
 			continue
 		}
+		if h.Size > budget {
+			s.metaErr = fmt.Errorf("%w: the metadata layer declares %d bytes for %s, more than the %d left of what a reader will hold",
+				index.ErrBadSchema, h.Size, name, budget)
+			return
+		}
 		data, err := io.ReadAll(io.LimitReader(tr, h.Size+1))
 		if err != nil || int64(len(data)) != h.Size {
 			s.metaErr = fmt.Errorf("reading metadata %s: %w", name, err)
 			return
 		}
+		budget -= int64(len(data))
 		s.meta[name] = data
 	}
 }

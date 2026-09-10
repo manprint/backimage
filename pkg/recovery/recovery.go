@@ -93,7 +93,7 @@ func Open(ctx context.Context, source Source) (*Backup, error) {
 	if err != nil {
 		return nil, fmt.Errorf("questa immagine non è un backup backimage: %w", err)
 	}
-	m, err := index.ReadManifest(mr)
+	m, err := index.ReadManifest(index.LimitMetadata(mr, measure(mr), "manifest.json"))
 	closeErr := mr.Close()
 	if err != nil {
 		return nil, err
@@ -105,7 +105,7 @@ func Open(ctx context.Context, source Source) (*Backup, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening chunks.json: %w", err)
 	}
-	t, err := index.ReadChunkTable(cr)
+	t, err := index.ReadChunkTable(index.LimitMetadata(cr, measure(cr), "chunks.json"))
 	closeErr = cr.Close()
 	if err != nil {
 		return nil, err
@@ -226,7 +226,7 @@ func (b *Backup) loadPrivate(ctx context.Context) error {
 		var r io.ReadCloser
 		r, err = b.source.Open(ctx, ref.Path)
 		if err == nil {
-			data, err = io.ReadAll(r)
+			data, err = readMetadataBlob(r, ref.Path)
 			closeErr := r.Close()
 			if err == nil {
 				err = closeErr
@@ -366,7 +366,7 @@ func (b *Backup) Index(ctx context.Context) (*index.Index, error) {
 		var r io.ReadCloser
 		r, err = b.source.Open(ctx, b.Manifest.Index.Path)
 		if err == nil {
-			data, err = io.ReadAll(r)
+			data, err = readMetadataBlob(r, b.Manifest.Index.Path)
 			if closeErr := r.Close(); err == nil {
 				err = closeErr
 			}
@@ -423,6 +423,30 @@ func (b *Backup) StoredChunk(ctx context.Context, i int) ([]byte, error) {
 		return nil, fmt.Errorf("chunk %d truncated: %w", i, err)
 	}
 	return buf, nil
+}
+
+// measure reports the size of r when it is a regular file, and 0 when the
+// source cannot say. It is the tighter of the two caps whenever it answers.
+func measure(r io.Reader) int64 {
+	stat, ok := r.(interface{ Stat() (os.FileInfo, error) })
+	if !ok {
+		return 0
+	}
+	fi, err := stat.Stat()
+	if err != nil || !fi.Mode().IsRegular() {
+		return 0
+	}
+	return fi.Size()
+}
+
+// readMetadataBlob reads one metadata blob with a cap on what it may hold.
+//
+// Where the source can measure the blob — a local backup and the
+// self-extracting image both hand back an *os.File — the cap is the real size
+// of the file, and there is nothing left to declare. Everywhere else it is
+// index.DefaultMaxMetadataBytes, which is what LimitMetadata falls back to.
+func readMetadataBlob(r io.Reader, what string) ([]byte, error) {
+	return io.ReadAll(index.LimitMetadata(r, measure(r), what))
 }
 
 // fitsInBlob refuses a stored size that the blob cannot hold, when the source
