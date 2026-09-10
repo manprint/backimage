@@ -39,6 +39,10 @@ docker run --rm \
   solo se il comando riceve una credenziale (per esempio
   `docker run -e BACKIMAGE_PASSPHRASE ... info`). Non chiede mai nulla in modo
   interattivo.
+- `version` stampa versione e commit dell'estrattore incorporato, senza
+  toccare il backup. Serve a sapere quale revisione ha prodotto l'immagine:
+  un'immagine costruita con una release anteriore ai fix di sicurezza porta
+  un estrattore anteriore ai fix, e questo è il modo di verificarlo.
 - `list [-l] [--include GLOB] [--exclude GLOB] [--json]` elenca l'indice.
 - `tar [--cpus N] [--no-verify]` scrive esclusivamente il tar in chiaro su stdout.
 - `extract --out DIR` ripristina direttamente; supporta `--include`,

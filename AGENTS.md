@@ -336,8 +336,8 @@ corrente, non un elenco file obsoleto nel piano.
 
 Requisiti base:
 
-- Go 1.26 o superiore;
-- `golangci-lint` v1.64.8 in `$HOME/go/bin/golangci-lint`;
+- Go 1.26 o superiore, con `toolchain go1.26.6` come minimo pinzato in `go.mod`;
+- `golangci-lint` v2.1.6 in `$HOME/go/bin/golangci-lint` (la configurazione è sullo schema v2; un binario della serie 1 non la sa leggere e `make lint` lo rifiuta prima di partire);
 - `protoc` 27.3 e `protoc-gen-go` v1.34.2 per `proto-check`;
 - Docker e QEMU solo per e2e/cross-arch;
 - CGO disabilitato per build normali; il race detector lo abilita.
@@ -365,7 +365,7 @@ make check
 ```
 
 `make check` esegue fmt, vet, lint, build, test, race seriale tra package,
-deps-check, docs-check e proto-check. Il race completo usa
+deps-check, docs-check, proto-check e vuln. Il race completo usa
 `CGO_ENABLED=1 go test -race -p 1 ./...` e può richiedere diversi minuti.
 
 Altri target:
@@ -377,7 +377,14 @@ make embed
 make e2e PHASE=08
 make e2e PHASE=08_stream
 make bench-transport
+make vuln
 ```
+
+`make vuln` esegue `govulncheck ./...`. Fa parte di `check`: `go.mod`
+pinza `toolchain go1.26.6`, che chiude tutte le advisory della standard
+library raggiungibili da questo codice. Le advisory che restano sono negli
+import e nei moduli richiesti e non risultano chiamate; sono elencate nel
+`CHANGELOG.md` della 0.4.1.
 
 I test root-gated e alcuni e2e richiedono privilegi reali, xattr, ACL,
 capability, device/FIFO, Docker o rete. Non sostituirli con mock quando il gate
@@ -423,6 +430,13 @@ Ogni modifica a command tree, help o flag Cobra deve aggiornare questo file.
 `pkg/protocol/backimage.pb.go` è generato e committato. `make proto-check`
 rigenera in una directory temporanea e fallisce in caso di drift.
 
+Il target ha tre esiti distinti: verde senza drift, rosso con drift, e
+`SKIP` con **exit 0** quando `protoc` o `protoc-gen-go` non sono installati,
+così `make check` resta eseguibile in locale. La CI imposta
+`BACKIMAGE_REQUIRE_PROTOC=1` sullo step del gate, dove l'assenza della
+toolchain è un errore. In locale si può puntare a un binario qualsiasi con
+`PROTOC=/percorso/protoc make proto-check`.
+
 Ogni modifica al wire format deve preservare compatibilità v1/v2, aggiornare
 `docs/protocol.md` e aggiungere test di negoziazione/framing.
 
@@ -430,8 +444,17 @@ Ogni modifica al wire format deve preservare compatibilità v1/v2, aggiornare
 
 I file
 `internal/embedded/backimage-selfextract-linux-{amd64,arm64}` sono placeholder
-committati in un clone pulito. `make selfextract`/`make embed` li sovrascrive
-con binari reali. Non committare i binari di sviluppo.
+committati in un clone pulito. `make selfextract` li sovrascrive con binari
+reali, e `make build`/`make build-all` ora **dipendono** da quel target: non
+esiste più una build che incorpora un estrattore più vecchio del codice. Non
+committare i binari di sviluppo.
+
+Gli asset sono marchiati con `LDFLAGS_EMBED` (`Version` e `Commit`, mai `Date`:
+la data cambierebbe il digest del layer tool di ogni immagine a codice
+identico), e `internal/embedded/coeval_test.go` fallisce se il marchio non
+coincide con la revisione dell'albero. Conseguenza operativa: la suite va
+eseguita dopo almeno un `make build`; con i placeholder ancora in posto il test
+lo dichiara invece di passare in silenzio.
 
 Verificare `docs/BUILD.md` e lo stato skip-worktree prima di toccarli. Un
 release build deve eseguire `make embed`; un placeholder in release è un

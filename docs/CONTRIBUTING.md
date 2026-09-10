@@ -37,8 +37,34 @@
 ## Come far girare i gate
 
 ```console
-make check                 # gate unico (fmt, vet, lint, build, test, race, deps-check, docs-check)
+make check                 # gate unico (fmt, vet, lint, build, test, race, deps-check, docs-check, proto-check, vuln)
 make cover PKG=./pkg/…     # copertura del pacchetto della fase
 make e2e PHASE=NN          # e2e della fase
+make vuln                  # solo govulncheck
 make build-all             # 8 piattaforme
 ```
+
+### Condizioni d'ambiente dei gate
+
+Tre target del gate non sono eseguibili ovunque, e il modo in cui falliscono va
+saputo prima di interpretarne l'esito.
+
+| Target | Richiede | Se manca |
+| --- | --- | --- |
+| `race` | `CGO_ENABLED=1`, **socket locali** e una **cache Go scrivibile** | fallisce, e non per una race |
+| `vuln` | `govulncheck` in `$HOME/go/bin` e accesso a <https://vuln.go.dev> | fallisce |
+| `proto-check` | `protoc` 27.3 e `protoc-gen-go` v1.34.2 | **SKIP con exit 0**, salvo `BACKIMAGE_REQUIRE_PROTOC=1` |
+
+`race` è il caso che si presta al malinteso. I test di trasporto aprono socket su
+`localhost` e il compilatore del race detector scrive nella cache Go: dentro una
+sandbox che vieta la rete locale o monta la cache in sola lettura il target esce
+rosso **senza aver misurato nulla**, e l'esito non va letto come una race trovata.
+Va rieseguito fuori dalla sandbox prima di trarre conclusioni.
+
+Eseguito fuori sandbox il 10 settembre 2026 su go1.26.6: **21 package `ok`, exit 0,
+nessun `DATA RACE`**.
+
+In CI il gate gira dentro `make check` nel job `quality`, senza `continue-on-error`
+e senza `if:` condizionale: un `race` rosso ferma la pipeline e blocca i job
+`cross-build` ed `e2e`, che ne dipendono via `needs`. Nessuna esclusione, nessun
+`-skip`.

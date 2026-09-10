@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+
+	"github.com/manprint/backimage/internal/buildinfo"
 )
 
 var (
@@ -31,6 +33,8 @@ func run(ctx context.Context, args []string) error {
 		return cmdInfo(ctx, args)
 	}
 	switch args[0] {
+	case "version":
+		return cmdVersion(args[1:])
 	case "info":
 		return cmdInfo(ctx, args[1:])
 	case "list", "ls":
@@ -46,6 +50,19 @@ func run(ctx context.Context, args []string) error {
 	}
 }
 
+// cmdVersion prints the build identity of this extractor. It exists so the
+// image can be asked what it carries without a passphrase, and so the -X
+// stamps in LDFLAGS_EMBED reference a symbol that is actually linked in: an
+// unreferenced buildinfo would make the linker drop them without a word, and
+// internal/embedded's coeval-asset test would have nothing to compare.
+func cmdVersion(args []string) error {
+	if len(args) > 0 {
+		return usageErrorf("version does not take arguments")
+	}
+	fmt.Fprintln(stdout, buildinfo.String())
+	return nil
+}
+
 func usage(w interface{ Write([]byte) (int, error) }) {
 	fmt.Fprint(w, `backimage self-extracting backup
 
@@ -54,6 +71,7 @@ Usage:
 
 Commands:
   info                 show public backup metadata (default, no passphrase needed)
+  version              show the build identity of this extractor
   list                 list archived files
   tar                  write the plaintext tar archive to stdout
   extract              extract files to a directory

@@ -7,6 +7,94 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.1] - non ancora rilasciata
+
+Release di sicurezza e di gate. Nessun cambio del formato immagine: un backup
+prodotto dalla 0.4.1 resta leggibile dalla 0.4.0 e viceversa.
+
+### Nota sulle release già pubblicate (v0.1.0 → v0.4.0)
+
+Le release da v0.1.0 a v0.4.0 **non vengono ritirate**, e i loro asset restano
+scaricabili. Vanno però lette per quello che sono:
+
+- sono state costruite **prima** dei fix di questa versione, quindi
+  l'estrattore incorporato nelle immagini prodotte con esse è anteriore ai fix;
+- sono state costruite con una standard library che presenta **15 advisory
+  raggiungibili** dal codice di backimage, fra cui `archive/tar`
+  (GO-2026-4869), quattro su `crypto/x509`, tre su `crypto/tls` e tre su
+  `net/http`. Tutte sono chiuse da `go1.26.6`, che questa versione pinza in
+  `go.mod`.
+
+Gli asset incorporati in quelle release **erano** coetanei del rispettivo tag:
+CI e release eseguono `make embed` prima di costruire, quindi non si tratta di
+estrattori disallineati rispetto al codice del tag, ma di estrattori anteriori
+ai fix.
+
+**Come sapere cosa contiene una propria immagine.** L'estrattore incorporato
+dichiara ora la propria identità:
+
+```console
+docker run --rm ghcr.io/tuo/backup@sha256:… version
+```
+
+Un'immagine prodotta prima della 0.4.1 non ha il sotto-comando `version`: in
+quel caso l'immagine è per definizione anteriore a questa release. Il campo
+`tool.version` del manifesto pubblico resta leggibile in entrambi i casi con
+`backimage inspect`.
+
+**Come rigenerarla.** Rieseguire il backup con la 0.4.1: i layer dati non
+cambiano se i dati non sono cambiati, quindi il costo è il solo layer tool.
+
+### Changed
+
+- **`go.mod` pinza `toolchain go1.26.6`.** La riga `go 1.26` resta invariata:
+  non è un innalzamento del requisito di linguaggio, è un minimo di toolchain.
+  La CI risolveva già `go 1.26` alla patch più recente, ma nulla impediva di
+  costruire un rilascio con una patch anteriore. Dopo il bump `govulncheck`
+  non riporta **alcuna** advisory raggiungibile dal codice.
+- **`make check` esegue anche `vuln`** (`govulncheck ./...`) e
+  `proto-check`. Le advisory che restano riguardano codice che non viene
+  chiamato e sono elencate sotto.
+- **`make build` e `make build-all` dipendono da `make selfextract`.** Gli
+  asset di auto-estrazione incorporati non possono più essere più vecchi del
+  codice che li incorpora. `make embed` resta come alias di `make build`. Un
+  nuovo test in `internal/embedded` rilegge il marchio di build dagli asset e
+  fallisce se non coincide con la revisione dell'albero; di conseguenza la
+  suite di test va eseguita dopo almeno un `make build`.
+- **Configurazione di lint sullo schema golangci-lint v2** (binario `v2.1.6`,
+  pinzato in `GOLANGCI_VERSION`, verificato da `make lint` prima di eseguire il
+  linter). L'insieme dei controlli è invariato: `gosimple` non esiste più in v2
+  perché assorbito in `staticcheck`, e le famiglie `ST1*`/`QF1*`, che la
+  configurazione v1 non abilitava, restano disattivate.
+
+### Added
+
+- **`version` nell'autoestraente.** Stampa versione e commit dell'estrattore
+  incorporato senza toccare il backup e senza credenziali.
+- **`make vuln`.** Esegue `govulncheck ./...` da solo.
+
+### Fixed
+
+- **`make proto-check` distingue tre esiti.** Toolchain assente →
+  `SKIP` con exit 0, così `make check` resta eseguibile su una macchina senza
+  `protoc`; generato non aggiornato → rosso, come prima; in CI
+  `BACKIMAGE_REQUIRE_PROTOC=1` rende l'assenza un errore, così il controllo non
+  può sparire in silenzio. Lo script risolve ora `protoc-gen-go` anche da
+  `$(go env GOPATH)/bin`.
+
+### Advisory note raggiungibili
+
+`govulncheck` continua a segnalarle perché i moduli sono nel grafo, ma nessun
+percorso di chiamata da backimage le raggiunge:
+
+| Advisory | Modulo | Dove | Corretta in |
+| --- | --- | --- | --- |
+| GO-2026-5158 | `go.opentelemetry.io/otel` v1.41.0 | package importato | v1.42.0 |
+| GO-2026-6355 | `golang.org/x/crypto` v0.54.0 | modulo richiesto | v0.56.0 |
+| GO-2026-6354 | `golang.org/x/crypto` v0.54.0 | modulo richiesto | v0.56.0 |
+| GO-2026-6303 | `golang.org/x/crypto` v0.54.0 | modulo richiesto | v0.55.0 |
+| GO-2026-5932 | `golang.org/x/crypto` v0.54.0 | modulo richiesto | nessuna |
+
 ## [0.4.0] - 2026-08-24
 
 ### Added

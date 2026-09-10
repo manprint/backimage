@@ -1,46 +1,83 @@
-run:
-  timeout: 10m
+# golangci-lint v2 configuration.
+#
+# Migrated from the v1 schema with `golangci-lint migrate` (see Makefile
+# GOLANGCI_VERSION for the pinned version). The v1 set is preserved exactly:
+# `gosimple` no longer exists in v2 because it was folded into `staticcheck`,
+# and the five linters of the `standard` default set are listed explicitly so
+# the enabled set can be read off this file without knowing the defaults.
+version: "2"
 
 linters:
+  default: standard
   enable:
+    # standard set, listed for the record
     - errcheck
     - govet
-    - staticcheck
-    - unused
     - ineffassign
-    - gosimple
-    - misspell
-    - revive
-    - gosec
+    - staticcheck # also covers the v1 `gosimple` checks
+    - unused
+    # opt-in set carried over from the v1 configuration
     - bodyclose
-    - errorlint
     - contextcheck
-    - noctx
     - copyloopvar
     - durationcheck
+    - errorlint
+    - gosec
     - makezero
+    - misspell
+    - noctx
     - prealloc
+    - revive
 
-linters-settings:
-  errcheck:
-    check-blank: true
-  revive:
+  settings:
+    errcheck:
+      check-blank: true
+    staticcheck:
+      # v1 ran `staticcheck` (SA*) and `gosimple` (S1*) and did not enable
+      # `stylecheck` (ST1*). v2 folds all three plus the quickfix checks (QF1*)
+      # into one linter whose default is "everything", so the two families that
+      # were never part of the v1 gate are turned back off here. Enabling them
+      # is a separate decision with its own code changes, not a side effect of
+      # the schema migration.
+      checks:
+        - all
+        - -ST1*
+        - -QF1*
+    gosec:
+      excludes:
+        - G304 # file path from user input is this program's job
+        - G306 # WriteFile perms: fixtures mirror real-world 0644 trees; program writes are covered
+    revive:
+      rules:
+        - name: exported
+
+  exclusions:
+    generated: lax
+    # v1 applied these exclusion presets by default (issues.exclude-use-default).
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
     rules:
-      - name: exported
-  gosec:
-    excludes:
-      - G304   # file path from user input is this program's job
-      - G306   # WriteFile perms: fixtures mirror real-world 0644 trees; program writes are covered
+      - linters:
+          - errcheck
+          - gosec
+        path: _test\.go$
+      - linters:
+          - gosec
+        text: G115 # numeric conversions on kernel-provided stat/header fields are bounded
+      - path: test/fixtures/compare.go
+        text: raced removal
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
 
-issues:
-  exclude-rules:
-    - path: _test\.go$
-      linters:
-        - gosec
-        - errcheck
-    - linters:
-        - gosec
-      text: G115 # numeric conversions on kernel-provided stat/header fields are bounded
-    - linters:
-      path: test/fixtures/compare.go
-      text: raced removal
+formatters:
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

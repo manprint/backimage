@@ -1,5 +1,10 @@
 BIN            := backimage
 MODULE         := github.com/manprint/backimage
+# Pinned so the local gate and CI run the same linter: the v1 series is EOL and
+# .golangci.yml is on the v2 schema, which a v1 binary cannot parse.
+GOLANGCI       := $(HOME)/go/bin/golangci-lint
+GOLANGCI_VERSION := v2.1.6
+GOVULNCHECK    := $(HOME)/go/bin/govulncheck
 VERSION        ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT         ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
 DATE           ?= $(shell date -u +%Y-%m-%dT%H:%M:%SZ)
@@ -7,14 +12,21 @@ LDFLAGS        := -s -w \
   -X $(MODULE)/internal/buildinfo.Version=$(VERSION) \
   -X $(MODULE)/internal/buildinfo.Commit=$(COMMIT) \
   -X $(MODULE)/internal/buildinfo.Date=$(DATE)
+# Stamp of the embedded self-extract assets. DATE is deliberately omitted: with
+# it the binary changes on every build, so the digest of the tool layer of every
+# produced image would change too, at identical code. Without it two builds of
+# the same commit are byte-identical.
+LDFLAGS_EMBED  := -s -w \
+  -X $(MODULE)/internal/buildinfo.Version=$(VERSION) \
+  -X $(MODULE)/internal/buildinfo.Commit=$(COMMIT)
 export CGO_ENABLED := 0
 
 PLATFORMS := linux/amd64 linux/arm64 linux/arm linux/riscv64 \
              darwin/amd64 darwin/arm64 windows/amd64 windows/arm64
 
-.PHONY: check fmt vet lint build build-all test race cover e2e bench-transport deps-check docs-check proto-check clean selfextract embed
+.PHONY: check fmt vet lint build build-all test race cover e2e bench-transport deps-check docs-check proto-check vuln clean selfextract embed
 
-check: fmt vet lint build test race deps-check docs-check proto-check   ## gate unico
+check: fmt vet lint build test race deps-check docs-check proto-check vuln   ## gate unico
 
 fmt:            # G1 — fallisce se ci sono file non formattati
 	@out="$$(gofmt -l . | grep -v '^vendor/' || true)"; \
@@ -24,12 +36,19 @@ vet:            # G2
 	go vet ./...
 
 lint:           # G3
-	$(HOME)/go/bin/golangci-lint run
+	@have="$$($(GOLANGCI) version --short 2>/dev/null || echo missing)"; \
+	 case "$$have" in $(GOLANGCI_VERSION)*) ;; *) \
+	   echo "golangci-lint $(GOLANGCI_VERSION) expected, found $$have"; exit 1;; esac
+	$(GOLANGCI) run
 
-build:          # G4 (host)
+build: selfextract   # G4 (host)
+	# selfextract is a prerequisite, not a convenience: internal/embedded is
+	# compiled into this binary, so building without regenerating it embeds
+	# whatever extractor happens to be on disk and the local tests then measure
+	# code nobody is writing.
 	go build -ldflags '$(LDFLAGS)' -o bin/$(BIN) ./cmd/backimage
 
-build-all:      # G4 (tutte le piattaforme)
+build-all: selfextract   # G4 (tutte le piattaforme)
 	@for p in $(PLATFORMS); do \
 	  os=$${p%/*}; arch=$${p#*/}; ext=""; [ "$$os" = windows ] && ext=".exe"; \
 	  echo "building $$os/$$arch"; \
@@ -40,12 +59,12 @@ build-all:      # G4 (tutte le piattaforme)
 selfextract:    # binari embeddabili: SOLO linux/amd64 e linux/arm64
 	@for arch in amd64 arm64; do \
 	  rm -f internal/embedded/backimage-selfextract-linux-$$arch; \
-	  GOOS=linux GOARCH=$$arch go build -ldflags '-s -w' \
+	  GOOS=linux GOARCH=$$arch go build -ldflags '$(LDFLAGS_EMBED)' \
 	    -o internal/embedded/backimage-selfextract-linux-$$arch \
 	    ./cmd/backimage-selfextract || exit 1; \
 	done
 
-embed: selfextract build   ## build a due stadi completa
+embed: build   ## alias documentato: `build` rigenera già gli asset
 
 test:           # G5
 	go test ./...
@@ -75,6 +94,11 @@ docs-check:     # G10
 
 proto-check:    # GS-08.9
 	bash scripts/check-proto.sh
+
+vuln:           # G11 — advisory raggiungibili dal nostro codice
+	@test -x $(GOVULNCHECK) || { \
+	   echo "govulncheck missing: go install golang.org/x/vuln/cmd/govulncheck@latest"; exit 1; }
+	$(GOVULNCHECK) ./...
 
 clean:
 	rm -rf bin dist coverage.out internal/embedded/backimage-selfextract-*

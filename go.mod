@@ -2,6 +2,13 @@ module github.com/manprint/backimage
 
 go 1.26
 
+// Minimum toolchain, not a language-version bump: go1.26.6 closes the 15
+// standard-library advisories govulncheck reports as reachable from this
+// code, archive/tar GO-2026-4869 among them. CI resolves `go 1.26` to the
+// newest patch on its own; this line is what stops a release from being
+// built with an older one.
+toolchain go1.26.6
+
 require (
 	filippo.io/age v1.3.1
 	github.com/google/go-containerregistry v0.21.9
