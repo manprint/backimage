@@ -255,7 +255,8 @@ func (w *testWriter) Abort(context.Context) error { return nil }
 
 type tokenSink struct {
 	*testSink
-	tokens atomic.Int32
+	tokens     atomic.Int32
+	lastExpiry atomic.Int64
 }
 
 func newTokenSink() *tokenSink { return &tokenSink{testSink: newTestSink()} }
@@ -265,6 +266,7 @@ func (s *tokenSink) TokenScope(string) (string, []string, error) {
 func (s *tokenSink) ProvideToken(token *protocol.Token) {
 	if token != nil && token.Value != "" {
 		s.tokens.Add(1)
+		s.lastExpiry.Store(token.ExpiresAtUnix)
 	}
 }
 

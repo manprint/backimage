@@ -304,8 +304,14 @@ is explicit: **the server sees the plaintext**, because it is the one encrypting
 it. Use `--remote-mode layers` when the receiver must not.
 
 Registry credentials stay on the client, which hands the server short-lived
-bearer tokens over TLS, scoped to the session that supplied them. The server
-receives, chunks, seals and pushes at the same time, so it needs about
+bearer tokens over TLS, scoped to the session that supplied them. The scope is
+the one the client derived from the reference you typed — a server asking for
+another repository, or for `delete`, gets nothing, and the credential provider
+is never even called. A credential that is not a limited delegation (a static
+bearer from the docker config, or a registry that only speaks HTTP Basic) is
+refused before the upload; `--forward-static-token` sends it anyway and says
+so, at the cost of giving the server the whole account. The server receives,
+chunks, seals and pushes at the same time, so it needs about
 `3 × --max-layer-size × --max-sessions` of scratch space in `--work-dir`. Full
 setup, certificate pinning, mTLS and QUIC are in
 [`docs/remote.md`](docs/remote.md).

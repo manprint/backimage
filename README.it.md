@@ -311,10 +311,17 @@ vederlo.
 
 Le credenziali del registry restano sul client, che consegna al server token
 bearer di breve durata attraverso TLS, validi solo per la sessione che li ha
-forniti. Il server riceve, spezza, sigilla e carica contemporaneamente, quindi
-gli servono circa `3 × --max-layer-size × --max-sessions` di spazio temporaneo
-in `--work-dir`. Configurazione completa, pinning del certificato, mTLS e QUIC
-sono in [`docs/remote.md`](docs/remote.md).
+forniti. Lo scope è quello che il client deriva dal riferimento scritto da te:
+un server che chiede un altro repository, o l'azione `delete`, non ottiene
+nulla, e il provider di credenziali non viene nemmeno interrogato. Una
+credenziale che non è una delega limitata (un bearer statico nella
+configurazione docker, o un registry che parla solo HTTP Basic) viene rifiutata
+prima dell'upload; `--forward-static-token` la invia comunque e lo dichiara,
+al prezzo di consegnare al server l'intero account. Il server riceve, spezza,
+sigilla e carica contemporaneamente, quindi gli servono circa
+`3 × --max-layer-size × --max-sessions` di spazio temporaneo in `--work-dir`.
+Configurazione completa, pinning del certificato, mTLS e QUIC sono in
+[`docs/remote.md`](docs/remote.md).
 
 ### `version`
 

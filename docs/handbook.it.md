@@ -108,6 +108,22 @@ limitato e li consegna temporaneamente al server attraverso il canale TLS. Il
 server non richiede `backimage login` e non conserva password o credenziali
 permanenti; deve però poter raggiungere il registry in rete.
 
+Due regole delimitano quello scambio, entrambe applicate dal client:
+
+- **Lo scope lo decide il client.** Il `TokenRequest` del server nomina un
+  repository e delle azioni, ma il client li confronta con il riferimento che
+  hai scritto e rifiuta tutto il resto *prima* di interrogare il provider di
+  credenziali: un altro repository, un'azione diversa da `pull` e `push`, un
+  wildcard, un'azione ripetuta. Una richiesta rifiutata non produce nessuna
+  chiamata al provider e nessun token sul filo, e il backup esce con codice 3.
+- **Viaggia solo una delega vera.** Un bearer emesso dall'issuer del registry è
+  limitato a un repository e scade quando dice l'issuer. Un bearer statico
+  della configurazione docker (`backimage login --token`) e un registry che
+  parla solo HTTP Basic non lo sono, e vengono rifiutati prima dell'upload.
+  `--forward-static-token` li invia comunque, dichiarandolo nell'output: in
+  quel profilo il server riceve una credenziale dell'intero account, non una
+  delega limitata a questo repository.
+
 ## Compressione e protezione con password
 
 La pipeline è, in ordine, **archivio → chunk → compressione → cifratura →
@@ -1148,6 +1164,7 @@ Flag:
 | `--tls-ca FILE` | — | Bundle CA PEM |
 | `--tls-cert FILE` / `--tls-key FILE` | — | Certificato e chiave client mTLS |
 | `--auth-token TOKEN` / `--auth-token-file FILE` | — | Autenticazione remota |
+| `--forward-static-token` | `false` | Invia al server anche una credenziale che non è una delega limitata (il server riceve l'intero account) |
 | `--server-side-compress` | `false` | Alias deprecato di `--remote-mode stream` (già default); errore con `--remote-mode layers` |
 
 `--encrypt` è attivo per default. `--no-encrypt` non può essere combinato con

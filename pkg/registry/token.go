@@ -31,6 +31,27 @@ func (s Scope) String() string {
 	return "repository:" + s.Repository + ":" + strings.Join(s.Actions, ",")
 }
 
+// delegation records where a token came from, which is what decides whether
+// it can be handed to somebody else.
+type delegation uint8
+
+const (
+	// delegationIssued: minted by the registry's token issuer for one scope,
+	// with an expiry the issuer chose. This is the only kind that can be
+	// delegated, because it is the only one that is both limited and
+	// verifiable.
+	delegationIssued delegation = iota
+	// delegationStatic: a bearer the user configured directly
+	// (AuthConfig.RegistryToken, typically a PAT in the docker config). It
+	// carries the account's full privileges, is not scoped to a repository,
+	// and nothing here can tell when it stops working.
+	delegationStatic
+	// delegationBasic: the registry issues no token at all and wants HTTP
+	// Basic. There is nothing scoped to delegate, and the credential that
+	// would work is the password itself.
+	delegationBasic
+)
+
 // Token is a bearer token with its expiry.
 type Token struct {
 	Value         string
@@ -38,10 +59,30 @@ type Token struct {
 	Scope         Scope
 	anonymous     bool
 	authorization string
+	delegation    delegation
 }
 
 // Anonymous reports whether the registry accepted unauthenticated requests.
 func (t *Token) Anonymous() bool { return t != nil && t.anonymous }
+
+// Delegable reports whether this token may be handed to a remote server as a
+// scoped, short-lived delegation. Everything else is a credential of the
+// user's account wearing a delegation's label.
+func (t *Token) Delegable() bool { return t != nil && t.delegation == delegationIssued }
+
+// DelegationRefusal says why a token may not be delegated, or "" when it may.
+func (t *Token) DelegationRefusal() string {
+	switch {
+	case t == nil:
+		return "no registry credential"
+	case t.delegation == delegationStatic:
+		return "the registry credential is a static bearer token: it carries the whole account, " +
+			"it is not scoped to this repository, and it has no expiry anybody can verify"
+	case t.delegation == delegationBasic:
+		return "the registry issues no scoped tokens and wants HTTP Basic: there is no delegation to hand over"
+	}
+	return ""
+}
 
 // NewDelegatedToken reconstructs a short-lived token received over the remote
 // control stream. No credential is persisted by this operation.
@@ -58,7 +99,17 @@ func (t *Token) Valid(margin time.Duration) bool {
 }
 
 func (t *Token) validAt(now time.Time, margin time.Duration) bool {
-	return t != nil && (t.Value != "" || t.anonymous) && now.Add(margin).Before(t.ExpiresAt)
+	if t == nil || (t.Value == "" && !t.anonymous) {
+		return false
+	}
+	if t.delegation == delegationStatic {
+		// A credential the user configured directly has no expiry this code
+		// can read. It used to be given an invented 24 hours, which is what
+		// let it travel as a delegation; the expiry is gone, so the local
+		// cache says so here instead of pretending to know.
+		return true
+	}
+	return now.Add(margin).Before(t.ExpiresAt)
 }
 
 // Provider mints and refreshes bearer tokens for one registry. It is safe
@@ -194,7 +245,10 @@ func (p *provider) mint(ctx context.Context, scope Scope) (*Token, error) {
 			return nil, fmt.Errorf("registry credentials: %w", authErr)
 		}
 		if cfg.RegistryToken != "" {
-			return &Token{Value: cfg.RegistryToken, ExpiresAt: p.now().Add(24 * time.Hour), Scope: scope}, nil
+			// No exchange with the issuer happens here: this is the user's own
+			// credential, returned as it is. It gets no expiry, because there
+			// is none to report.
+			return &Token{Value: cfg.RegistryToken, Scope: scope, delegation: delegationStatic}, nil
 		}
 	}
 	realm, params, err := p.realm(ctx)
@@ -210,12 +264,19 @@ func (p *provider) mint(ctx context.Context, scope Scope) (*Token, error) {
 					authorization = basicAuthHeader(cfg.Username, cfg.Password)
 				}
 			}
-			return &Token{
+			token := &Token{
 				ExpiresAt:     p.now().Add(24 * time.Hour),
 				Scope:         scope,
 				anonymous:     true,
 				authorization: authorization,
-			}, nil
+			}
+			if authorization != "" {
+				// The registry takes Basic credentials, not tokens. Locally
+				// that header is all this client needs; there is nothing
+				// scoped that another machine could be given.
+				token.delegation = delegationBasic
+			}
+			return token, nil
 		}
 		return nil, err
 	}

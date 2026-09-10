@@ -192,6 +192,7 @@ func newBackupCommand() *cobra.Command {
 	f.String("tls-key", "", "PEM client private key for mTLS")
 	f.String("auth-token", "", "pre-shared remote authentication token")
 	f.String("auth-token-file", "", "read the remote authentication token from a file")
+	f.Bool("forward-static-token", false, "send the registry credential to the remote server even when it is not a limited delegation (the server receives the whole account)")
 	f.Bool("server-side-compress", false, "deprecated alias of --remote-mode stream (already the default)")
 	addQUICExperimentalFlags(cmd)
 	return cmd
@@ -332,6 +333,14 @@ func runBackup(cmd *cobra.Command, args []string) error {
 		client, clientErr := newBackupRemote(cmd, ref, remoteAddr, kc)
 		if clientErr != nil {
 			return clientErr
+		}
+		if getFlagBool(cmd, "forward-static-token") {
+			// The trust change belongs in the run's own output, not only in
+			// the documentation: whoever reads the log has to be able to see
+			// that this backup handed over more than a delegation.
+			progress.WriteLine(cmd.ErrOrStderr(),
+				"remote: --forward-static-token: the registry credential is sent as it is; "+
+					"the remote server receives a full account credential, not a delegation limited to this repository")
 		}
 		if remoteMode == "stream" {
 			remoteStream = client

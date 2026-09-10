@@ -30,8 +30,8 @@ DA-01…DA-05 in `overview.md` §3 e non si rinegoziano senza aggiornare quel do
 | A3.2 parziale senza buffer per entry | A14 | Sonnet | **fatto** |
 | A3.3 seek invece di letture quadratiche | A15 | Sonnet | **fatto** |
 | A3.4 layer materializzato una volta | A16 | Sonnet | **fatto** |
-| A4.1 scope derivato localmente | A06 | Sonnet | da fare |
-| A4.2 bearer permanente non delegabile | A07 | Sonnet | da fare |
+| A4.1 scope derivato localmente | A06 | Sonnet | **fatto** |
+| A4.2 bearer permanente non delegabile | A07 | Sonnet | **fatto** |
 | A5.1 `--expect-digest` | A08 | Opus + Sonnet | da fare |
 | A5.2 Docker fuori dall'autoestraente | A08 | Sonnet | da fare |
 | A5.3 profilo confinato come esempio primario | A08 | Haiku | da fare |
@@ -109,7 +109,7 @@ uno stato.
 | ID | — |
 | Stato | none |
 | Intento | — |
-| Prossima azione | A4.1 scope derivato localmente |
+| Prossima azione | A5.1 `--expect-digest` |
 | Lavoro a metà | none — tree consistent |
 
 ### Ledger
@@ -135,6 +135,9 @@ uno stato.
 | 17 | sub-fase | A3.3 | skipTo: Seek quando la sorgente è posizionabile, CopyN come ripiego | make check verde; TestFullRestoreReadsEachLayerOnce verificato in negativo (disabilitando il ramo Seek il restore legge 123789 byte per 10752 byte di chunk) | uncommitted |
 | 18 | sub-fase | A3.4 | il file effimero di un layer dura quanto il layer, con tetto ephemeralLayerCap e rimozione su Close; materialize non restituisce piu' il flag ephemeral | make check verde; TestCacheDisabledPruneAndContext verificato in negativo (senza il riuso il layer viene ricostruito 2 volte per 2 chunk); TestEphemeralLayersAreCappedAndReleased copre tetto ed eviction; e2e A3 verifica che nessun .layer-* sopravviva a un restore multi-layer | uncommitted |
 | 19 | sub-fase | A3 e2e | test/e2e/phase_A3.sh e modalita' -swap di forgeclear; A3 nella matrice e2e di ci.yml; docs/TROUGHPUT_IMPROVE.md §11-12, docs/backup.md, CHANGELOG.md | phase A3 e2e verde; verificato in negativo su due assunzioni indipendenti (passata singola: 2097152 byte consegnati invece di 1048576; buffer per entry: 2171620 KiB residenti invece di 550020) | uncommitted |
+| 20 | sub-fase | A4.1 | scopeGuard: repository e azioni derivati dal riferimento locale, validazione unica prima di Provider.Get, tetto agli scope per sessione | make check verde; TestClientRefusesAScopeItDidNotChoose (5 casi) conta 0 chiamate al provider e 0 token sul filo, verificato in negativo (senza il guard tutti e 5 i casi passano il token); rifiuti classificati Kind 3 quindi senza retry | uncommitted |
+| 21 | sub-fase | A4.2 | delegabilita' del token decisa alla conio: bearer statico e registry solo-Basic non delegabili, scadenza inventata rimossa, --forward-static-token come consenso esplicito dichiarato nell'output | make check verde; TestClientRefusesToForwardACredentialThatIsNotADelegation e TestForwardStaticTokenIsAnExplicitChoice costruiscono la credenziale col provider reale, verificato in negativo (ripristinando le 24 ore inventate la credenziale statica viene inoltrata) | uncommitted |
+| 22 | sub-fase | A4 e2e | test/e2e/phase_A4.sh e utensile greedyremote; A4 nella matrice e2e; docs/remote.md, docs/handbook.it.md, README*.md, docs/cli.md, CHANGELOG.md | phase A4 e2e verde; verificato in negativo su due assunzioni indipendenti (senza scope guard esce 6 invece di 3; con le 24 ore inventate la credenziale statica pubblica il tag) | uncommitted |
 
 ### Deviazioni a runtime
 
@@ -165,6 +168,11 @@ uno stato.
 
 - A3.4 — il conteggio delle materializzazioni chiesto come «misura di accettazione» non è osservabile dalla CLI: nessun comando lo espone. È asserito a livello di unit test con il contatore `countedLayer` già presente in `pkg/restore/source_test.go` (1 download per 2 chunk dello stesso layer); l'e2e verifica la proprietà osservabile, cioè che nessun file `.layer-*` sopravviva al restore.
 - A3 e2e — la fixture dello scambio usa `--dedup` perché serve il nonce convergente, e un carrier di zeri perché il fingerprint di Rabin su una finestra costante taglia sempre al minimo: solo così tutti i chunk hanno la stessa dimensione memorizzata e uno è sostituibile con un altro. La fixture multi-layer invece **non** usa `--dedup`: con esso il confine di layer è content-defined e probabilistico, e il numero di layer cambiava da corsa a corsa (l'mtime del file entra nel tar). Il pavimento di un layer è 16 MiB, quindi la sorgente è da 48 MiB.
+
+- A4.1 — la validazione dello scope vive in `pkg/remote` e deriva il repository da `backup.Start.Reference`, non dal `name.ParseReference` di `internal/cli/remote_common.go` come suggerito da `phase_A4.md`. Il riferimento è lo stesso; tenendo la regola nel package che parla il protocollo, i due percorsi (v1 e v2) e i test la condividono senza che la CLI debba ricordarsi di passarla.
+- A4.2 — azzerare `ExpiresAt` per un bearer statico rendeva inutile la cache del provider (`validAt` sempre falsa, conio a ogni richiesta HTTP locale). `validAt` tratta ora la credenziale statica come sempre valida in locale: la scadenza inventata sparisce dal filo senza reintrodurre lavoro sul percorso locale.
+- A4.2 — con `--forward-static-token` il messaggio sul filo ha comunque bisogno di un `expires_at_unix` (il server rifiuta `<= 0`). Viene dichiarata una finestra di un'ora, di `StaticTokenForwardTTL`: non descrive la credenziale, limita quanto a lungo il server la tiene.
+- A4 e2e — `greedyremote` implementa `CommitStream` solo per annunciare il protocollo v2: senza, il client in modalità stream (il default) si ferma prima ancora di arrivare alla richiesta di token.
 
 ### Blocchi
 

@@ -26,7 +26,21 @@ type Config struct {
 	Backoffs  []time.Duration
 	Keepalive time.Duration
 	Now       func() time.Time
+
+	// ForwardStaticToken lets a credential that is not a scoped delegation —
+	// a static bearer from the docker config, or a registry that only speaks
+	// HTTP Basic — travel to the remote server anyway. It is off by default
+	// because the documented profile of this mode is "the server receives a
+	// delegation limited to one repository", and such a credential is not
+	// one: the server receives the account.
+	ForwardStaticToken bool
 }
+
+// StaticTokenForwardTTL is the lifetime declared to the server when a
+// credential without a verifiable expiry is forwarded on purpose. Nothing
+// checks it — the registry decides the real one — so it bounds how long the
+// server keeps the credential, it does not describe the credential.
+const StaticTokenForwardTTL = time.Hour
 
 type Backup struct {
 	Start          *protocol.BackupStart
@@ -111,6 +125,7 @@ type connection struct {
 	cancel    context.CancelFunc
 	refreshMu sync.Mutex
 	refresh   map[string]context.CancelFunc
+	scopes    *scopeGuard
 }
 
 func (c *Client) uploadOnce(ctx context.Context, backup Backup) (Result, error) {
@@ -119,10 +134,15 @@ func (c *Client) uploadOnce(ctx context.Context, backup Backup) (Result, error) 
 	if err != nil {
 		return result, err
 	}
+	guard, err := newScopeGuard(backup.Start.Reference)
+	if err != nil {
+		stream.Close()
+		return result, err
+	}
 	attemptCtx, cancel := context.WithCancel(ctx)
 	conn := &connection{
 		client: c, stream: stream, asyncErr: make(chan error, 1),
-		cancel: cancel, refresh: make(map[string]context.CancelFunc),
+		cancel: cancel, refresh: make(map[string]context.CancelFunc), scopes: guard,
 	}
 	defer conn.close()
 	go conn.keepalive(attemptCtx)
@@ -286,13 +306,27 @@ func (c *connection) provideToken(ctx context.Context, request *protocol.TokenRe
 	if c.client.cfg.Provider == nil {
 		return errors.New("remote server requested registry credentials, but no token provider is configured")
 	}
-	scope := registry.Scope{Repository: request.Repository, Actions: append([]string(nil), request.Actions...)}
+	if c.scopes == nil {
+		return errors.New("remote connection has no scope guard: refusing to ask the credential provider")
+	}
+	// Validated before Provider.Get, not after: the point is that a refused
+	// request never reaches the credential provider at all.
+	scope, err := c.scopes.check(request)
+	if err != nil {
+		return err
+	}
 	token, err := c.client.cfg.Provider.Get(ctx, scope)
 	if err != nil {
 		return err
 	}
 	if err := c.sendToken(token, scope); err != nil {
 		return err
+	}
+	if !token.Delegable() {
+		// A forwarded static credential has no expiry to refresh against, and
+		// the declared one is ours, not the registry's: renewing it would only
+		// re-send the same bytes on a timer.
+		return nil
 	}
 	key := scope.String()
 	c.refreshMu.Lock()
@@ -330,12 +364,37 @@ func (c *connection) refreshToken(ctx context.Context, scope registry.Scope, tok
 	}
 }
 
+// sendToken hands one registry credential to the remote server.
+//
+// Two different things used to look the same here. A token the registry's
+// issuer minted for one repository, with an expiry it chose, is a delegation:
+// the server gets exactly what the backup needs, for as long as the backup
+// needs it. A static bearer out of the docker config is not — it carries the
+// whole account and no expiry — but it arrived with an invented 24 hours
+// stamped on it, so it went over the wire labelled as the first kind.
+//
+// An unusable token and a usable one that must not leave are now distinct: the
+// first is a broken provider, the second is a deliberate choice the user has
+// to make.
 func (c *connection) sendToken(token *registry.Token, scope registry.Scope) error {
-	if token == nil || (token.Value == "" && !token.Anonymous()) || token.ExpiresAt.IsZero() {
+	if token == nil || (token.Value == "" && !token.Anonymous()) {
+		return errors.New("registry provider returned an invalid token")
+	}
+	expiresAt := token.ExpiresAt
+	if !token.Delegable() {
+		if !c.client.cfg.ForwardStaticToken {
+			return &Error{
+				Kind:    3,
+				Message: "refusing to send a registry credential that is not a limited delegation: " + token.DelegationRefusal(),
+				Hint:    "add --forward-static-token to send it anyway, accepting that the remote server receives a full credential",
+			}
+		}
+		expiresAt = c.client.cfg.Now().Add(StaticTokenForwardTTL)
+	} else if expiresAt.IsZero() {
 		return errors.New("registry provider returned an invalid token")
 	}
 	return c.writeClient(&protocol.ClientMessage{Msg: &protocol.ClientMessage_Token{Token: &protocol.Token{
-		Value: token.Value, ExpiresAtUnix: token.ExpiresAt.Unix(),
+		Value: token.Value, ExpiresAtUnix: expiresAt.Unix(),
 		Repository: scope.Repository, Actions: append([]string(nil), scope.Actions...), Anonymous: token.Anonymous(),
 	}}})
 }

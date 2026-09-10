@@ -205,6 +205,46 @@ the server and either the system trust store or `--tls-ca` on the client. A
 self-signed certificate must be authenticated with `--tls-pin` or a trusted CA
 file. TLS 1.2 and older are rejected.
 
+## What the server is allowed to ask for
+
+The server needs a registry credential to publish the backup, and it asks the
+client for one. Two rules bound that exchange, and both live on the client.
+
+**The scope is derived locally.** The `TokenRequest` names a repository and a
+list of actions, but the client compares them with the reference the user
+chose and refuses anything else *before* calling the credential provider:
+another repository, an action outside `pull` and `push`, a wildcard, a
+repeated action, or more than a handful of distinct scopes in one session. A
+refused request produces no call to the provider and no token on the wire, and
+the backup stops with exit code 3. Until 0.4.1 repository and actions went
+straight from the message into the provider, so a server could have the client
+mint `unrelated/repository:delete` and hand it over; what the registry then
+granted depended on the account's privileges, which is precisely the decision
+that should not have been the server's.
+
+**Only a real delegation is handed over.** A token minted by the registry's
+token issuer is scoped to one repository and expires when the issuer says so:
+that is a delegation and it travels. Two other things do not:
+
+| Credential | What it is | Default |
+|---|---|---|
+| bearer minted by the registry issuer | scoped to the repository, expires | sent |
+| `AuthConfig.RegistryToken` (a PAT in the docker config) | the whole account, no verifiable expiry | refused |
+| registry that only speaks HTTP Basic | no scoped token exists | refused |
+
+A refusal happens before the first layer is uploaded and names the way out:
+
+```console
+backimage backup /srv --repo registry.example/me/dumps --remote backup.lan:7575     --forward-static-token
+```
+
+With `--forward-static-token` the credential is sent as it is, and the command
+says so on stderr for the record. Understand what changes: the remote server
+receives a credential for the whole account rather than a delegation limited
+to this repository, and it keeps it for the declared window (one hour) instead
+of a lifetime the registry chose. Prefer giving the server its own registry
+account.
+
 ## Policy and resource limits
 
 - `--allow-repo` is repeatable. A repository outside every allowed prefix is

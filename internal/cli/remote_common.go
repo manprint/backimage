@@ -47,7 +47,7 @@ func newBackupRemote(cmd *cobra.Command, reference, address string, kc registry.
 	}
 	client, err := backremote.New(backremote.Config{
 		Dialer: dialer, Address: address, AuthToken: sharedToken,
-		Provider: provider,
+		Provider: provider, ForwardStaticToken: getFlagBool(cmd, "forward-static-token"),
 	})
 	if err != nil {
 		return nil, New(KindUsage, "", "remote client: %v", err)

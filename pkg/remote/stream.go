@@ -48,10 +48,15 @@ func (c *Client) uploadStreamOnce(ctx context.Context, backup StreamBackup) (Res
 	if err != nil {
 		return result, err
 	}
+	guard, err := newScopeGuard(backup.Start.Reference)
+	if err != nil {
+		stream.Close()
+		return result, err
+	}
 	attemptCtx, cancel := context.WithCancel(ctx)
 	conn := &connection{
 		client: c, stream: stream, asyncErr: make(chan error, 1),
-		cancel: cancel, refresh: make(map[string]context.CancelFunc),
+		cancel: cancel, refresh: make(map[string]context.CancelFunc), scopes: guard,
 	}
 	defer conn.close()
 	go conn.keepalive(attemptCtx)

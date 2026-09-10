@@ -47,6 +47,13 @@ cambiano se i dati non sono cambiati, quindi il costo è il solo layer tool.
 
 ### Changed
 
+- **Rottura deliberata: un backup remoto con un token statico nel docker
+  config ora fallisce subito.** Chi usa `AuthConfig.RegistryToken` (tipicamente
+  una CI con un PAT) insieme a `--remote` vedeva il token partire verso il
+  server con una scadenza inventata. Ora il backup si ferma prima
+  dell'upload con codice 3. La via d'uscita è `--forward-static-token`, che
+  invia la credenziale dichiarando il cambio di fiducia; l'alternativa
+  preferibile è dare al server un proprio account di registry.
 - **`go.mod` pinza `toolchain go1.26.6`.** La riga `go 1.26` resta invariata:
   non è un innalzamento del requisito di linguaggio, è un minimo di toolchain.
   La CI risolveva già `go 1.26` alla patch più recente, ma nulla impediva di
@@ -68,6 +75,28 @@ cambiano se i dati non sono cambiati, quindi il costo è il solo layer tool.
   configurazione v1 non abilitava, restano disattivate.
 
 ### Security
+
+- **Il server remoto non sceglie più cosa il client chiede al proprio provider
+  di credenziali.** Repository e azioni arrivavano nel `TokenRequest` e
+  finivano dritti in `Provider.Get`: un server autenticato poteva far coniare
+  `unrelated/repository:delete` e riceverne il token: quanto il registry poi
+  concedesse dipendeva dai privilegi dell'account, ma la decisione non era
+  nostra. Ora lo scope è derivato **una volta** dal riferimento scelto in
+  locale e ogni richiesta viene validata **prima** di chiamare il provider:
+  repository diverso, azione fuori da `pull`/`push`, wildcard, azione ripetuta,
+  o troppi scope distinti in una sessione. Una richiesta rifiutata non produce
+  nessuna chiamata al provider e nessun token sul filo; il backup esce con
+  codice 3 e non ritenta.
+
+- **Una credenziale permanente non viene più spacciata per delega limitata.**
+  Un bearer statico (`AuthConfig.RegistryToken`, tipicamente un PAT nella
+  configurazione docker) veniva restituito così com'era con una scadenza
+  **inventata** di 24 ore, e partiva verso il server remoto etichettato come
+  delega. Lo stesso valeva, di fatto, per un registry che non emette token e
+  vuole HTTP Basic. Ora la scadenza inventata non c'è più e quelle credenziali
+  sono marcate non delegabili: il backup si ferma **prima** dell'upload con un
+  messaggio che le distingue da un provider difettoso e nomina l'uscita. Vedi
+  la rottura dichiarata più sotto.
 
 - **Nessun byte non verificato raggiunge più il destinatario di un restore.**
   `StreamTar` copiava il chunk decompresso direttamente nel tar e confrontava
@@ -187,6 +216,14 @@ cambiano se i dati non sono cambiati, quindi il costo è il solo layer tool.
 
 ### Added
 
+- **`--forward-static-token` su `backup`.** Consenso esplicito a inviare al
+  server remoto una credenziale che non è una delega limitata. Il comando lo
+  dichiara su stderr quando succede: il server riceve una credenziale
+  dell'intero account, non una delega a questo repository, e la tiene per la
+  finestra dichiarata (un'ora) invece che per una durata scelta dal registry.
+- **`make e2e PHASE=A4`.** Un server remoto ostile (`greedyremote`) che chiede
+  credenziali per un altro repository e per `delete`, e una sessione con un
+  bearer statico con e senza il consenso esplicito.
 - **`make e2e PHASE=A3`.** Costruisce un backup con nonce convergente i cui
   chunk hanno tutti la stessa dimensione memorizzata, sposta un chunk
   validamente sigillato su un'altra posizione riparando ogni numero pubblico,

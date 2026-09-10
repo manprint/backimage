@@ -86,6 +86,7 @@ backimage backup <PATH...> --repo IMAGE [flags]
       --dry-run                    print the plan and exit without writing
       --encrypt                    encrypt chunks (default) (default true)
       --exclude strings            glob pattern to exclude (repeatable)
+      --forward-static-token       send the registry credential to the remote server even when it is not a limited delegation (the server receives the whole account)
   -h, --help                       help for backup
       --jobs int                   number of concurrent blob uploads (default 3)
       --local-repo                 output to the Docker daemon instead of a registry
