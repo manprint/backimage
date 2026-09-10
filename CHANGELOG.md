@@ -69,6 +69,22 @@ cambiano se i dati non sono cambiati, quindi il costo è il solo layer tool.
 
 ### Security
 
+- **Nessun byte non verificato raggiunge più il destinatario di un restore.**
+  `StreamTar` copiava il chunk decompresso direttamente nel tar e confrontava
+  dimensione e digest plaintext **dopo**: al momento del rifiuto il consumatore
+  aveva già ricevuto l'intero chunk (circa 10 KiB nella misura della review, e
+  in generale tutto il chunk). Il caso che conta non è un tag AEAD rotto —
+  quello viene respinto prima di decomprimere — ma un blob **validamente sigillato
+  e fuori posto**: con nonce convergente l'indice del chunk è
+  deliberatamente fuori dai dati autenticati, quindi un blob spostato fra due
+  backup che condividono la chiave di dedup si apre senza errori e solo il
+  digest plaintext del blob privato lo smaschera. Ora il chunk viene
+  decompresso due volte: la prima passata alimenta solo il digest, la seconda
+  scrive, e viene raggiunta solo se la prima ha confermato dimensione e digest.
+  Costo: una passata di decompressione in più, nessuna memoria in più — il
+  compresso è già residente. Con `--no-verify` su un backup non cifrato non c'è
+  digest da confrontare e la passata singola resta quella di prima.
+
 - **Un backup cifrato non poteva più essere convinto a consegnare byte non
   autenticati.** L'header di un envelope dichiara il proprio AEAD, e `aead=none`
   è legittimo perché è la forma di un backup non cifrato. Esisteva però un solo
@@ -171,6 +187,19 @@ cambiano se i dati non sono cambiati, quindi il costo è il solo layer tool.
 
 ### Added
 
+- **`make e2e PHASE=A3`.** Costruisce un backup con nonce convergente i cui
+  chunk hanno tutti la stessa dimensione memorizzata, sposta un chunk
+  validamente sigillato su un'altra posizione riparando ogni numero pubblico,
+  e verifica che il restore esca 5 avendo scritto **esattamente** i byte dei
+  chunk precedenti — non uno in più. Misura poi la memoria residente di un
+  recupero parziale su una entry da 1 GiB e controlla che nessun layer
+  materializzato sopravviva al restore.
+- **`restore --extract` dichiara quanto aveva già scritto quando si
+  interrompe.** Un errore di integrità a metà stream lasciava sul posto i file
+  prodotti dai chunk precedenti senza dirlo: ora una riga di log li conta e
+  nomina la destinazione. L'atomicità garantita resta quella del singolo
+  chunk; quella del file e quella dell'intero restore no, ed è ora scritto
+  invece che deducibile.
 - **`restore --extract --json` riporta `skipped` e `skipped_reasons`.** Le
   entry che l'estrattore non ha potuto scrivere finivano solo in una riga di
   attenzione su stderr: un'automazione non poteva accorgersi che il restore era
@@ -196,6 +225,28 @@ cambiano se i dati non sono cambiati, quindi il costo è il solo layer tool.
 
 ### Fixed
 
+- **Il recupero parziale non tiene più in memoria l'entry più grande del
+  backup.** `readRange` raccoglieva l'intera entry prima di scriverla, per
+  poterla scartare intera se un chunk era danneggiato: una entry da 1 GiB
+  costava oltre 2 GiB residenti (misurati). Ora il range viene percorso due
+  volte — la prima per provare che tutti i chunk si caricano, la seconda per
+  scrivere — e la memoria è quella di un chunk. La garanzia è invariata:
+  l'entry si scrive intera o non si scrive.
+- **Leggere un chunk non rilegge più il layer dall'inizio.** I chunk di un
+  layer sono concatenati in un solo file e raggiungere il chunk *i* significa
+  arrivare alla somma delle dimensioni che lo precedono: veniva fatto
+  scartando quei byte, quindi un restore completo costava n²/2 letture (circa
+  32 GiB per consegnare 1 GiB su un layer da 64 chunk). Ora, quando la
+  sorgente è posizionabile — `*os.File`, cioè il backup locale e
+  l'autoestraente — è una `Seek`; lo scarto resta come ripiego.
+- **Un layer che la cache non può tenere viene ricostruito una volta per
+  layer, non una per chunk.** Con `--cache-size 0`, o per un layer più grande
+  della cache, il file temporaneo veniva cancellato dopo **un** chunk: ogni
+  chunk successivo riscaricava e ridecomprimeva l'intero layer. Un
+  `--oci-layout` non tiene mai una cache dei layer, quindi prendeva sempre il
+  caso peggiore. Il temporaneo ora dura quanto il layer, con un tetto di layer
+  vivi per i percorsi selettivo e parziale che saltano fra entry, e viene
+  rimosso alla chiusura della sorgente.
 - **`make proto-check` distingue tre esiti.** Toolchain assente →
   `SKIP` con exit 0, così `make check` resta eseguibile su una macchina senza
   `protoc`; generato non aggiornato → rosso, come prima; in CI

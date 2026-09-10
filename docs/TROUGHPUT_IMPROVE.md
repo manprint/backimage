@@ -311,3 +311,51 @@ built and replace it with a descriptor, the way the server already does in
 `CommitStream`. It touches the `build → finalize → buildImages → push`
 ordering, the checkpoint resume, and the `--output oci-layout/tar/daemon`
 paths that need the bytes at write time. Not attempted here.
+
+---
+
+## The restore side
+
+The audit above is about pushing a backup. Reading one back had two costs of
+its own, both quadratic in the number of chunks rather than linear in the size
+of the data, and both removed in 0.4.1.
+
+### 11. Every chunk re-read its layer blob from the start
+
+The chunks of a data layer are stored concatenated in one file, so reaching
+chunk *i* means reaching the sum of the stored sizes before it.
+`recovery.StoredChunk` did that with `io.CopyN(io.Discard, r, offsets[i])`:
+it re-read and threw away everything before the chunk it wanted.
+
+For a 1 GiB layer of 16 MiB chunks — 64 chunks — a full restore therefore read
+about **32 GiB to deliver 1 GiB**, n²/2 instead of n. It hit `LocalSource`,
+which is the path used by the self-extracting image and by any backup already
+unpacked on disk.
+
+`LocalSource.Open` returns an `*os.File`, so the reader is an `io.Seeker`: the
+discard is now a single `lseek`, and the copy stays only as the fallback for a
+source that cannot seek. Measured on the unit fixture: 123 789 bytes read to
+deliver 10 752 bytes of chunks before, 10 752 + metadata after.
+
+### 12. A layer with no room in the cache was rebuilt once per chunk
+
+`restore.imageSource.materialize` extracts a data layer into a file under the
+layer cache. When the cache is disabled (`--cache-size 0`) or the layer does
+not fit in it, the file was created as a temporary and `Blob` removed it with
+`defer os.Remove(path)` — after reading **one** chunk out of it.
+
+So every chunk paid for the whole layer: download, decompress, write to disk,
+read 16 MiB, delete. A 1 GiB layer of 64 chunks meant 64 GiB of I/O and 64
+decompressions. Note that an OCI layout never keeps a cache at all
+(`FromOCILayout` passes no `CacheSize`, which means "never keep a layer"), so
+`--oci-layout` and the self-extracting image took the worst case every time.
+
+The temporary now lives as long as the layer instead of as long as the chunk,
+with a small cap of live layers (`ephemeralLayerCap`) so the selective and
+partial paths, which jump between entries and can alternate layers, do not go
+back to rebuilding on every jump. `Close` removes what is left. Measured by
+`TestCacheDisabledPruneAndContext`: one download for the two chunks of a
+layer, where the old code did two.
+
+The cache policy itself is unchanged — this decides nothing about *whether* to
+keep a layer, only about not rebuilding one that is already there.

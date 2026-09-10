@@ -8,7 +8,13 @@
 // metadata — so the only thing left that can refuse the backup is the rule
 // that an encrypted backup has no unauthenticated blobs.
 //
-// It exists for the phase A1 e2e only; it is not part of the shipped CLI.
+// With -swap it plays a second, narrower attacker: one who moves a validly
+// sealed chunk to another position. A convergent nonce deliberately leaves the
+// chunk index out of the authenticated data, so that blob opens cleanly where
+// it does not belong and only the plaintext digest in the sealed private blob
+// disagrees. That is the fixture the phase A3 e2e needs.
+//
+// It exists for the phase A1 and A3 e2e only; it is not part of the shipped CLI.
 package main
 
 import (
@@ -22,6 +28,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/google/go-containerregistry/pkg/name"
@@ -47,6 +54,7 @@ type options struct {
 	root           string
 	passphraseFile string
 	forge          string
+	swap           string
 	outLayout      string
 	outRef         string
 	push           string
@@ -59,6 +67,7 @@ func run() error {
 	flag.StringVar(&o.root, "root", "", "directory the image filesystem is unpacked into (mandatory)")
 	flag.StringVar(&o.passphraseFile, "passphrase-file", "", "file holding the backup passphrase")
 	flag.StringVar(&o.forge, "forge", "", "comma separated list of blobs to strip: data,index,private")
+	flag.StringVar(&o.swap, "swap", "", "move the stored blob of chunk J onto chunk I, as `I:J`: a validly sealed chunk in the wrong place")
 	flag.StringVar(&o.outLayout, "out-layout", "", "write the forged image to this OCI layout directory")
 	flag.StringVar(&o.outRef, "out-ref", "", "reference used for --out-layout")
 	flag.StringVar(&o.push, "push", "", "push the forged image to this registry reference")
@@ -85,14 +94,21 @@ func run() error {
 	}
 
 	targets := parseTargets(o.forge)
-	if len(targets) > 0 {
+	if len(targets) > 0 || o.swap != "" {
 		km, err := unwrap(backupDir, o.passphraseFile)
 		if err != nil {
 			return err
 		}
 		defer km.Wipe()
-		if err := forge(backupDir, m, table, km, targets); err != nil {
-			return err
+		if len(targets) > 0 {
+			if err := forge(backupDir, m, table, km, targets); err != nil {
+				return err
+			}
+		}
+		if o.swap != "" {
+			if err := swapChunk(backupDir, m, table, km, o.swap); err != nil {
+				return err
+			}
 		}
 	}
 	if err := writeMeta(backupDir, m, table); err != nil {
@@ -347,6 +363,139 @@ func forgeData(dir string, m *index.Manifest, t *index.ChunkTable, opener crypt.
 		layerInfo.StoredBytes = int64(len(out))
 	}
 	return nil
+}
+
+// swapChunk moves the stored bytes of chunk src onto the slot of chunk dst.
+//
+// This is the reuse a convergent nonce makes possible on purpose: the chunk
+// index is left out of the authenticated data so equal payloads dedup, which
+// also means a blob sealed at one position opens cleanly at another. The AEAD
+// tag verifies, the stored size matches, and the public stored digest is
+// fixed up here the way anybody rewriting chunks.json would. The only thing
+// that still disagrees is the plaintext digest kept in the sealed private
+// blob, which no one without the key can rewrite.
+//
+// It prints the plaintext offset at which a restore must stop, so the caller
+// can assert that not one byte of the substituted chunk reached the output.
+func swapChunk(dir string, m *index.Manifest, t *index.ChunkTable, km *crypt.KeyMaterial, spec string) error {
+	dst, src, err := parseSwap(spec, len(t.Chunks))
+	if err != nil {
+		return err
+	}
+	target, source := t.Chunks[dst], t.Chunks[src]
+	if target.Sb != source.Sb {
+		return fmt.Errorf("chunk %d stores %d bytes and chunk %d stores %d: the swap needs them equal",
+			dst, target.Sb, src, source.Sb)
+	}
+	if target.Ss == source.Ss {
+		return fmt.Errorf("chunks %d and %d hold the same stored bytes: swapping them proves nothing", dst, src)
+	}
+
+	offsets := blobOffsets(t)
+	sourceFile := filepath.Join(dir, strings.TrimPrefix(source.P, "backup/"))
+	sourceBlob, err := os.ReadFile(sourceFile)
+	if err != nil {
+		return err
+	}
+	if offsets[src]+source.Sb > int64(len(sourceBlob)) {
+		return fmt.Errorf("chunk %d runs past the end of %s", src, source.P)
+	}
+	moved := append([]byte(nil), sourceBlob[offsets[src]:offsets[src]+source.Sb]...)
+
+	targetFile := filepath.Join(dir, strings.TrimPrefix(target.P, "backup/"))
+	targetBlob, err := os.ReadFile(targetFile)
+	if err != nil {
+		return err
+	}
+	if offsets[dst]+target.Sb > int64(len(targetBlob)) {
+		return fmt.Errorf("chunk %d runs past the end of %s", dst, target.P)
+	}
+	copy(targetBlob[offsets[dst]:offsets[dst]+target.Sb], moved)
+
+	// The blob file is named after its own digest, so rewriting its content
+	// renames it and repoints every chunk row that lived in it.
+	newDigest := digestOf(targetBlob)
+	newPath := "backup/data/" + strings.TrimPrefix(newDigest, "sha256:") + ".blob"
+	if err := os.Remove(targetFile); err != nil {
+		return err
+	}
+	if err := os.WriteFile(filepath.Join(dir, strings.TrimPrefix(newPath, "backup/")), targetBlob, 0o644); err != nil {
+		return err
+	}
+	oldPath := target.P
+	for i := range t.Chunks {
+		if t.Chunks[i].P == oldPath {
+			t.Chunks[i].P = newPath
+		}
+	}
+	t.Chunks[dst].Ss = source.Ss
+	for li := range m.Layers {
+		if t.Chunks[m.Layers[li].ChunkFrom].P == newPath {
+			m.Layers[li].Digest = newDigest
+		}
+	}
+
+	stop, err := plaintextOffset(dir, km, dst)
+	if err != nil {
+		return err
+	}
+	fmt.Println(stop)
+	return nil
+}
+
+func parseSwap(spec string, chunks int) (dst, src int, err error) {
+	parts := strings.Split(spec, ":")
+	if len(parts) != 2 {
+		return 0, 0, fmt.Errorf("--swap wants %q, got %q", "I:J", spec)
+	}
+	if dst, err = strconv.Atoi(parts[0]); err != nil {
+		return 0, 0, fmt.Errorf("--swap %q: %w", spec, err)
+	}
+	if src, err = strconv.Atoi(parts[1]); err != nil {
+		return 0, 0, fmt.Errorf("--swap %q: %w", spec, err)
+	}
+	if dst < 0 || dst >= chunks || src < 0 || src >= chunks || dst == src {
+		return 0, 0, fmt.Errorf("--swap %q: indexes outside a table of %d chunks", spec, chunks)
+	}
+	return dst, src, nil
+}
+
+// blobOffsets gives the byte offset of every chunk inside its own layer blob.
+func blobOffsets(t *index.ChunkTable) []int64 {
+	out := make([]int64, len(t.Chunks))
+	seen := make(map[string]int64, len(t.Chunks))
+	for i, c := range t.Chunks {
+		out[i] = seen[c.P]
+		seen[c.P] += c.Sb
+	}
+	return out
+}
+
+// plaintextOffset is where chunk index starts in the reconstructed tar, read
+// from the sealed private blob because a schema 2 backup keeps plain sizes
+// out of chunks.json.
+func plaintextOffset(dir string, km *crypt.KeyMaterial, chunkIndex int) (int64, error) {
+	opener, err := crypt.NewKeyedOpener(km)
+	if err != nil {
+		return 0, err
+	}
+	f, err := os.Open(filepath.Join(dir, index.PrivatePath))
+	if err != nil {
+		return 0, err
+	}
+	defer f.Close()
+	private, err := index.ReadPrivate(f, opener)
+	if err != nil {
+		return 0, err
+	}
+	if chunkIndex > len(private.Chunks) {
+		return 0, fmt.Errorf("private metadata describes %d chunks, need %d", len(private.Chunks), chunkIndex)
+	}
+	var total int64
+	for _, c := range private.Chunks[:chunkIndex] {
+		total += c.Pb
+	}
+	return total, nil
 }
 
 // forgeBlob rewrites one metadata blob in place and returns its new digest.

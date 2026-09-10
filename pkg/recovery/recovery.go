@@ -365,7 +365,7 @@ func (b *Backup) StoredChunk(ctx context.Context, i int) ([]byte, error) {
 		return nil, fmt.Errorf("chunk %d: %w", i, err)
 	}
 	defer r.Close()
-	if _, err := io.CopyN(io.Discard, r, b.offsets[i]); err != nil {
+	if err := skipTo(r, b.offsets[i]); err != nil {
 		return nil, fmt.Errorf("chunk %d seek: %w", i, err)
 	}
 	if c.Sb > int64(int(^uint(0)>>1)) {
@@ -378,42 +378,88 @@ func (b *Backup) StoredChunk(ctx context.Context, i int) ([]byte, error) {
 	return buf, nil
 }
 
-// PlainChunk returns a streaming decompressor for one chunk. The caller must
-// close it. Authentication is completed before this function returns.
-func (b *Backup) PlainChunk(ctx context.Context, i int) (io.ReadCloser, error) {
+// plainChunkPayload returns the authenticated compressed payload of one chunk
+// together with the codec that produced it.
+//
+// It is the form PlainChunk is built on, kept separate because the caller —
+// not the reader — must own the buffer: verifying a chunk before writing it
+// means decompressing the same payload twice, and a reader that wipes its
+// backing bytes on Close leaves nothing for the second pass. The caller is
+// responsible for clearing what it gets back.
+func (b *Backup) plainChunkPayload(ctx context.Context, i int) ([]byte, compress.ID, error) {
 	if b.Manifest.Encryption.Enabled && b.key == nil {
-		return nil, crypt.ErrWrongPassphrase
+		return nil, 0, crypt.ErrWrongPassphrase
 	}
 	stored, err := b.StoredChunk(ctx, i)
 	if err != nil {
-		return nil, err
+		return nil, 0, err
 	}
-	var payload []byte
-	var codecID compress.ID
 	if b.Manifest.Encryption.Enabled {
-		payload, codecID, err = b.opener.Open(nil, crypt.RoleData, uint32(i), stored)
+		payload, codecID, openErr := b.opener.Open(nil, crypt.RoleData, uint32(i), stored)
 		clear(stored)
-		if err != nil {
-			return nil, fmt.Errorf("chunk %d authentication: %w", i, err)
+		if openErr != nil {
+			return nil, 0, fmt.Errorf("chunk %d authentication: %w", i, openErr)
 		}
-	} else {
-		payload = stored
-		codec, getErr := compress.Get(b.Manifest.Archive.Compression)
-		if getErr != nil {
-			clear(payload)
-			return nil, getErr
-		}
-		codecID = codec.ID()
+		return payload, codecID, nil
 	}
+	codec, err := compress.Get(b.Manifest.Archive.Compression)
+	if err != nil {
+		clear(stored)
+		return nil, 0, err
+	}
+	return stored, codec.ID(), nil
+}
+
+// decompressPayload opens one decompression pass over an already
+// authenticated payload. It does not own the payload: closing the reader
+// leaves the bytes intact, so the same payload can be read again.
+func decompressPayload(payload []byte, codecID compress.ID, i int) (io.ReadCloser, error) {
 	codec, err := compress.ByID(codecID)
 	if err != nil {
-		clear(payload)
 		return nil, err
 	}
 	r, err := codec.NewReader(bytes.NewReader(payload))
 	if err != nil {
-		clear(payload)
 		return nil, fmt.Errorf("chunk %d decompress: %w", i, err)
+	}
+	return r, nil
+}
+
+// skipTo positions r at offset.
+//
+// Chunks of a layer are concatenated in one blob file, so reading chunk i
+// means reaching the sum of the stored sizes before it. Discarding those bytes
+// made a full restore quadratic: a 1 GiB layer of 16 MiB chunks read ~32 GiB
+// to deliver 1 GiB, because every chunk re-read the layer from the start.
+// LocalSource.Open returns an *os.File, and so does the self-extracting image
+// path, so the common case is a single lseek. The discard stays for the
+// sources that cannot seek.
+func skipTo(r io.Reader, offset int64) error {
+	if offset == 0 {
+		return nil
+	}
+	if s, ok := r.(io.Seeker); ok {
+		if _, err := s.Seek(offset, io.SeekStart); err == nil {
+			return nil
+		}
+		// A reader that claims io.Seeker but refuses the call is still
+		// readable: fall through to the discard rather than fail the restore.
+	}
+	_, err := io.CopyN(io.Discard, r, offset)
+	return err
+}
+
+// PlainChunk returns a streaming decompressor for one chunk. The caller must
+// close it. Authentication is completed before this function returns.
+func (b *Backup) PlainChunk(ctx context.Context, i int) (io.ReadCloser, error) {
+	payload, codecID, err := b.plainChunkPayload(ctx, i)
+	if err != nil {
+		return nil, err
+	}
+	r, err := decompressPayload(payload, codecID, i)
+	if err != nil {
+		clear(payload)
+		return nil, err
 	}
 	return &bufferedReader{ReadCloser: r, data: payload}, nil
 }
@@ -448,39 +494,104 @@ func (b *Backup) mustVerify(verify bool) bool {
 // by one stored chunk regardless of total backup size.
 func (b *Backup) StreamTar(ctx context.Context, dst io.Writer, verify bool) error {
 	verify = b.mustVerify(verify)
-	for i, c := range b.Chunks.Chunks {
+	for i := range b.Chunks.Chunks {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		b.reportProgress(fmt.Sprintf("restore: chunk %d/%d: lettura blob, decrittazione e preparazione decompressione", i+1, len(b.Chunks.Chunks)))
-		r, err := b.PlainChunk(ctx, i)
-		if err != nil {
+		if err := b.streamOneChunk(ctx, i, dst, verify); err != nil {
 			return err
 		}
-		h := sha256.New()
-		w := dst
-		if verify {
-			w = io.MultiWriter(dst, h)
-		}
-		n, copyErr := io.Copy(w, r)
-		closeErr := r.Close()
-		if copyErr != nil {
-			return fmt.Errorf("chunk %d decompress: %w", i, copyErr)
-		}
-		if closeErr != nil {
-			return fmt.Errorf("chunk %d close: %w", i, closeErr)
+	}
+	b.reportIntegrity(len(b.Chunks.Chunks), len(b.Chunks.Chunks), verify)
+	return nil
+}
+
+// streamOneChunk writes one chunk of the reconstructed tar.
+//
+// When the chunk has to be verified it is decompressed twice: the first pass
+// feeds the digest and nothing else, the second one — reached only if the
+// first agreed with the size and digest recorded when the backup was made —
+// writes the bytes out. Checking after a single pass through
+// io.MultiWriter(dst, h) meant the caller had already received the whole
+// chunk by the time the mismatch was found, so the refusal came after the
+// effects: on a damaged or substituted chunk about 10 KiB reached the tar
+// before the error did.
+//
+// The case that makes this matter is not a broken AEAD tag — that is refused
+// in plainChunkPayload, before a byte is decompressed — but a blob that is
+// validly sealed and in the wrong place: with a convergent nonce the chunk
+// index is deliberately outside the authenticated data, so a blob moved
+// between two backups that share a dedup key opens cleanly and only the
+// plaintext digest in the sealed private blob says otherwise.
+//
+// The second pass costs one more decompression and no extra memory: the
+// compressed payload is already resident, so re-reading it is a second pass
+// over a []byte. With --no-verify on a plaintext backup there is no digest to
+// check and nothing to gain from the split, so that path keeps the single
+// pass it always had.
+func (b *Backup) streamOneChunk(ctx context.Context, i int, dst io.Writer, verify bool) error {
+	c := b.Chunks.Chunks[i]
+	total := len(b.Chunks.Chunks)
+	b.reportProgress(fmt.Sprintf("restore: chunk %d/%d: lettura blob, decrittazione e preparazione decompressione", i+1, total))
+	payload, codecID, err := b.plainChunkPayload(ctx, i)
+	if err != nil {
+		return err
+	}
+	defer clear(payload)
+
+	if !verify {
+		n, err := b.copyPass(payload, codecID, i, dst)
+		if err != nil {
+			return err
 		}
 		if n != c.Pb {
 			return fmt.Errorf("%w: chunk %d plaintext size %d, want %d", crypt.ErrIntegrity, i, n, c.Pb)
 		}
-		b.reportProgress(fmt.Sprintf("restore: chunk %d/%d: verifica digest", i+1, len(b.Chunks.Chunks)))
-		if verify && !digestMatches(c.Ps, h.Sum(nil)) {
-			return fmt.Errorf("%w: chunk %d plaintext digest mismatch", crypt.ErrIntegrity, i)
-		}
-		b.reportProgress(fmt.Sprintf("restore: chunk %d/%d: controllato e scritto", i+1, len(b.Chunks.Chunks)))
+		b.reportProgress(fmt.Sprintf("restore: chunk %d/%d: controllato e scritto", i+1, total))
+		return nil
 	}
-	b.reportIntegrity(len(b.Chunks.Chunks), len(b.Chunks.Chunks), verify)
+
+	b.reportProgress(fmt.Sprintf("restore: chunk %d/%d: passata 1 di 2, verifica prima di scrivere", i+1, total))
+	h := sha256.New()
+	n, err := b.copyPass(payload, codecID, i, h)
+	if err != nil {
+		return err
+	}
+	if n != c.Pb {
+		return fmt.Errorf("%w: chunk %d plaintext size %d, want %d", crypt.ErrIntegrity, i, n, c.Pb)
+	}
+	if !digestMatches(c.Ps, h.Sum(nil)) {
+		return fmt.Errorf("%w: chunk %d plaintext digest mismatch", crypt.ErrIntegrity, i)
+	}
+
+	b.reportProgress(fmt.Sprintf("restore: chunk %d/%d: passata 2 di 2, scrittura", i+1, total))
+	written, err := b.copyPass(payload, codecID, i, dst)
+	if err != nil {
+		return err
+	}
+	if written != n {
+		return fmt.Errorf("%w: chunk %d wrote %d bytes after verifying %d", crypt.ErrIntegrity, i, written, n)
+	}
+	b.reportProgress(fmt.Sprintf("restore: chunk %d/%d: controllato e scritto", i+1, total))
 	return nil
+}
+
+// copyPass decompresses payload once into dst and reports how much plaintext
+// came out. It leaves payload untouched so it can be read again.
+func (*Backup) copyPass(payload []byte, codecID compress.ID, i int, dst io.Writer) (int64, error) {
+	r, err := decompressPayload(payload, codecID, i)
+	if err != nil {
+		return 0, err
+	}
+	n, copyErr := io.Copy(dst, r)
+	closeErr := r.Close()
+	if copyErr != nil {
+		return n, fmt.Errorf("chunk %d decompress: %w", i, copyErr)
+	}
+	if closeErr != nil {
+		return n, fmt.Errorf("chunk %d close: %w", i, closeErr)
+	}
+	return n, nil
 }
 
 // reportIntegrity states, as audit evidence, how much of the backup was read

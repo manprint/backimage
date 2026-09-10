@@ -365,6 +365,16 @@ func runRestore(cmd *cobra.Command, args []string) error {
 		}
 	}
 	if err != nil {
+		// A chunk that fails its digest is refused before a byte of it
+		// reaches the destination, but whatever the earlier chunks produced
+		// is already on disk and stays there: the restore is atomic per
+		// chunk, not per file and not as a whole. Say how much was published
+		// instead of leaving it to be inferred from a directory listing.
+		if published := extractedObjects(extracted); published > 0 {
+			log(fmt.Sprintf(
+				"restore: interrotto: %d oggetti erano già stati scritti in %s e restano sul posto",
+				published, getFlagString(cmd, "destination")))
+		}
 		if errors.Is(err, crypt.ErrIntegrity) {
 			return &Error{Kind: KindIntegrity, Msg: "verifica restore fallita", Err: err}
 		}
@@ -536,6 +546,11 @@ func restoreExtract(cmd *cobra.Command, stream func(io.Writer) error, alreadyFil
 		return stats, extractErr
 	}
 	return stats, streamErr
+}
+
+// extractedObjects counts what an aborted extraction had already published.
+func extractedObjects(s archive.Stats) int64 {
+	return s.Files + s.Dirs + s.Symlinks + s.Hardlinks + s.Devices + s.Fifos
 }
 
 func selectedBytes(entries []index.FileEntry) int64 {

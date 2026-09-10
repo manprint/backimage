@@ -75,8 +75,10 @@ type imageSource struct {
 	table        *index.ChunkTable
 	tableErr     error
 
-	mu      sync.Mutex
-	offsets []int64
+	mu        sync.Mutex
+	offsets   []int64
+	ephemeral map[int]string
+	recent    []int
 }
 
 // FromRegistry builds a Source over a remote image reference.
@@ -315,12 +317,9 @@ func (s *imageSource) Blob(ctx context.Context, i int) ([]byte, error) {
 	if layerIndex < 0 {
 		return nil, fmt.Errorf("chunk %d is not assigned to a data layer", i)
 	}
-	path, ephemeral, err := s.materialize(ctx, layerIndex, c.P, m.Archive.Compression, expected)
+	path, err := s.materialize(ctx, layerIndex, c.P, m.Archive.Compression, expected)
 	if err != nil {
 		return nil, err
-	}
-	if ephemeral {
-		defer os.Remove(path)
 	}
 	f, err := os.Open(path)
 	if err != nil {
@@ -340,46 +339,61 @@ func (s *imageSource) Blob(ctx context.Context, i int) ([]byte, error) {
 	return out, nil
 }
 
-func (s *imageSource) materialize(ctx context.Context, dataLayer int, wanted, codecName string, expected int64) (string, bool, error) {
+// ephemeralLayerCap bounds how many uncached layers stay materialised at once.
+//
+// A full restore reads chunks in order and only ever needs the current layer;
+// the selective and the partial paths jump between entries and can alternate
+// layers, so a couple of slots turn "rebuild on every jump" back into "rebuild
+// once per layer" without letting the temp directory grow without bound.
+const ephemeralLayerCap = 4
+
+func (s *imageSource) materialize(ctx context.Context, dataLayer int, wanted, codecName string, expected int64) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if path, ok := s.ephemeral[dataLayer]; ok {
+		if st, err := os.Stat(path); err == nil && st.Mode().IsRegular() && st.Size() == expected {
+			s.touchEphemeral(dataLayer)
+			return path, nil
+		}
+		s.dropEphemeral(dataLayer)
+	}
 	layers, err := s.image.Layers()
 	if err != nil {
-		return "", false, err
+		return "", err
 	}
 	imageLayer := dataLayer + 2
 	if imageLayer < 2 || imageLayer >= len(layers) {
-		return "", false, fmt.Errorf("data layer %d missing (image has %d layers)", dataLayer, len(layers))
+		return "", fmt.Errorf("data layer %d missing (image has %d layers)", dataLayer, len(layers))
 	}
 	digest, err := layers[imageLayer].Digest()
 	if err != nil {
-		return "", false, err
+		return "", err
 	}
 	if err := os.MkdirAll(s.cacheDir, 0o700); err != nil {
-		return "", false, err
+		return "", err
 	}
 	cachePath := filepath.Join(s.cacheDir, digest.Hex)
 	if st, err := os.Stat(cachePath); err == nil && st.Mode().IsRegular() {
 		if st.Size() == expected {
 			now := time.Now()
 			if err := os.Chtimes(cachePath, now, now); err != nil {
-				return "", false, err
+				return "", err
 			}
-			return cachePath, false, nil
+			return cachePath, nil
 		}
 		if err := os.Remove(cachePath); err != nil {
-			return "", false, err
+			return "", err
 		}
 	}
 	tmp, err := os.CreateTemp(s.cacheDir, ".layer-*")
 	if err != nil {
-		return "", false, err
+		return "", err
 	}
 	tmpPath := tmp.Name()
-	fail := func(err error) (string, bool, error) {
+	fail := func(err error) (string, error) {
 		tmp.Close()
 		os.Remove(tmpPath)
-		return "", false, err
+		return "", err
 	}
 	raw, err := layers[imageLayer].Compressed()
 	if err != nil {
@@ -434,19 +448,63 @@ func (s *imageSource) materialize(ctx context.Context, dataLayer int, wanted, co
 	}
 	if err := tmp.Close(); err != nil {
 		os.Remove(tmpPath)
-		return "", false, err
+		return "", err
 	}
 	if s.cacheSize < 0 || st.Size() > s.cacheSize {
-		return tmpPath, true, nil
+		// Not cacheable, but still worth keeping for the rest of this layer:
+		// releasing it after one chunk meant downloading and decompressing the
+		// whole layer again for the next one — 64 GiB of I/O and 64
+		// decompressions for a 1 GiB layer of 16 MiB chunks.
+		s.keepEphemeral(dataLayer, tmpPath)
+		return tmpPath, nil
 	}
 	if err := os.Rename(tmpPath, cachePath); err != nil {
 		os.Remove(tmpPath)
-		return "", false, err
+		return "", err
 	}
 	if err := s.prune(cachePath); err != nil {
-		return "", false, err
+		return "", err
 	}
-	return cachePath, false, nil
+	return cachePath, nil
+}
+
+// keepEphemeral registers a materialised layer that the cache policy refused,
+// evicting the least recently used one when the slots are full. The caller
+// holds s.mu.
+func (s *imageSource) keepEphemeral(dataLayer int, path string) {
+	if s.ephemeral == nil {
+		s.ephemeral = make(map[int]string, ephemeralLayerCap)
+	}
+	s.ephemeral[dataLayer] = path
+	s.recent = append(s.recent, dataLayer)
+	for len(s.recent) > ephemeralLayerCap {
+		s.dropEphemeral(s.recent[0])
+	}
+}
+
+// touchEphemeral marks a layer as the most recently used. The caller holds s.mu.
+func (s *imageSource) touchEphemeral(dataLayer int) {
+	for i, v := range s.recent {
+		if v == dataLayer {
+			s.recent = append(s.recent[:i], s.recent[i+1:]...)
+			break
+		}
+	}
+	s.recent = append(s.recent, dataLayer)
+}
+
+// dropEphemeral removes one materialised layer from disk. The caller holds s.mu.
+func (s *imageSource) dropEphemeral(dataLayer int) {
+	if path, ok := s.ephemeral[dataLayer]; ok {
+		os.Remove(path)
+		delete(s.ephemeral, dataLayer)
+	}
+	for i, v := range s.recent {
+		if v == dataLayer {
+			s.recent = append(s.recent[:i], s.recent[i+1:]...)
+			break
+		}
+	}
 }
 
 func (s *imageSource) prune(keep string) error {
@@ -489,7 +547,17 @@ func (s *imageSource) prune(keep string) error {
 	return nil
 }
 
-func (*imageSource) Close() error { return nil }
+func (s *imageSource) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for dataLayer := range s.ephemeral {
+		if path, ok := s.ephemeral[dataLayer]; ok {
+			os.Remove(path)
+		}
+	}
+	s.ephemeral, s.recent = nil, nil
+	return nil
+}
 
 type contextReader struct {
 	ctx context.Context

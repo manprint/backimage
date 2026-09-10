@@ -102,6 +102,21 @@ solo dopo la pubblicazione del manifest finale.
 
 `--local-repo` non può essere combinato con `--output`.
 
+### Quanto costa rileggerlo
+
+Il tempo di restore è lineare nella dimensione del backup, non nel numero di
+chunk: dalla 0.4.1 la lettura di un chunk si posiziona sul suo offset invece di
+rileggere il layer dall'inizio, e un layer che la cache non può tenere viene
+materializzato una volta per layer invece di una volta per chunk. Prima di quel
+cambio un layer da 1 GiB diviso in 64 chunk poteva costare ~32 GiB di letture
+su un backup locale e 64 decompressioni su un `--oci-layout`, che non tiene mai
+una cache dei layer. Il dettaglio è in `docs/TROUGHPUT_IMPROVE.md` §11-12.
+
+Nella stessa versione il restore decomprime **due volte** ogni chunk quando ne
+verifica il digest: la prima passata verifica, la seconda scrive. È voluto —
+serve a non consegnare byte che poi verranno rifiutati — e costa una passata di
+decompressione in più, non memoria in più.
+
 ## Flag
 
 | Flag | Default | Significato |

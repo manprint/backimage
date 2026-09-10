@@ -191,8 +191,31 @@ func TestCacheDisabledPruneAndContext(t *testing.T) {
 	if _, err := s.Blob(context.Background(), 1); err != nil {
 		t.Fatal(err)
 	}
-	if layer.compressed.Load() != 2 {
-		t.Fatalf("disabled cache downloads = %d", layer.compressed.Load())
+	// Both chunks live in the same data layer. With the cache disabled the
+	// layer is not kept between runs, but it must still be materialised once
+	// for the whole layer rather than once per chunk: the per-chunk temporary
+	// meant downloading and decompressing a 1 GiB layer 64 times to read its
+	// 64 chunks.
+	if got := layer.compressed.Load(); got != 1 {
+		t.Fatalf("disabled cache rebuilt the layer per chunk: downloads = %d, want 1", got)
+	}
+	// Nothing may survive Close: the temporary is ours to remove.
+	tmpBefore, err := filepath.Glob(filepath.Join(cache, ".layer-*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tmpBefore) != 1 {
+		t.Fatalf("materialised layers on disk = %d, want 1", len(tmpBefore))
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	tmpAfter, err := filepath.Glob(filepath.Join(cache, ".layer-*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tmpAfter) != 0 {
+		t.Fatalf("Close left %d materialised layers behind", len(tmpAfter))
 	}
 
 	s.cacheSize = 3
@@ -254,13 +277,13 @@ func TestMetadataAndMaterializeFailures(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := s.materialize(ctx, 99, "backup/data/nope", "store", 1); err == nil {
+	if _, err := s.materialize(ctx, 99, "backup/data/nope", "store", 1); err == nil {
 		t.Fatal("missing layer accepted")
 	}
-	if _, _, err := s.materialize(ctx, 0, "backup/data/nope", "store", 1); err == nil {
+	if _, err := s.materialize(ctx, 0, "backup/data/nope", "store", 1); err == nil {
 		t.Fatal("missing tar entry accepted")
 	}
-	if _, _, err := s.materialize(ctx, 0, "backup/data/000000.blob", "store", 1); err == nil {
+	if _, err := s.materialize(ctx, 0, "backup/data/000000.blob", "store", 1); err == nil {
 		t.Fatal("wrong expected size accepted")
 	}
 	if _, err := s.Blob(ctx, 99); err == nil {
@@ -347,7 +370,7 @@ func TestMissingAndMalformedMetadata(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := s.materialize(context.Background(), 0, "backup/data/000000.blob", "missing-codec", int64(len("first stored chunksecond stored chunk"))); err == nil {
+	if _, err := s.materialize(context.Background(), 0, "backup/data/000000.blob", "missing-codec", int64(len("first stored chunksecond stored chunk"))); err == nil {
 		t.Fatal("missing codec accepted")
 	}
 }
@@ -374,5 +397,44 @@ func TestFromOCILayoutSelectsNestedPlatformIndex(t *testing.T) {
 	m, err := s.Manifest(context.Background())
 	if err != nil || m.Chunking.Count != 2 {
 		t.Fatalf("layout manifest = %#v, %v", m, err)
+	}
+}
+
+// TestEphemeralLayersAreCappedAndReleased covers the bookkeeping of the
+// materialised layers the cache policy refuses to keep: the most recent ones
+// stay so a restore that alternates between layers does not rebuild them, the
+// oldest is dropped once the slots are full, and Close leaves nothing behind.
+func TestEphemeralLayersAreCappedAndReleased(t *testing.T) {
+	dir := t.TempDir()
+	s := &imageSource{cacheDir: dir}
+	paths := make([]string, 0, ephemeralLayerCap+1)
+	for i := range ephemeralLayerCap + 1 {
+		f, err := os.CreateTemp(dir, ".layer-*")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := f.Close(); err != nil {
+			t.Fatal(err)
+		}
+		paths = append(paths, f.Name())
+		s.keepEphemeral(i, f.Name())
+		// Keep layer 0 the least recently used by touching the newest one.
+		s.touchEphemeral(i)
+	}
+	if len(s.ephemeral) != ephemeralLayerCap {
+		t.Fatalf("live layers = %d, want the cap of %d", len(s.ephemeral), ephemeralLayerCap)
+	}
+	if _, err := os.Stat(paths[0]); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("the least recently used layer survived eviction: %v", err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	left, err := filepath.Glob(filepath.Join(dir, ".layer-*"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(left) != 0 {
+		t.Fatalf("Close left %d materialised layers behind", len(left))
 	}
 }

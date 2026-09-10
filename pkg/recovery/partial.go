@@ -118,15 +118,26 @@ func (b *Backup) streamTarPartial(ctx context.Context, idx *index.Index, wanted 
 		if wanted != nil && !wanted[e.Path] {
 			continue
 		}
-		buffered, err := b.readRange(e.TarOffset, end, load)
-		if err != nil {
+		// Pass 1 proves that every chunk covering the entry loads, before a
+		// byte of it is written. The chunks are already verified by
+		// plainChunkBytes, so this pass is not a second verification: it buys
+		// the guarantee the per-entry buffer used to buy — an entry is written
+		// whole or not at all — without holding the entry in memory.
+		if err := b.walkRange(e.TarOffset, end, load, nil); err != nil {
 			report.Skipped++
 			if len(report.SkippedPaths) < skippedPathsCap {
 				report.SkippedPaths = append(report.SkippedPaths, e.Path)
 			}
 			continue
 		}
-		if _, err := dst.Write(buffered); err != nil {
+		// Pass 2 walks the same range into the destination. A failure here is
+		// fatal rather than a skip: bytes of this entry are already in the
+		// tar, and continuing would leave a truncated record that breaks every
+		// entry after it.
+		if err := b.walkRange(e.TarOffset, end, load, func(p []byte) error {
+			_, werr := dst.Write(p)
+			return werr
+		}); err != nil {
 			return report, err
 		}
 		report.Entries++
@@ -142,20 +153,29 @@ func (b *Backup) streamTarPartial(ctx context.Context, idx *index.Index, wanted 
 	return report, nil
 }
 
-// readRange collects [start,end) from the chunks that cover it. It buffers the
-// range instead of writing it out directly: an entry must be written whole or
-// not at all, or a chunk failing halfway would leave a truncated record in the
-// tar and break every entry after it.
-func (b *Backup) readRange(start, end int64, load func(int) ([]byte, error)) ([]byte, error) {
-	out := make([]byte, 0, end-start)
+// walkRange visits [start,end) chunk by chunk and hands each covering slice to
+// fn, which may be nil to walk without consuming anything.
+//
+// It replaces a readRange that collected the whole range into one buffer sized
+// end-start. That buffer was not accidental — an entry must be written whole
+// or not at all — but it made the resident memory of a partial recovery equal
+// to the largest file in the backup: a 50 GB file inside the archive meant 50
+// GB of process memory. Walking the range twice, once to prove every chunk
+// loads and once to write, keeps the same guarantee at the cost of one chunk
+// of memory.
+//
+// Cost of the second walk: the one-chunk cache makes it free for an entry
+// contained in a single chunk, which is the common case; an entry spanning
+// several chunks pays for decrypting and decompressing each of them twice.
+func (b *Backup) walkRange(start, end int64, load func(int) ([]byte, error), fn func([]byte) error) error {
 	for off := start; off < end; {
 		i := sort.Search(len(b.Chunks.Chunks), func(i int) bool { return b.prefix[i+1] > off })
 		if i >= len(b.Chunks.Chunks) {
-			return nil, fmt.Errorf("offset tar %d fuori dalla tabella dei chunk", off)
+			return fmt.Errorf("offset tar %d fuori dalla tabella dei chunk", off)
 		}
 		data, err := load(i)
 		if err != nil {
-			return nil, err
+			return err
 		}
 		within := off - b.prefix[i]
 		n := int64(len(data)) - within
@@ -163,12 +183,16 @@ func (b *Backup) readRange(start, end int64, load func(int) ([]byte, error)) ([]
 			n = remaining
 		}
 		if n <= 0 {
-			return nil, fmt.Errorf("il chunk %d non copre l'offset tar %d", i, off)
+			return fmt.Errorf("il chunk %d non copre l'offset tar %d", i, off)
 		}
-		out = append(out, data[within:within+n]...)
+		if fn != nil {
+			if err := fn(data[within : within+n]); err != nil {
+				return err
+			}
+		}
 		off += n
 	}
-	return out, nil
+	return nil
 }
 
 // Summary renders the audit evidence of a partial recovery.
