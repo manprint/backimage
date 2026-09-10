@@ -96,7 +96,7 @@ func (c *Client) uploadStreamOnce(ctx context.Context, backup StreamBackup) (Res
 		return result, err
 	}
 
-	writer := &streamWriter{conn: conn, reader: reader}
+	writer := &streamWriter{conn: conn, reader: reader, quota: ack.MaxBytes}
 	if err := backup.Source(attemptCtx, writer); err != nil {
 		// A server-side failure surfaces here as a broken pipe: prefer the
 		// remote cause when the reader already captured one.
@@ -295,6 +295,12 @@ type streamWriter struct {
 	conn    *connection
 	reader  *streamReader
 	written uint64
+	// quota is the ceiling the server announced in its HelloAck. The archive
+	// is produced as it is sent, so the estimate checked before the stream
+	// opened is exactly that — an estimate. Counting the real bytes here
+	// stops a run at the announced limit instead of at the server's refusal,
+	// which arrives only once the bytes have already crossed the wire.
+	quota uint64
 }
 
 func (w *streamWriter) Write(p []byte) (int, error) {
@@ -306,6 +312,10 @@ func (w *streamWriter) Write(p []byte) (int, error) {
 		n := len(p)
 		if n > StreamFrameSize {
 			n = StreamFrameSize
+		}
+		if w.quota > 0 && w.written+uint64(n) > w.quota {
+			return total, &Error{Kind: 2, Message: fmt.Sprintf(
+				"remote quota exceeded: the archive is past the %d bytes the server announced", w.quota)}
 		}
 		w.conn.writeMu.Lock()
 		err := protocol.WriteFrame(w.conn.stream, protocol.FrameData, p[:n])

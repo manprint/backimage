@@ -179,10 +179,23 @@ func (c *Client) uploadOnce(ctx context.Context, backup Backup) (Result, error) 
 		return result, err
 	}
 
+	// The quota the server announced is checked against the estimate above
+	// and against the bytes actually sent below. Only the server enforced it
+	// per layer until now, which meant a client with a low estimate and a
+	// large archive learned about the ceiling after uploading its way up to
+	// it. The announcement is a limit the peer published; verifying it here
+	// costs one addition per layer.
+	var sent uint64
 	for i, layer := range backup.Layers {
 		digest, diffID, size, mediaType, err := layerDescriptor(layer)
 		if err != nil {
 			return result, fmt.Errorf("layer %d: %w", i, err)
+		}
+		sent += uint64(size)
+		if ack.MaxBytes > 0 && sent > ack.MaxBytes {
+			return result, &Error{Kind: 2, Message: fmt.Sprintf(
+				"remote quota exceeded: layer %d takes the upload to %d bytes, the server announced %d",
+				i, sent, ack.MaxBytes)}
 		}
 		if err := conn.writeClient(&protocol.ClientMessage{Msg: &protocol.ClientMessage_LayerStart{LayerStart: &protocol.LayerStart{
 			Index: uint32(i), Size: uint64(size), Sha256: digest,
@@ -330,8 +343,21 @@ func (c *connection) provideToken(ctx context.Context, request *protocol.TokenRe
 	}
 	key := scope.String()
 	c.refreshMu.Lock()
-	if old := c.refresh[key]; old != nil {
+	old, known := c.refresh[key]
+	switch {
+	case known:
+		// One refresher per scope: the previous one is cancelled here, so a
+		// server that re-asks for a scope it already has replaces a goroutine
+		// instead of adding one.
 		old()
+	case len(c.refresh) >= maxSessionScopes:
+		// Unreachable while the scope guard holds — it refuses a scope past
+		// the same ceiling before the provider is ever asked. It is written
+		// out anyway because this is where the goroutines are started, and a
+		// bound that lives only in another file is a bound that a later
+		// caller can walk around.
+		c.refreshMu.Unlock()
+		return refuseScope("remote session already renews %d credential scopes, refusing to start another", len(c.refresh))
 	}
 	refreshCtx, cancel := context.WithCancel(ctx)
 	c.refresh[key] = cancel

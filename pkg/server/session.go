@@ -368,6 +368,18 @@ func (s *Session) backupStart(ctx context.Context, stream *sessionStream, rs *ru
 		return s.fail(ctx, stream, rs, ErrorUsage,
 			fmt.Sprintf("estimated backup size %d exceeds session quota %d", start.EstimatedBytes, s.cfg.MaxBytes), "")
 	}
+	// The announced layer count is the capacity of the slice two lines below,
+	// and it arrives as a uint32 in a message a few dozen bytes long: a peer
+	// that says 4294967295 asks this process for some 270 GB of capacity
+	// before it has sent a single layer. The ceiling is not invented here —
+	// it is the overlayfs budget of a runnable image, the same maxDataLayers
+	// the streaming pipeline enforces while it assembles layers, and the same
+	// number the client's own planner never exceeds. All that changes is
+	// where it is checked: in front of the allocation instead of after it.
+	if start.LayerCount > maxDataLayers {
+		return s.fail(ctx, stream, rs, ErrorUsage,
+			fmt.Sprintf("BackupStart announces %d layers, an image holds at most %d", start.LayerCount, maxDataLayers), "")
+	}
 	rs.start = start
 	rs.reference = start.Reference
 	rs.layers = make([]Layer, 0, start.LayerCount)

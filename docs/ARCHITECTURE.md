@@ -288,3 +288,48 @@ di voci sono già un paio di gigabyte di oggetti vivi.
 La copertura degli offset entro la fine del contenuto resta dov'era, in
 `pkg/recovery/partial.go`: dipende dal totale in chiaro, che l'indice non
 conosce.
+
+### Il percorso remoto: conteggi annunciati e risorse per sessione
+
+Le stesse regole valgono per il protocollo, dove la sorgente non fidata è il
+peer invece del file.
+
+**Layer annunciati (server).** `BackupStart.layer_count` è un `uint32` che
+arrivava intatto fino a `make([]Layer, 0, start.LayerCount)`: un messaggio di
+poche decine di byte chiedeva al processo la capacità per 4.294.967.295 layer,
+circa 270 GB, prima che fosse spedito un solo byte di dati. Il tetto non è
+inventato — è `maxDataLayers`, il budget overlayfs di un'immagine eseguibile,
+che la pipeline di streaming applicava già mentre assembla i layer e che il
+pianificatore del client non supera mai. Cambia solo il punto in cui viene
+verificato: prima dell'allocazione, non dopo.
+
+**Dimensione dei frame.** Era già corretta e resta la sola forma accettabile:
+`protocol.ReadFrame` confronta la lunghezza dichiarata con
+`protocol.MaxFrameSize` (4 MiB) **prima** di far crescere il buffer, e riusa
+l'allocazione precedente quando basta.
+
+**Scope e goroutine di rinnovo (client).** `maxSessionScopes` = 4 limita
+*quali* credenziali una sessione può far coniare (A4.1). Non limitava *quante
+volte*: ripetere l'unico scope a cui ha diritto non costa nulla al peer e
+costa al client una `Provider.Get` — un giro di rete verso l'endpoint di
+autorizzazione del registry, sull'account dell'utente — più il riavvio della
+goroutine di rinnovo di quello scope, per ogni richiesta. Ora
+`maxSessionTokenRequests` = `maxSessionScopes * 8` conta **tutte** le
+richieste, comprese quelle malformate che la guardia rifiuta: quel che si
+limita è il lavoro che il peer può causare, e una richiesta rifiutata è
+comunque arrivata. Il default è motivato dal ciclo di rinnovo: il client
+rinnova da solo a tre quinti della vita del token, quindi un server corretto
+chiede una volta per scope e mai più; otto richieste per scope lasciano
+margine a un registry che ruota le credenziali sotto un backup lungo. Le
+goroutine vive restano una per scope — la precedente viene cancellata, non
+affiancata — e il tetto è scritto anche dove le goroutine partono, perché un
+limite che vive solo in un altro file è un limite che un chiamante futuro
+aggira.
+
+**Limiti annunciati verificati anche dal client.** `HelloAck.max_bytes` è la
+quota che il server pubblica. Il client la confrontava solo con la stima, e
+la stima è tale: sul percorso di streaming l'archivio viene prodotto mentre
+viene spedito. Ora la quota annunciata è verificata anche sui byte realmente
+inviati — layer per layer sul protocollo v1, frame per frame su quello v2 —
+così un backup si ferma al limite dichiarato invece di scoprirlo dal rifiuto
+del server, cioè dopo che i byte hanno attraversato la rete.

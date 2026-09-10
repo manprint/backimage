@@ -111,6 +111,28 @@ cambiano se i dati non sono cambiati, quindi il costo è il solo layer tool.
 
 ### Security
 
+- **Il numero di layer annunciato dal peer non decide piu' quanta memoria
+  allocare.** `BackupStart.layer_count` e' un `uint32` che arrivava intatto
+  fino alla capacita' della slice dei layer: un messaggio di poche decine di
+  byte chiedeva al server la capacita' per 4.294.967.295 layer, circa 270 GB,
+  prima di spedire un solo byte di dati. Ora il conteggio e' confrontato con
+  `maxDataLayers` — il budget overlayfs di un'immagine eseguibile, gia'
+  applicato dalla pipeline di streaming — **prima** dell'allocazione.
+- **Un server remoto non puo' piu' far coniare credenziali all'infinito.** Il
+  tetto agli scope di una sessione (0.4.1, A4.1) limitava *quali* credenziali
+  chiedere, non *quante volte*: ripetere lo stesso scope non costa nulla al
+  peer e costa al client una chiamata al provider di token — un giro di rete
+  verso l'endpoint di autorizzazione del registry, sull'account dell'utente —
+  piu' il riavvio della goroutine di rinnovo, per ogni richiesta. Ora una
+  sessione risponde ad al massimo `maxSessionScopes * 8` richieste, contate
+  tutte, e le goroutine di rinnovo restano una per scope anche nel punto in
+  cui vengono avviate.
+- **La quota annunciata dal server e' verificata anche dal client.**
+  `HelloAck.max_bytes` era confrontato solo con la stima, e sul percorso di
+  streaming l'archivio viene prodotto mentre viene spedito: un backup con una
+  stima bassa scopriva il limite dal rifiuto del server, cioe' dopo aver
+  attraversato la rete. Ora il client si ferma al limite dichiarato, layer per
+  layer sul protocollo v1 e frame per frame su quello v2.
 - **L'indice dei file ha una forma, e ora è verificata.** Il numero di voci
   non aveva tetto, i path e i link target nemmeno, un path poteva comparire
   due volte e gli offset tar potevano non crescere — mentre il recupero
