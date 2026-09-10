@@ -22,7 +22,7 @@ func mustSealer(t *testing.T, km *KeyMaterial, mode NonceMode) Sealer {
 
 func mustOpener(t *testing.T, km *KeyMaterial) Opener {
 	t.Helper()
-	o, err := NewOpener(km)
+	o, err := NewKeyedOpener(km)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -432,7 +432,7 @@ func TestOpenAllocs(t *testing.T) {
 }
 
 func TestClearEnvelope(t *testing.T) {
-	o := mustOpener(t, nil)
+	o := NewClearOpener()
 	s := mustSealer(t, nil, NonceRandom)
 	blob, err := s.Seal(nil, RoleData, 0, testCodec(t), []byte("cleartext"))
 	if err != nil {
@@ -453,8 +453,8 @@ func TestCipheredBlobNeedsKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := mustOpener(t, nil).Open(nil, RoleData, 0, blob); err == nil {
-		t.Fatal("keyless opener must reject AES-GCM blobs")
+	if _, _, err := NewClearOpener().Open(nil, RoleData, 0, blob); err == nil {
+		t.Fatal("clear opener must reject AES-GCM blobs")
 	}
 }
 

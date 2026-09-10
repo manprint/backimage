@@ -52,6 +52,60 @@ Il default `--platform linux/amd64` sceglie il manifest di bootstrap; i layer
 dati sono identici fra le piattaforme. `--cache-size` limita davvero la cache:
 i file meno recenti vengono eliminati prima che il limite venga superato.
 
+## `--overwrite` sovrappone, non sostituisce (0.4.1)
+
+`--overwrite` significa «scrivi sopra ciò che trovi», non «sostituisci
+l'albero». Fino alla 0.4.0 una directory già esistente sulla destinazione
+veniva **cancellata ricorsivamente** prima di essere ricreata, quindi
+ripristinare un solo sottoalbero dentro una directory popolata eliminava in
+silenzio i file che il backup non conteneva:
+
+```sh
+# 0.4.0: /srv/data/docs/note.txt spariva anche se il backup non lo conteneva.
+backimage restore IMAGE -x -C /srv/data --include '**/docs/report.pdf' --overwrite
+```
+
+Dalla 0.4.1 la semantica è quella di `tar -x`:
+
+| Sulla destinazione | Nell'archivio | Cosa succede |
+| --- | --- | --- |
+| directory | directory | nessuna cancellazione: i due alberi si sovrappongono e i metadati archiviati vengono applicati alla directory |
+| file | file | il file viene troncato e riscritto |
+| tipo diverso (file su directory, symlink su file, …) | qualsiasi | l'oggetto esistente viene rimosso e ricreato: non si può scrivere «sopra» un symlink o un device |
+
+Senza `--overwrite` nulla cambia: un nome già presente resta un errore.
+
+Chi contava sulla cancellazione — per esempio per ottenere una destinazione
+identica al backup e non un'unione — deve svuotarla esplicitamente prima del
+restore.
+
+## Una credenziale dichiara cosa ci si aspetta di leggere (0.4.1)
+
+Fornire `--passphrase-file`, `--passphrase-stdin`, `--password`, `--identity`
+oppure `BACKIMAGE_PASSPHRASE` significa dire «questo backup è cifrato». Dalla
+0.4.1, se il backup che si sta leggendo **non** lo è, il comando fallisce con
+un errore di integrità (exit 5) invece di ignorare la credenziale e riuscire.
+
+Serve a rendere visibile una sostituzione: nessun controllo interno a un backup
+cifrato impedisce di scambiare l'**intera** immagine con un backup in chiaro
+costruito da qualcun altro. Prima, il lettore vedeva `encryption.enabled:
+false`, lasciava cadere la passphrase e ripristinava quei file annunciando
+successo.
+
+La regola vale su tutti i comandi di lettura del binario host — `restore`,
+`verify`, `tar`, `ls`, `find` — e sull'autoestraente, che è un secondo ingresso
+sugli stessi byte.
+
+Chi legge deliberatamente backup misti in automazione usa `--allow-unencrypted`:
+
+```sh
+backimage restore IMAGE -x -C ./restore --passphrase-file ./pass --allow-unencrypted
+docker run --rm -e BACKIMAGE_PASSPHRASE IMAGE extract --out /restore --allow-unencrypted
+```
+
+Senza credenziali il comportamento è quello di sempre: un backup in chiaro si
+legge senza dire nulla a nessuno.
+
 ## Ispezione
 
 ```sh
@@ -153,3 +207,26 @@ L'exit code resta quello di integrità (5) anche quando il recupero ha salvato
 qualcosa: i dati mancanti sono un fallimento, per quanto parziale. Una entry è
 scritta solo se completa — un record tar troncato romperebbe tutte le entry
 successive.
+
+### `--continue` rispetta i filtri (0.4.1)
+
+Fino alla 0.4.0 `--continue` **annullava** `--include` e `--exclude`: il flag
+sostituiva lo stream selettivo con quello tollerante, che non conosceva alcuna
+selezione, e l'estrattore a valle veniva contemporaneamente informato che lo
+stream era «già filtrato». Il risultato era che
+
+```sh
+backimage restore IMAGE -x -C ./dest --continue --include '**/*.pdf' --overwrite
+```
+
+estraeva **l'intero backup** sopra la destinazione.
+
+Dalla 0.4.1 tolleranza ai chunk danneggiati e selezione sono proprietà
+indipendenti e si combinano: `--continue` con dei filtri emette solo le entry
+selezionate, e di quelle salta e rendiconta le non recuperabili. Vale sia verso
+il filesystem sia verso il tar, e `--strip-components` continua ad applicarsi
+come senza `--continue`.
+
+Il recupero parziale mantiene un intervallo **per entry** anche con una
+selezione attiva: unire gli intervalli adiacenti, come fa il restore selettivo
+non tollerante, farebbe perdere i vicini di un chunk rotto.

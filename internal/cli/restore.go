@@ -26,17 +26,29 @@ import (
 )
 
 type sourceFlags struct {
-	repo            string
-	localRepo       bool
-	ociLayout       string
-	platform        string
-	cacheSize       string
-	passphraseFile  string
-	passphraseStdin bool
-	password        string
-	passwordSet     bool
-	identity        string
-	registryUser    string // --registry-user: which login to use on this host
+	repo             string
+	localRepo        bool
+	ociLayout        string
+	platform         string
+	cacheSize        string
+	passphraseFile   string
+	passphraseStdin  bool
+	password         string
+	passwordSet      bool
+	identity         string
+	allowUnencrypted bool
+	registryUser     string // --registry-user: which login to use on this host
+}
+
+// hasCredential reports whether the caller offered a way to unlock a backup.
+// Any of them means the caller believes this backup is encrypted, which is the
+// premise requireEncryption checks.
+func (f sourceFlags) hasCredential() bool {
+	if f.identity != "" || f.passphraseFile != "" || f.passphraseStdin || f.password != "" {
+		return true
+	}
+	_, ok := os.LookupEnv("BACKIMAGE_PASSPHRASE")
+	return ok
 }
 
 var (
@@ -59,6 +71,7 @@ func addSourceFlags(f *cobra.Command, repoAlias bool) {
 	flags.Bool("passphrase-stdin", false, "read the backup passphrase from stdin")
 	flags.String("password", "", "backup passphrase inline (visible in shell history and in `ps`: prefer --passphrase-file)")
 	flags.String("identity", "", "age private key file, for a backup encrypted with --recipient")
+	flags.Bool("allow-unencrypted", false, "accept an unencrypted backup even when a passphrase or an identity was supplied")
 }
 
 func readSourceFlags(cmd *cobra.Command) sourceFlags {
@@ -67,7 +80,8 @@ func readSourceFlags(cmd *cobra.Command) sourceFlags {
 		platform: getFlagString(cmd, "platform"), cacheSize: getFlagString(cmd, "cache-size"),
 		passphraseFile: getFlagString(cmd, "passphrase-file"), passphraseStdin: getFlagBool(cmd, "passphrase-stdin"),
 		password: getFlagString(cmd, "password"), passwordSet: cmd.Flags().Changed("password"),
-		identity: getFlagString(cmd, "identity"), registryUser: registryUser(cmd),
+		identity: getFlagString(cmd, "identity"), allowUnencrypted: getFlagBool(cmd, "allow-unencrypted"),
+		registryUser: registryUser(cmd),
 	}
 	if cmd.Flags().Lookup("repo") != nil {
 		f.repo = getFlagString(cmd, "repo")
@@ -127,11 +141,11 @@ var openSourceForCLI = openImageSource
 
 func unlockBackup(ctx context.Context, b *recovery.Backup, flags sourceFlags, required bool) error {
 	if !b.Manifest.Encryption.Enabled {
-		return nil
+		return requireEncryption(flags)
 	}
 	if flags.identity != "" {
 		if err := b.Unlock(ctx, crypt.Identity{AgeKeyFile: flags.identity}); err != nil {
-			return &Error{Kind: KindPassphrase, Msg: "identità age non valida", Err: err}
+			return unlockError("identità age non valida", err)
 		}
 		return nil
 	}
@@ -158,9 +172,52 @@ func unlockBackup(ctx context.Context, b *recovery.Backup, flags sourceFlags, re
 	}
 	defer wipeBytes(pass)
 	if err := b.Unlock(ctx, crypt.Identity{Passphrase: pass}); err != nil {
-		return &Error{Kind: KindPassphrase, Msg: "passphrase errata", Err: err}
+		return unlockError("passphrase errata", err)
 	}
 	return nil
+}
+
+// unlockError classifies a failed unlock.
+//
+// Two very different events end up here. The credential can be wrong, which is
+// the user's problem and exits 4. Or the private metadata blob can fail
+// authentication — the A01 downgrade, where the blob of an encrypted backup
+// arrives with no tag at all — which is the backup's problem and exits 5.
+// Calling the second one "passphrase errata" sent the user looking for a typo
+// while the honest answer was that the image no longer matches what it claims
+// to be, and a script watching exit codes saw a credential error where the
+// backup had been tampered with.
+func unlockError(fallback string, err error) *Error {
+	if errors.Is(err, crypt.ErrIntegrity) || errors.Is(err, index.ErrBadSchema) {
+		return &Error{
+			Kind: KindIntegrity,
+			Msg:  "metadati privati del backup non autenticati",
+			Hint: "il backup potrebbe essere stato manomesso o sostituito: confronta il digest dell'immagine con quello atteso",
+			Err:  err,
+		}
+	}
+	return &Error{Kind: KindPassphrase, Msg: fallback, Err: err}
+}
+
+// requireEncryption turns "the backup is not encrypted, so the credential you
+// gave is unused" into an error instead of a silent success.
+//
+// The strict opener keeps a downgrade from happening inside an encrypted
+// backup; it says nothing about the whole backup being swapped for a plaintext
+// schema 1 one. That substitution used to be invisible: the reader noticed the
+// manifest said encryption was off, dropped the passphrase on the floor and
+// restored attacker-controlled files reporting success. Whoever supplies a
+// passphrase or an identity has stated what they expect to be reading, and a
+// backup that does not match it is a failure of that expectation.
+func requireEncryption(flags sourceFlags) error {
+	if flags.allowUnencrypted || !flags.hasCredential() {
+		return nil
+	}
+	return &Error{
+		Kind: KindIntegrity,
+		Msg:  "backup non cifrato, ma è stata fornita una credenziale: potrebbe essere stato sostituito",
+		Hint: "se il backup è davvero in chiaro usa --allow-unencrypted, oppure rimuovi passphrase e identità",
+	}
 }
 
 func wipeBytes(b []byte) {
@@ -276,6 +333,15 @@ func runRestore(cmd *cobra.Command, args []string) error {
 	stream := func(w io.Writer) error {
 		if keepGoing {
 			var perr error
+			if selected != nil {
+				// --continue used to swap the selective stream for the
+				// tolerant one, which had no notion of a selection: the whole
+				// backup came out and, with --overwrite, went over the
+				// destination. Tolerating damaged chunks and honouring the
+				// filters are independent properties.
+				partial, perr = b.StreamSelectedTarPartial(ctx, idx, selected, w, !getFlagBool(cmd, "no-verify"))
+				return perr
+			}
 			partial, perr = b.StreamTarPartial(ctx, idx, w, !getFlagBool(cmd, "no-verify"))
 			return perr
 		}
@@ -368,6 +434,12 @@ func restoreTar(cmd *cobra.Command, refText string, stream func(io.Writer) error
 	return f.Close()
 }
 
+// restoreExtract writes the stream into --destination.
+//
+// alreadyFiltered says the stream itself already contains only the selected
+// entries, so the extractor must not filter a second time — a second pass over
+// an already-filtered stream drops the parent directories the selection pulled
+// in on purpose.
 func restoreExtract(cmd *cobra.Command, stream func(io.Writer) error, alreadyFiltered bool, report func(int64)) error {
 	dest := getFlagString(cmd, "destination")
 	if dest == "" {

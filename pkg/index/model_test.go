@@ -115,7 +115,7 @@ func TestWriteIndexClearRoundTrip(t *testing.T) {
 	if err := WriteIndex(&buf, sampleIndex(), nil); err != nil {
 		t.Fatal(err)
 	}
-	back, err := ReadIndex(bytes.NewReader(buf.Bytes()), nil)
+	back, err := ReadIndex(bytes.NewReader(buf.Bytes()), crypt.NewClearOpener())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -239,7 +239,7 @@ func TestIndexEndToEndEncrypted(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	opener, err := crypt.NewOpener(km)
+	opener, err := crypt.NewKeyedOpener(km)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -278,13 +278,13 @@ func TestWriteIndexInvalidEntries(t *testing.T) {
 }
 
 func TestReadIndexCorrupt(t *testing.T) {
-	if _, err := ReadIndex(bytes.NewReader([]byte("junk")), nil); err == nil {
+	if _, err := ReadIndex(bytes.NewReader([]byte("junk")), crypt.NewClearOpener()); err == nil {
 		t.Fatal("junk must fail")
 	}
-	if _, err := ReadIndex(bytes.NewReader([]byte(`{`)), nil); err == nil {
+	if _, err := ReadIndex(bytes.NewReader([]byte(`{`)), crypt.NewClearOpener()); err == nil {
 		t.Fatal("unfinished object must fail")
 	}
-	if _, err := ReadIndex(bytes.NewReader([]byte(`{"schemaVersion":99,"entries":[]}`+"\n")), nil); err == nil {
+	if _, err := ReadIndex(bytes.NewReader([]byte(`{"schemaVersion":99,"entries":[]}`+"\n")), crypt.NewClearOpener()); err == nil {
 		t.Fatal("schema 99 must fail")
 	}
 	// wrong key on an encrypted index
@@ -305,7 +305,7 @@ func TestReadIndexCorrupt(t *testing.T) {
 func mustOpener(t *testing.T) crypt.Opener {
 	t.Helper()
 	km := &crypt.KeyMaterial{SchemaVersion: 1, DEK: make([]byte, 32), NonceKey: make([]byte, 32)}
-	o, err := crypt.NewOpener(km)
+	o, err := crypt.NewKeyedOpener(km)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -350,7 +350,7 @@ func TestReadIndexStreamingErrors(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if _, err := ReadIndex(bytes.NewReader([]byte(c.blob)), nil); err == nil {
+			if _, err := ReadIndex(bytes.NewReader([]byte(c.blob)), crypt.NewClearOpener()); err == nil {
 				t.Fatal("expected error")
 			}
 		})

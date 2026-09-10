@@ -320,12 +320,27 @@ func under(root, p string) bool {
 
 func (x *extractor) createOne(ctx context.Context, dest, target string, hdr *tar.Header, tr *tar.Reader, stats *Stats) error {
 	// Overwrite handling.
-	if _, err := os.Lstat(target); err == nil {
+	//
+	// --overwrite overlays the archive onto the destination; it does not
+	// replace the destination tree. The difference matters for directories:
+	// RemoveAll on a directory that already exists deletes everything under
+	// it, including files the backup never contained, so restoring one
+	// selected subtree into a populated directory used to be a silent delete
+	// of its siblings. Two directories with the same name are the same
+	// directory — that is what `tar -x` does — and the metadata pass at the
+	// end applies the archived owner, mode and timestamps to it anyway.
+	//
+	// Everything else is still removed first: a symlink, a device or a fifo
+	// cannot be created over an existing name, and a regular file replacing a
+	// regular file is a replacement, not a merge.
+	if existing, err := os.Lstat(target); err == nil {
 		if !x.opts.Overwrite {
 			return fmt.Errorf("%q già esistente: %w", target, errNeedOverwrite)
 		}
-		if err := os.RemoveAll(target); err != nil {
-			return fmt.Errorf("remove existing %q: %w", target, err)
+		if !(existing.IsDir() && hdr.Typeflag == tar.TypeDir) {
+			if err := os.RemoveAll(target); err != nil {
+				return fmt.Errorf("remove existing %q: %w", target, err)
+			}
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("lstat %q: %w", target, err)
@@ -354,7 +369,11 @@ func (x *extractor) createOne(ctx context.Context, dest, target string, hdr *tar
 		}
 		stats.Dirs++
 	case tar.TypeReg:
-		f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY, mode)
+		// O_TRUNC belongs here even though the overwrite pass above removed
+		// any existing regular file: it is the one line that keeps this
+		// correct if that pass ever stops removing, instead of leaving the
+		// tail of a longer previous file behind the new content.
+		f, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, mode)
 		if err != nil {
 			return fmt.Errorf("create %q: %w", target, err)
 		}

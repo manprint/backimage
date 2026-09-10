@@ -30,7 +30,7 @@ func TestGoldenConvergentVector(t *testing.T) {
 	if got := hex.EncodeToString(blob); got != hex.EncodeToString(want) {
 		t.Fatalf("golden vector mismatch:\n got %s\nwant %s", hex.EncodeToString(blob), hex.EncodeToString(want))
 	}
-	o, err := NewOpener(km)
+	o, err := NewKeyedOpener(km)
 	if err != nil {
 		t.Fatal(err)
 	}

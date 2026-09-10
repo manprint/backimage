@@ -30,6 +30,8 @@ type fixture struct {
 	plainDigests []string
 	chunkPath    string
 	chunkCount   int
+	km           *crypt.KeyMaterial // nil for an unencrypted fixture
+	chunkBytes   int
 }
 
 // makeFixture writes a schema 1 backup: an encrypted one keeps its
@@ -80,7 +82,7 @@ func buildFixture(t *testing.T, encrypted bool, chunkBytes int, privateMeta bool
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer km.Wipe()
+		t.Cleanup(km.Wipe)
 		sealer, err = crypt.NewSealer(km, crypt.NonceRandom)
 		if err != nil {
 			t.Fatal(err)
@@ -167,6 +169,7 @@ func buildFixture(t *testing.T, encrypted bool, chunkBytes int, privateMeta bool
 		root: root, sourcePath: src, tarBytes: append([]byte(nil), plain.Bytes()...),
 		entries: entries, plainDigests: plainDigests,
 		chunkPath: filepath.Join(root, "data", "000000.blob"), chunkCount: len(rows),
+		km: km, chunkBytes: chunkBytes,
 	}
 }
 

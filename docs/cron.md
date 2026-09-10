@@ -206,7 +206,7 @@ Lo script propaga l'exit code di `backimage backup`
 | 2 | errore d'uso della CLI |
 | 3 | privilegi insufficienti |
 | 4 | passphrase mancante o sbagliata |
-| 5 | fallimento di integrità |
+| 5 | fallimento di integrità (digest discordanti, o un blob non autenticato in un backup cifrato) |
 | 6 | errore di rete o del registry |
 | 7 | interrotto (SIGINT/SIGTERM: il processo figlio viene terminato) |
 | 75 | un'altra esecuzione dello stesso job tiene il lock |

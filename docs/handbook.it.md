@@ -893,6 +893,7 @@ verifica completa non va usato.
 | `--overwrite` | se la destinazione non è vuota | senza il flag l'estrazione si rifiuta di sovrascrivere |
 | `--no-preserve-owner` | **da non usare** in questo scenario | serve solo per ripristini non privilegiati in una directory dell'utente |
 | spazio libero | ≥ dimensione dichiarata dal manifest, con margine | i file sparsi vengono riscritti densi e un hardlink non ricreabile diventa una copia |
+| `--allow-unencrypted` | **da non usare** qui | dalla 0.4.1 una passphrase su un backup non cifrato è un errore di integrità, perché è l'aspetto che avrebbe un'immagine sostituita con una in chiaro; il flag serve solo a chi legge di proposito backup misti in automazione |
 
 ```console
 # Con la CLI installata.

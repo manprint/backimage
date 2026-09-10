@@ -111,6 +111,12 @@ backimage restore ghcr.io/me/dumps:daily -o - --passphrase-file ./pass | tar -tv
 backimage restore local/dumps:t --oci-layout ./layout -x -C ./restore
 ```
 
+Fornire una passphrase o un'identità dichiara che ci si aspetta un backup
+cifrato. Dalla 0.4.1, se non lo è, il comando fallisce con un errore di
+integrità invece di ignorare in silenzio la credenziale: è esattamente
+l'aspetto che avrebbe un'immagine sostituita con una in chiaro. Per leggere di
+proposito backup misti c'è `--allow-unencrypted`.
+
 Senza `-x` né `-o` il tar va su stdout. Il digest in chiaro di ogni chunk viene
 verificato prima di scrivere qualsiasi cosa; `--strict` rifiuta di degradare
 anche una sola operazione di metadati, `--continue` salva tutto ciò che verifica
@@ -146,7 +152,10 @@ docker run --rm --privileged -e BACKIMAGE_PASSPHRASE=... \
 ```
 
 `extract` accetta anche `--include`, `--exclude`, `--strip-components`,
-`--overwrite`, `--strict`, `--no-preserve-owner` e `--cpus`. `tar` scrive dati
+`--overwrite`, `--strict`, `--no-preserve-owner` e `--cpus`. Dalla 0.4.1
+`--overwrite` sovrappone l'archivio alla destinazione invece di sostituirla:
+una directory già esistente non viene più cancellata con tutto il suo
+contenuto, quindi i file che il backup non contiene sopravvivono. `tar` scrive dati
 binari su stdout, quindi va sempre reindirizzato. Su Linux prendere il `tar` e
 scompattarlo come root è la via più fedele di tutte.
 
@@ -356,7 +365,7 @@ nella history della shell e in `ps`.
 | 2 | errore d'uso |
 | 3 | privilegi insufficienti |
 | 4 | passphrase mancante o sbagliata |
-| 5 | integrità fallita — i dati non corrispondono ai loro digest |
+| 5 | integrità fallita — i dati non corrispondono ai loro digest, oppure un blob di un backup cifrato non è autenticato |
 | 6 | errore di rete o del registry |
 | 7 | interrotto |
 

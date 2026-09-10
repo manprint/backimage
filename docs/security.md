@@ -188,6 +188,64 @@ Regressione: `TestNoVerifyStillCatchesForgedChunk` in `pkg/recovery` costruisce
 un blob forgiato che supera GCM, il controllo di dimensione e
 `verify --quick`, e verifica che venga comunque respinto.
 
+### Un backup cifrato non ha blob in chiaro (0.4.1)
+
+L'envelope dichiara nel proprio header quale AEAD lo protegge, e `aead=none` è
+un valore legittimo: è la forma che assume un backup **non** cifrato. Fino alla
+0.4.0 esisteva un solo lettore per entrambe le forme, e restituiva il payload di
+un blob `aead=none` anche quando possedeva la chiave. Riscrivere l'header di un
+blob è alla portata di chiunque possa riscrivere il blob — non serve alcuna
+chiave — quindi il percorso di lettura cifrato poteva essere convinto a
+consegnare byte che nessuno aveva autenticato: dati, indice dei file o metadati
+riservati, singolarmente o insieme.
+
+Dalla 0.4.1 i due lettori sono tipi distinti e la scelta fra loro si fa **una
+volta sola**, da `encryption.enabled` nel manifesto, mai dall'header del blob
+che si sta per leggere:
+
+| Lettore | Backup | `aead=none` | `aead=aes256-gcm` |
+| --- | --- | --- | --- |
+| `crypt.NewKeyedOpener` | cifrato | **rifiutato**, errore di integrità | aperto e verificato |
+| `crypt.NewClearOpener` | in chiaro | letto | rifiutato, «key material required» |
+
+Conseguenze dirette:
+
+- `index.ReadIndex` riceve l'aspettativa come parametro invece di dedurla dalla
+  forma del blob: dentro un backup cifrato un indice senza envelope, o con un
+  envelope non autenticato, è un errore di formato e non una versione vecchia.
+- `index.ReadPrivate` richiede un lettore con chiave. Il magic dell'envelope
+  dice «blob backimage», non «blob autenticato»: da solo lasciava passare un
+  `aead=none`.
+- Un manifesto che dichiara cifratura e non porta il blob privato dello schema
+  2 — o che dichiara di non essere cifrato e ne porta uno — viene respinto
+  prima che qualunque blob venga toccato.
+- Il rifiuto precede **sempre** l'emissione: nessun byte di plaintext raggiunge
+  tar, stdout o filesystem.
+- Il rifiuto esce con **codice 5, integrità**, su entrambi gli eseguibili. Un
+  blob privato non autenticato faceva fallire lo sblocco e usciva 4, «passphrase
+  errata»: mandava a cercare un errore di battitura mentre la risposta onesta
+  era che l'immagine non è più quella che dichiara di essere.
+
+Regressioni: `TestKeyedOpenerRejectsUnauthenticatedBlob` e
+`TestClearOpenerRejectsEncryptedBlob` (`pkg/crypt`),
+`TestReadIndexOfEncryptedBackupRejectsAClearEnvelope` e
+`TestReadPrivateRejectsAClearEnvelope` (`pkg/index`),
+`TestEncryptedBackupRefusesDowngradedBlobs` (`pkg/recovery`), che falsifica
+dati, indice e blob privato singolarmente e insieme e verifica su ogni comando
+di lettura che l'errore arrivi con zero byte scritti,
+`TestUnlockErrorSeparatesTamperingFromACredential` (`internal/cli`) e
+`TestUnlockErrorMatchesTheHostClassification`
+(`cmd/backimage-selfextract`) per la classificazione.
+
+End-to-end: `test/e2e/phase_A1.sh` costruisce un backup cifrato reale, ne
+riscrive dati, indice e blob privato come envelope in chiaro **riparando ogni
+numero pubblico che li descrive** — dimensioni, digest memorizzati, nomi dei
+blob, metadati dei layer — e li ripubblica come layout OCI e come immagine su
+registry. Nulla di verificabile senza la chiave resta incoerente: ciò che
+rifiuta il backup è solo la regola sull'AEAD. Lo script verifica il rifiuto sul
+binario host e sull'estrattore, per ogni comando di lettura, e verifica anche
+che le superfici ancora autenticate continuino a rispondere.
+
 ## La passphrase è l'unica difesa: dimensionarla di conseguenza
 
 Il file chiavi viaggia **dentro l'immagine** (`keys.pass.age` nel layer

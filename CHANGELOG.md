@@ -67,11 +67,80 @@ cambiano se i dati non sono cambiati, quindi il costo è il solo layer tool.
   perché assorbito in `staticcheck`, e le famiglie `ST1*`/`QF1*`, che la
   configurazione v1 non abilitava, restano disattivate.
 
+### Security
+
+- **Un backup cifrato non poteva più essere convinto a consegnare byte non
+  autenticati.** L'header di un envelope dichiara il proprio AEAD, e `aead=none`
+  è legittimo perché è la forma di un backup non cifrato. Esisteva però un solo
+  lettore per entrambe le forme, che restituiva il payload di un blob
+  `aead=none` **anche possedendo la chiave**: riscrivere quell'header non
+  richiede alcuna chiave, quindi chi poteva sostituire un blob dentro
+  un'immagine poteva farsi consegnare dati, indice dei file o metadati
+  riservati che nessuno aveva firmato. Ora i lettori sono due tipi distinti e
+  quale usare si decide una volta sola, da `encryption.enabled` nel manifesto,
+  mai dall'header del blob che si sta leggendo. Il rifiuto è un errore di
+  integrità e precede l'emissione: zero byte di plaintext raggiungono tar,
+  stdout o filesystem. `index.ReadIndex` e `index.ReadPrivate` ricevono
+  l'aspettativa come parametro invece di dedurla dalla forma del blob, e un
+  manifesto incoerente fra cifratura dichiarata e blob privato presente viene
+  respinto prima di toccare qualunque blob. Nessuna release ha mai prodotto un
+  blob `aead=none` dentro un backup cifrato, quindi nessun backup esistente
+  diventa illeggibile. Dettagli in `docs/security.md`.
+
+- **Un blob privato manomesso esce 5, non più 4.** Lo sblocco fallisce per due
+  motivi molto diversi — la credenziale è sbagliata, oppure il blob privato non
+  è autenticato — e finora entrambi uscivano 4 con «passphrase errata». Chi
+  leggeva quel codice cercava un errore di battitura mentre la risposta onesta
+  era che l'immagine non è più quella che dichiara di essere. Ora
+  `crypt.ErrIntegrity` e `index.ErrBadSchema` si classificano come integrità
+  (exit 5) su entrambi gli eseguibili, con il messaggio corrispondente.
+  **Cambio di comportamento** per chi discrimina sui codici di uscita.
+
+- **Una passphrase su un backup non cifrato ora è un errore.** L'opener stretto
+  impedisce il downgrade *dentro* un backup cifrato; non impedisce che l'intera
+  immagine venga sostituita con un backup in chiaro costruito da qualcun altro.
+  In quel caso il lettore vedeva `encryption.enabled: false`, lasciava cadere la
+  passphrase ricevuta e ripristinava annunciando successo. Chi fornisce
+  `--passphrase-file`, `--passphrase-stdin`, `--password`, `--identity` o
+  `BACKIMAGE_PASSPHRASE` sta dichiarando cosa si aspetta di leggere, quindi ora
+  un backup non cifrato è un errore di integrità (exit 5) su `restore`,
+  `verify`, `tar`, `ls`, `find` **e** sull'autoestraente. **Rottura
+  deliberata**: chi legge di proposito backup misti in automazione aggiunge
+  `--allow-unencrypted`. Senza credenziali nulla cambia.
+
+- **`--overwrite` non cancella più i figli che il backup non contiene.**
+  Il flag significa «scrivi sopra ciò che trovi», ma su una directory già
+  esistente veniva eseguito un `RemoveAll` prima di ricrearla: ripristinare un
+  solo sottoalbero dentro una destinazione popolata eliminava in silenzio i
+  file estranei al backup. Ora la semantica è quella di `tar -x`: directory su
+  directory si sovrappongono, file su file viene troncato e riscritto, e la
+  rimozione avviene solo quando il tipo dell'oggetto esistente **differisce**
+  da quello dell'entry — un symlink o un device non si possono sovrascrivere in
+  altro modo. **Cambio di comportamento**: chi contava sulla cancellazione per
+  ottenere una destinazione identica al backup deve svuotarla prima.
+
+- **`--continue` non annulla più `--include` e `--exclude`.** Il flag
+  sostituiva lo stream selettivo con quello tollerante ai chunk danneggiati,
+  che non conosceva alcuna selezione, e nello stesso momento diceva
+  all'estrattore che lo stream era già filtrato: `--continue --include
+  '**/*.pdf'` estraeva l'intero backup, e con `--overwrite` lo scriveva sopra
+  la destinazione. Tolleranza e selezione sono ora indipendenti e si combinano
+  (`Backup.StreamSelectedTarPartial`), sia verso il filesystem sia verso il
+  tar; `--strip-components` continua ad applicarsi.
+
 ### Added
 
 - **`version` nell'autoestraente.** Stampa versione e commit dell'estrattore
   incorporato senza toccare il backup e senza credenziali.
 - **`make vuln`.** Esegue `govulncheck ./...` da solo.
+- **`make e2e PHASE=A1`.** Costruisce un backup cifrato reale, ne riscrive
+  dati, indice e blob privato come envelope in chiaro riparando ogni numero
+  pubblico che li descrive, li ripubblica come layout OCI e su registry, e
+  verifica il rifiuto sul binario host e sull'autoestraente per ogni comando di
+  lettura — più i casi di `--overwrite` e di `--continue` con i filtri.
+- **`--allow-unencrypted`** su tutti i comandi di lettura del binario host e
+  sull'autoestraente: accetta un backup non cifrato anche quando è stata
+  fornita una credenziale.
 
 ### Fixed
 

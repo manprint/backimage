@@ -50,7 +50,7 @@ func testSealerOpener(t *testing.T, mode crypt.NonceMode) (crypt.Sealer, crypt.O
 	if err != nil {
 		t.Fatal(err)
 	}
-	opener, err := crypt.NewOpener(km)
+	opener, err := crypt.NewKeyedOpener(km)
 	if err != nil {
 		t.Fatal(err)
 	}

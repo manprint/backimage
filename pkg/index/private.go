@@ -140,17 +140,27 @@ func WritePrivate(w io.Writer, p *Private, sealer crypt.Sealer) error {
 	return err
 }
 
-// ReadPrivate reverses WritePrivate. opener must hold the backup key.
+// ReadPrivate reverses WritePrivate. opener must be a keyed one: this blob
+// exists to be encrypted, so a reader without a key has nothing to do here.
+//
+// Requiring a keyed opener is what closes the gap the envelope magic left
+// open. The magic says "this is a backimage blob", not "this blob is
+// authenticated": a header declaring aead=none carries it just as well, and
+// the permissive opener used to return its payload. The confidential metadata
+// of a backup would then have been read from bytes nobody signed.
 func ReadPrivate(r io.Reader, opener crypt.Opener) (*Private, error) {
+	if opener == nil {
+		return nil, crypt.ErrWrongPassphrase
+	}
+	if !opener.RequiresAuthentication() {
+		return nil, fmt.Errorf("%w: private metadata requires the backup key", ErrBadSchema)
+	}
 	raw, err := io.ReadAll(r)
 	if err != nil {
 		return nil, fmt.Errorf("reading private metadata: %w", err)
 	}
 	if !crypt.IsEnvelope(raw) {
 		return nil, fmt.Errorf("%w: private metadata is not an encrypted blob", ErrBadSchema)
-	}
-	if opener == nil {
-		return nil, crypt.ErrWrongPassphrase
 	}
 	payload, _, err := opener.Open(nil, crypt.RolePrivate, 0, raw)
 	if err != nil {

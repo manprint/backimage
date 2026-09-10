@@ -36,6 +36,31 @@ const skippedPathsCap = 50
 // chunk that failed is remembered so the following entries are dropped without
 // retrying it.
 func (b *Backup) StreamTarPartial(ctx context.Context, idx *index.Index, dst io.Writer, verify bool) (PartialReport, error) {
+	return b.streamTarPartial(ctx, idx, nil, dst, verify)
+}
+
+// StreamSelectedTarPartial is StreamTarPartial restricted to selected: it
+// tolerates damaged chunks *and* honours the filters, which used to be an
+// either-or.
+//
+// --continue swapped the selective stream for the tolerant one, and the
+// tolerant one had no notion of a selection: `--continue --include '**/*.pdf'`
+// therefore wrote the entire backup, and with --overwrite wrote it over the
+// destination. Combining the two here is what removes the choice between
+// "salvage what survives" and "restore only what I asked for".
+//
+// The entry ranges stay per-entry, as in the unfiltered case: merging
+// neighbouring ranges the way the non-partial selective stream does would make
+// one damaged chunk drop every entry sharing a range with it.
+func (b *Backup) StreamSelectedTarPartial(ctx context.Context, idx *index.Index, selected []index.FileEntry, dst io.Writer, verify bool) (PartialReport, error) {
+	if idx == nil {
+		return PartialReport{}, errors.New("il recupero parziale richiede l'indice dei file")
+	}
+	return b.streamTarPartial(ctx, idx, selectionSet(idx, selected), dst, verify)
+}
+
+// streamTarPartial carries both variants. wanted nil means every entry.
+func (b *Backup) streamTarPartial(ctx context.Context, idx *index.Index, wanted map[string]bool, dst io.Writer, verify bool) (PartialReport, error) {
 	report := PartialReport{}
 	if idx == nil {
 		return report, errors.New("il recupero parziale richiede l'indice dei file")
@@ -74,6 +99,11 @@ func (b *Backup) StreamTarPartial(ctx context.Context, idx *index.Index, dst io.
 
 	// One range per entry: merging them, as a selective restore does, would
 	// make one damaged chunk drop every neighbour in the same run.
+	//
+	// The range of an entry is computed from the *full* index even when a
+	// selection is active: where an entry ends is where the next one begins,
+	// and that neighbour is a property of the archive, not of what was asked
+	// for.
 	for i, e := range idx.Entries {
 		if err := ctx.Err(); err != nil {
 			return report, err
@@ -84,6 +114,9 @@ func (b *Backup) StreamTarPartial(ctx context.Context, idx *index.Index, dst io.
 		}
 		if e.TarOffset < 0 || end <= e.TarOffset || end > contentEnd {
 			return report, fmt.Errorf("%w: offset tar non validi per %q", index.ErrBadSchema, e.Path)
+		}
+		if wanted != nil && !wanted[e.Path] {
+			continue
 		}
 		buffered, err := b.readRange(e.TarOffset, end, load)
 		if err != nil {

@@ -333,7 +333,7 @@ func TestPipelineEncryptedDedupReusesConvergentKey(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		opener, err := crypt.NewOpener(km)
+		opener, err := crypt.NewKeyedOpener(km)
 		if err != nil {
 			t.Fatal(err)
 		}

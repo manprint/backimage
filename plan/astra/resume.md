@@ -13,14 +13,14 @@ DA-01…DA-05 in `overview.md` §3 e non si rinegoziano senza aggiornare quel do
 | --- | --- | --- | --- |
 | A0.1 migrazione lint a schema v2 | A10 | Haiku | **fatto** |
 | A0.2 `proto-check` con esiti distinti | — | Haiku | **fatto** |
-| A0.3 toolchain a go1.26.6 + target `vuln` | A10 | Sonnet | **in corso** |
+| A0.3 toolchain a go1.26.6 + target `vuln` | A10 | Sonnet | **fatto** |
 | A0.4 asset incorporati nella catena di build | A11 | Sonnet | **fatto** |
 | A0.5 race come gate dichiarato | — | Haiku | **fatto** |
 | A0.6 changelog release pubblicate | A10, A11 | Haiku | **fatto** |
-| A1.1 separazione degli opener | A01 | Opus + Sonnet | da fare |
-| A1.2 policy `require-encryption` | A01 | Sonnet | da fare |
-| A1.3 `--overwrite` non cancella figli estranei | A12 | Sonnet | da fare |
-| A1.4 `--continue` non annulla i filtri | A13 | Sonnet | da fare |
+| A1.1 separazione degli opener | A01 | Opus + Sonnet | **fatto** |
+| A1.2 policy `require-encryption` | A01 | Sonnet | **fatto** |
+| A1.3 `--overwrite` non cancella figli estranei | A12 | Sonnet | **fatto** |
+| A1.4 `--continue` non annulla i filtri | A13 | Sonnet | **fatto** |
 | A2.1 traversal con `os.Root` | A03 | Opus + Sonnet | da fare |
 | A2.2 hardlink dentro la radice | A02 | Sonnet | da fare |
 | A2.3 backslash nei nomi Unix | A17 | Sonnet | da fare |
@@ -109,7 +109,7 @@ uno stato.
 | ID | — |
 | Stato | none |
 | Intento | — |
-| Prossima azione | A1.1 separazione degli opener |
+| Prossima azione | A2.1 traversal con os.Root |
 | Lavoro a metà | none — tree consistent |
 
 ### Ledger
@@ -121,6 +121,10 @@ uno stato.
 | 3 | sub-fase | A0.5 | condizioni d'ambiente del gate race documentate in docs/CONTRIBUTING.md; verificata l'assenza di continue-on-error in CI | make race verde in locale su go1.26.6 (21 package ok, exit 0); nessun continue-on-error né if: condizionale sul job quality in ci.yml | uncommitted |
 | 4 | sub-fase | A0.4 | stamp buildinfo negli asset (LDFLAGS_EMBED senza Date), sotto-comando version nell'autoestraente, build/build-all dipendono da selfextract, test di coetaneita in internal/embedded | make lint/fmt/vet verdi; go test ./cmd/... ./internal/... verde; coeval test verificato in negativo (stamp errato e stamp assente falliscono, make selfextract ripristina); deps-check verde; nessun e2e fissa digest golden | uncommitted |
 | 5 | sub-fase | A0.6 | voce 0.4.1 nel CHANGELOG: nota sulle release pubblicate, come verificare e rigenerare, elenco delle advisory non raggiungibili | make docs-check verde; make check verde; batteria e2e 11/11 verde (00 01 04 05 06 07 08 08_stream 09 10 13) | uncommitted |
+| 6 | sub-fase | A1.1 | NewKeyedOpener/NewClearOpener al posto di NewOpener; ReadIndex/ReadPrivate con aspettativa esplicita; coerenza cifratura/blob privato verificata in newBackup | go test ./... verde; make lint 0 issues; docs-check verde; copertura pkg/index 69.4% -> 72.3% sui percorsi di rifiuto; TestEncryptedBackupRefusesDowngradedBlobs copre data/index/private/insieme x verify/no-verify x StreamTar/Index/StreamSelectedTar/StreamTarPartial/Verify con zero byte emessi | uncommitted |
+| 7 | sub-fase | A1.2 | policy require-encryption con uscita esplicita --allow-unencrypted su entrambi gli eseguibili | go test ./... verde; make lint 0 issues; docs-check verde; docs/cli.md rigenerato; test su restore/verify/ls/find + autoestraente list/verify/tar/extract, con passphrase-file, identity ed env, piu i due casi negativi (senza credenziale, e backup cifrato con passphrase corretta) | uncommitted |
+| 8 | sub-fase | A1.3 | --overwrite sovrappone invece di sostituire; RemoveAll solo su tipo discordante; O_TRUNC sulla creazione dei file regolari | go test ./... verde; make lint 0 issues; docs-check verde; TestOverwriteDoesNotDeleteChildrenTheBackupDoesNotContain verificato in negativo (con RemoveAll incondizionato fallisce); coperti figli estranei, tipi discordanti, troncamento, nomi ripetuti nel tar e il caso senza --overwrite | uncommitted |
+| 9 | sub-fase | A1.4 | --continue riapplica i filtri (alreadyFiltered corretto, StreamSelectedTarPartial per l'uscita tar), e2e phase_A1.sh con l'utensile di falsificazione forgeclear, classificazione a integrita' dei rifiuti | go test ./... verde; make check verde (fmt, vet, lint 0 issues, build, test, race, deps-check, docs-check, proto-check SKIP, vuln 0 raggiungibili); make e2e PHASE=A1 verde e verificato in negativo (rimuovendo il rifiuto aeadNone lo script fallisce su 'host tar restore'); A1 aggiunta alla matrice e2e di ci.yml | uncommitted |
 
 ### Deviazioni a runtime
 
@@ -133,6 +137,13 @@ uno stato.
 - A0.4 — cambio di contratto: con i placeholder in posto `go test ./internal/embedded` ora **fallisce** invece di tollerare. `make check` non ne risente (`build` precede `test`), CI nemmeno (`make embed` è il primo step). Documentato in docs/BUILD.md e AGENTS.md.
 - A0.3 — binfmt arm64 non era registrato sull'host: e2e phase_06 falliva con `exec /backimage: exec format error`. Registrato con `docker run --privileged --rm tonistiigi/binfmt --install arm64`, che è l'equivalente locale di `docker/setup-qemu-action` usata in CI.
 - A0 uscita di fase — `make check` verde in locale (fmt, vet, lint, build, test, race, deps-check, docs-check, proto-check SKIP senza protoc, vuln 0 raggiungibili) e batteria e2e completa 11/11 dopo il bump a go1.26.6. Drift protobuf verificato a parte con protoc 27.3 reale: nessuno.
+- A1.1 — l'aspettativa passa attraverso `Opener.RequiresAuthentication()` invece di un parametro aggiuntivo su ReadIndex/ReadPrivate: la politica resta legata all'oggetto che il chiamante ha scelto dal manifesto, e non si può passare un opener e un'aspettativa discordanti.
+- A1.1 — copertura di pkg/index a 72.3%: il residuo è quasi tutto `format.go` (FormatLong/WriteEntries/modeString, codice di visualizzazione allo 0%), estraneo ad A01. I lettori toccati da A01 sono ReadIndex, ReadPrivate, ReadChunkTable e MergePrivate, tutti con i rami di rifiuto ora coperti.
+- A1.2 — `cmdVerify` dell'autoestraente non passa da `openBackup`: apre da sé e chiama `unlock` solo se la cifratura è attiva. La policy è stata applicata anche lì, altrimenti `verify` sarebbe stato l'unico comando a benedire un backup sostituito.
+- A1.2 — `info` resta fuori dalla policy su entrambi gli eseguibili: è il comando dichiaratamente senza segreti, non emette dati del backup e su un backup non cifrato non chiama nemmeno unlock.
+- A1.4 — l'uscita di fase A1 ha aggiunto due cose non previste dal testo della fase. (1) test/e2e/tools/forgeclear: falsifica un backup reale riscrivendo i blob come envelope in chiaro e **riparando** ogni numero pubblico che li descrive (Sb, Ss, nome del blob, digest e storedBytes del layer, storedSha256 di index e private), poi ricostruisce l'immagine e la ripubblica su layout OCI e registry. Senza la riparazione il rifiuto sarebbe potuto arrivare da un digest discordante invece che dalla regola sull'AEAD, e il test non avrebbe provato nulla.
+- A1.4 — (2) classificazione: un blob privato non autenticato faceva fallire lo sblocco e usciva 4 («passphrase errata») su entrambi gli eseguibili. Il piano chiede che il rifiuto si classifichi come integrita'/formato, quindi crypt.ErrIntegrity e index.ErrBadSchema ora mappano su exit 5 (internal/cli/errors.go, cmd/backimage-selfextract/exit.go) e lo sblocco distingue manomissione da credenziale (unlockError in entrambi). Cambio di comportamento documentato in CHANGELOG, README, README.it, docs/cron.md, docs/security.md.
+- A1.4 — il daemon Docker resta fuori dalle sorgenti coperte dall'e2e: 'restore --local-repo' non legge nessun backup, nemmeno onesto, perche' docker save/daemon.Image ri-etichettano ogni layer come tar+gzip. Difetto anteriore al piano, registrato come B-A001 in plan/astra/bugs.md.
 
 ### Blocchi
 

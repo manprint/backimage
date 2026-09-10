@@ -82,6 +82,7 @@ Common flags:
   --passphrase-stdin   read the passphrase from stdin
   --passphrase-file F  read the passphrase from file F
   --identity F         age private key file
+  --allow-unencrypted  accept an unencrypted backup even with a credential given
 
 Extract flags:
   --cpus N             maximum CPUs used during extraction (default: half available CPUs)

@@ -378,21 +378,38 @@ func newZstdReader(r io.Reader) (*zstd.Decoder, error) {
 	return zr, nil
 }
 
-// ReadIndex reverses WriteIndex. opener may be nil when the index is known
-// to be unencrypted; a keyless opener from crypt handles clear envelopes.
+// ReadIndex reverses WriteIndex. opener is mandatory and states which
+// encryption the caller expects: it is the only thing that can tell an index
+// which is legitimately in the clear from one whose envelope was stripped.
+//
+// The nil-opener convenience it replaces defaulted to a keyless opener, so a
+// caller holding a key could still read an unauthenticated index of an
+// encrypted backup by simply not passing one — the A01 downgrade, one
+// forgotten argument away.
 func ReadIndex(r io.Reader, opener crypt.Opener) (*Index, error) {
+	if opener == nil {
+		return nil, fmt.Errorf("%w: reading an index requires an opener stating the expected encryption", ErrBadSchema)
+	}
 	raw, err := io.ReadAll(r)
 	if err != nil {
 		return nil, fmt.Errorf("reading index blob: %w", err)
 	}
 	payload := raw
-	if crypt.IsEnvelope(raw) {
-		if opener == nil {
-			opener, err = crypt.NewOpener(nil)
-			if err != nil {
-				return nil, err
-			}
+	switch {
+	case opener.RequiresAuthentication():
+		// Encrypted backup: the index is a sealed envelope, full stop. A bare
+		// zstd frame here is a stripped index, not an old format.
+		if !crypt.IsEnvelope(raw) {
+			return nil, fmt.Errorf("%w: the index of an encrypted backup is not an authenticated blob", ErrBadSchema)
 		}
+		payload, _, err = opener.Open(nil, crypt.RoleIndex, 0, raw)
+		if err != nil {
+			return nil, fmt.Errorf("opening index envelope: %w", err)
+		}
+	case crypt.IsEnvelope(raw):
+		// Unencrypted backup written through a sealer with no key: a clear
+		// envelope. The clear opener refuses an encrypted one, so nothing is
+		// decided by the header here.
 		payload, _, err = opener.Open(nil, crypt.RoleIndex, 0, raw)
 		if err != nil {
 			return nil, fmt.Errorf("opening index envelope: %w", err)

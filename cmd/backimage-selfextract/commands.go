@@ -340,6 +340,14 @@ func cmdVerify(ctx context.Context, args []string) error {
 		return err
 	}
 	defer b.Close()
+	// verify opens the backup itself instead of going through openBackup, so
+	// the policy has to be applied here as well: without this, `verify` is the
+	// one command that would still bless a substituted plaintext backup.
+	if !b.Manifest.Encryption.Enabled {
+		if err := common.requireEncryption(); err != nil {
+			return err
+		}
+	}
 	full := !b.Manifest.Encryption.Enabled
 	if b.Manifest.Encryption.Enabled && common.hasCredential() {
 		if err := common.unlock(ctx, b, false); err != nil {

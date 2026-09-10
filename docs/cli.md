@@ -199,6 +199,7 @@ backimage find IMAGE PATTERN [flags]
 ### Options
 
 ```
+      --allow-unencrypted        accept an unencrypted backup even when a passphrase or an identity was supplied
       --cache-size string        maximum size of the downloaded-layer cache, e.g. 512MiB, 4GiB (0 disables it) (default "2GiB")
   -h, --help                     help for find
       --identity string          age private key file, for a backup encrypted with --recipient
@@ -311,6 +312,7 @@ backimage inspect IMAGE [flags]
 ### Options
 
 ```
+      --allow-unencrypted        accept an unencrypted backup even when a passphrase or an identity was supplied
       --cache-size string        maximum size of the downloaded-layer cache, e.g. 512MiB, 4GiB (0 disables it) (default "2GiB")
       --files                    also list archived files (decrypts the index: needs the passphrase or age identity)
   -h, --help                     help for inspect
@@ -526,6 +528,7 @@ backimage ls IMAGE [PATH] [flags]
 ### Options
 
 ```
+      --allow-unencrypted        accept an unencrypted backup even when a passphrase or an identity was supplied
       --cache-size string        maximum size of the downloaded-layer cache, e.g. 512MiB, 4GiB (0 disables it) (default "2GiB")
       --exclude strings          skip paths matching this glob (repeatable)
   -h, --help                     help for ls
@@ -867,6 +870,7 @@ backimage restore [IMAGE] [flags]
 ### Options
 
 ```
+      --allow-unencrypted        accept an unencrypted backup even when a passphrase or an identity was supplied
       --cache-size string        maximum size of the downloaded-layer cache, e.g. 512MiB, 4GiB (0 disables it) (default "2GiB")
       --continue                 do not stop at the first damaged chunk: restore every entry that verifies and report the ones lost
       --cpus int                 maximum CPUs used for decompression and decryption (default: half the available CPUs) (default 8)
@@ -933,6 +937,7 @@ backimage verify IMAGE [flags]
 ### Options
 
 ```
+      --allow-unencrypted        accept an unencrypted backup even when a passphrase or an identity was supplied
       --cache-size string        maximum size of the downloaded-layer cache, e.g. 512MiB, 4GiB (0 disables it) (default "2GiB")
       --continue                 do not stop at the first integrity error: report them all
   -h, --help                     help for verify

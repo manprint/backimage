@@ -6,6 +6,7 @@ import (
 	"io/fs"
 
 	"github.com/manprint/backimage/pkg/crypt"
+	"github.com/manprint/backimage/pkg/index"
 )
 
 // Keep these values aligned with internal/cli/errors.go without importing
@@ -50,7 +51,10 @@ func exitCode(err error) int {
 	if errors.Is(err, crypt.ErrWrongPassphrase) || errors.Is(err, crypt.ErrNoPassphrase) || errors.Is(err, crypt.ErrEmptyPassphrase) {
 		return exitPassphrase
 	}
-	if errors.Is(err, crypt.ErrIntegrity) {
+	// Same classification as the host binary: a blob that fails authentication
+	// and a blob that is not the authenticated envelope the backup declares
+	// are both integrity answers, not generic failures.
+	if errors.Is(err, crypt.ErrIntegrity) || errors.Is(err, index.ErrBadSchema) {
 		return exitIntegrity
 	}
 	if errors.Is(err, fs.ErrPermission) {

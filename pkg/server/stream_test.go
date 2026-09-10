@@ -199,7 +199,7 @@ func TestIngestBuildsLayersManifestAndIndex(t *testing.T) {
 				if totals != (index.Totals{}) || commit.Manifest.Sources != nil {
 					t.Fatalf("public manifest leaks content: %+v / %v", totals, commit.Manifest.Sources)
 				}
-				opener, err := crypt.NewOpener(km)
+				opener, err := crypt.NewKeyedOpener(km)
 				if err != nil {
 					t.Fatal(err)
 				}
@@ -249,11 +249,12 @@ func TestIngestBuildsLayersManifestAndIndex(t *testing.T) {
 					t.Fatalf("layer %s was never uploaded", layer.Digest)
 				}
 			}
-			// The index must be readable with the key the client provided.
-			var opener crypt.Opener
+			// The index must be readable with the key the client provided, and
+			// with the clear opener when the client provided none.
+			opener := crypt.NewClearOpener()
 			if km != nil {
 				var openErr error
-				opener, openErr = crypt.NewOpener(km)
+				opener, openErr = crypt.NewKeyedOpener(km)
 				if openErr != nil {
 					t.Fatal(openErr)
 				}

@@ -144,16 +144,41 @@ func newBackup(source Source, blobs BlobSource, m *index.Manifest, t *index.Chun
 	if m.Chunking.Count != len(t.Chunks) {
 		return nil, fmt.Errorf("%w: manifest has %d chunks, table has %d", index.ErrBadSchema, m.Chunking.Count, len(t.Chunks))
 	}
+	if err := checkEncryptionShape(m); err != nil {
+		return nil, err
+	}
 	b := &Backup{source: source, blobs: blobs, Manifest: m, Chunks: t}
 	b.computeLayout()
 	if !m.Encryption.Enabled {
-		var err error
-		b.opener, err = crypt.NewOpener(nil)
-		if err != nil {
-			return nil, err
-		}
+		// Declared unencrypted: this reader can never authenticate anything,
+		// and says so. An encrypted blob found later is an error rather than a
+		// passphrase prompt.
+		b.opener = crypt.NewClearOpener()
 	}
+	// Declared encrypted: no opener until Unlock produces a keyed one. The
+	// choice is made here, once, from the manifest — never later from the
+	// header of the blob being read.
 	return b, nil
+}
+
+// checkEncryptionShape rejects manifests whose encryption fields do not
+// describe a shape this program ever writes.
+//
+// It runs before any blob is touched because these are the fields the rest of
+// the reader trusts: Encryption.Enabled picks the opener, and the private
+// reference is where the plaintext digests live. A manifest that claims
+// encryption while pointing at no private blob, or that claims none while
+// pointing at one, is either corrupt or assembled — either way it must not
+// reach the point where a blob decides what happens next.
+func checkEncryptionShape(m *index.Manifest) error {
+	if m.Private != nil && !m.Encryption.Enabled {
+		return fmt.Errorf("%w: unencrypted backup with an encrypted private metadata blob", index.ErrBadSchema)
+	}
+	if m.Encryption.Enabled && m.SchemaVersion >= index.SchemaVersionPrivate && m.Private == nil {
+		return fmt.Errorf("%w: encrypted backup of schema %d without its private metadata blob",
+			index.ErrBadSchema, m.SchemaVersion)
+	}
+	return nil
 }
 
 // computeLayout derives the per-chunk offsets inside each shared layer blob
@@ -267,7 +292,7 @@ func (b *Backup) Unlock(ctx context.Context, identity crypt.Identity) error {
 		km.Wipe()
 		return closeErr
 	}
-	opener, err := crypt.NewOpener(km)
+	opener, err := crypt.NewKeyedOpener(km)
 	if err != nil {
 		km.Wipe()
 		return err
@@ -520,27 +545,7 @@ func (b *Backup) StreamSelectedTar(ctx context.Context, idx *index.Index, select
 		return errors.New("nil index")
 	}
 	verify = b.mustVerify(verify)
-	wanted := make(map[string]bool, len(selected))
-	for _, e := range selected {
-		wanted[e.Path] = true
-	}
-	// Preserve explicit parent-directory records. Besides fidelity, this avoids
-	// leaving synthetic 0700 root-owned parents on bind-mounted restores.
-	for _, e := range selected {
-		for parent := path.Dir(e.Path); parent != "." && parent != "/"; parent = path.Dir(parent) {
-			wanted[parent] = true
-		}
-	}
-	// A selected hardlink needs its first occurrence to have appeared earlier.
-	for changed := true; changed; {
-		changed = false
-		for _, e := range idx.Entries {
-			if wanted[e.Path] && e.Type == index.TypeHardlink && !wanted[e.LinkTarget] {
-				wanted[e.LinkTarget] = true
-				changed = true
-			}
-		}
-	}
+	wanted := selectionSet(idx, selected)
 
 	total := b.prefix[len(b.prefix)-1]
 	contentEnd := total
@@ -613,6 +618,38 @@ func (b *Backup) StreamSelectedTar(ctx context.Context, idx *index.Index, select
 	}
 	b.reportIntegrity(used, len(b.Chunks.Chunks), verify)
 	return nil
+}
+
+// selectionSet expands the entries the user asked for into the set of index
+// paths a tar must carry for them to be usable.
+//
+// It is shared by the selective stream and by its partial variant so the two
+// cannot drift: a selection that means one thing with --continue and another
+// without it is the kind of difference nobody notices until a restore is
+// missing a parent directory.
+func selectionSet(idx *index.Index, selected []index.FileEntry) map[string]bool {
+	wanted := make(map[string]bool, len(selected))
+	for _, e := range selected {
+		wanted[e.Path] = true
+	}
+	// Preserve explicit parent-directory records. Besides fidelity, this avoids
+	// leaving synthetic 0700 root-owned parents on bind-mounted restores.
+	for _, e := range selected {
+		for parent := path.Dir(e.Path); parent != "." && parent != "/"; parent = path.Dir(parent) {
+			wanted[parent] = true
+		}
+	}
+	// A selected hardlink needs its first occurrence to have appeared earlier.
+	for changed := true; changed; {
+		changed = false
+		for _, e := range idx.Entries {
+			if wanted[e.Path] && e.Type == index.TypeHardlink && !wanted[e.LinkTarget] {
+				wanted[e.LinkTarget] = true
+				changed = true
+			}
+		}
+	}
+	return wanted
 }
 
 // VerifyResult summarises an integrity pass.

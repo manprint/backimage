@@ -43,10 +43,20 @@ type Sealer interface {
 }
 
 // Opener decrypts stored blobs.
+//
+// There are two implementations and the difference between them is the whole
+// point: a keyed opener refuses anything that is not authenticated, a clear
+// opener refuses anything that is. Which one a reader holds is decided once,
+// from what the manifest says the backup is, and never from what a blob header
+// claims to be — a blob header is written by whoever wrote the blob.
 type Opener interface {
 	// Open returns the compressed payload of one stored blob. role must be the
 	// one the blob was sealed with.
 	Open(dst []byte, role Role, chunkIndex uint32, blob []byte) ([]byte, compress.ID, error)
+	// RequiresAuthentication reports whether this opener rejects blobs that
+	// carry no AEAD tag. Callers use it to state their expectation about a
+	// whole blob before parsing it, not to choose a policy after seeing one.
+	RequiresAuthentication() bool
 }
 
 type sealer struct {
@@ -56,10 +66,18 @@ type sealer struct {
 	overhead int
 }
 
-type opener struct {
-	ae cipher.AEAD // nil when encryption is disabled
+// keyedOpener reads the blobs of an encrypted backup. Every blob must carry a
+// valid AES-256-GCM tag; an unauthenticated one is an integrity failure, not a
+// blob to be read faster.
+type keyedOpener struct {
+	ae cipher.AEAD
 	km *KeyMaterial
 }
+
+// clearOpener reads the blobs of a backup declared unencrypted. It has no key
+// and cannot acquire one, so an encrypted blob is an error rather than a
+// prompt.
+type clearOpener struct{}
 
 // NewSealer builds a Sealer. When km is nil, encryption is disabled and the
 // envelope is written with aead=0 (the payload stays in clear).
@@ -80,10 +98,17 @@ func NewSealer(km *KeyMaterial, mode NonceMode) (Sealer, error) {
 	return &sealer{ae: ae, km: km, mode: mode, overhead: headerMaxSize + 16}, nil
 }
 
-// NewOpener builds an Opener. km may be nil only for unencrypted blobs.
-func NewOpener(km *KeyMaterial) (Opener, error) {
+// NewKeyedOpener builds the Opener of an encrypted backup. km is mandatory.
+//
+// It exists as a separate constructor because the single permissive opener it
+// replaces returned the payload of an unauthenticated blob even while holding
+// the key: an attacker who could rewrite a blob could strip its AEAD tag,
+// declare aead=none in the header, and have the reader hand the bytes over
+// unverified. Splitting the constructors makes that downgrade unrepresentable
+// rather than merely unlikely — there is no longer an object that can do both.
+func NewKeyedOpener(km *KeyMaterial) (Opener, error) {
 	if km == nil {
-		return &opener{}, nil
+		return nil, errors.New("keyed opener requires key material")
 	}
 	if err := km.Validate(); err != nil {
 		return nil, err
@@ -92,8 +117,11 @@ func NewOpener(km *KeyMaterial) (Opener, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &opener{ae: ae, km: km}, nil
+	return &keyedOpener{ae: ae, km: km}, nil
 }
+
+// NewClearOpener builds the Opener of a backup declared unencrypted.
+func NewClearOpener() Opener { return clearOpener{} }
 
 func gcmFor(key []byte) (cipher.AEAD, error) {
 	block, err := aes.NewCipher(key)
@@ -178,8 +206,14 @@ func (s *sealer) Seal(dst []byte, role Role, chunkIndex uint32, codec compress.C
 	return dst, nil
 }
 
-// Open returns the compressed payload of one stored blob.
-func (o *opener) Open(dst []byte, role Role, chunkIndex uint32, blob []byte) ([]byte, compress.ID, error) {
+// RequiresAuthentication reports that this opener rejects unauthenticated blobs.
+func (o *keyedOpener) RequiresAuthentication() bool { return true }
+
+// Open returns the compressed payload of one stored blob of an encrypted
+// backup. An unauthenticated blob is refused: inside a backup that declares
+// itself encrypted there is no legitimate one, and reading it would be exactly
+// the downgrade the two-opener split exists to prevent.
+func (o *keyedOpener) Open(dst []byte, role Role, chunkIndex uint32, blob []byte) ([]byte, compress.ID, error) {
 	if !role.valid() {
 		return dst, 0, fmt.Errorf("unknown blob role %d", uint8(role))
 	}
@@ -189,17 +223,36 @@ func (o *opener) Open(dst []byte, role Role, chunkIndex uint32, blob []byte) ([]
 	}
 	switch h.AEAD {
 	case aeadNone:
-		// Clear blob; keyed or keyless opener both may read it.
-		return append(dst, blob[n:]...), h.Codec, nil
+		return dst, 0, fmt.Errorf("%w: unauthenticated blob in an encrypted backup", ErrIntegrity)
 	case aeadAES256GCM:
-		if o.ae == nil {
-			return dst, 0, errors.New("encrypted blob: key material required")
-		}
 		out, err := o.ae.Open(dst, h.Nonce[:], blob[n:], AAD(h, role, chunkIndex))
 		if err != nil {
 			return dst, 0, ErrIntegrity
 		}
 		return out, h.Codec, nil
+	default:
+		return dst, 0, fmt.Errorf("unsupported aead %d", h.AEAD)
+	}
+}
+
+// RequiresAuthentication reports that this opener has no key and therefore
+// cannot authenticate anything.
+func (clearOpener) RequiresAuthentication() bool { return false }
+
+// Open returns the payload of one blob of a backup declared unencrypted.
+func (clearOpener) Open(dst []byte, role Role, _ uint32, blob []byte) ([]byte, compress.ID, error) {
+	if !role.valid() {
+		return dst, 0, fmt.Errorf("unknown blob role %d", uint8(role))
+	}
+	h, n, err := ParseHeader(blob)
+	if err != nil {
+		return dst, 0, err
+	}
+	switch h.AEAD {
+	case aeadNone:
+		return append(dst, blob[n:]...), h.Codec, nil
+	case aeadAES256GCM:
+		return dst, 0, errors.New("encrypted blob: key material required")
 	default:
 		return dst, 0, fmt.Errorf("unsupported aead %d", h.AEAD)
 	}

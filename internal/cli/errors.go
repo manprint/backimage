@@ -3,6 +3,9 @@ package cli
 import (
 	"errors"
 	"fmt"
+
+	"github.com/manprint/backimage/pkg/crypt"
+	"github.com/manprint/backimage/pkg/index"
 )
 
 // Kind classifies an error for exit-code mapping and user messaging.
@@ -61,7 +64,12 @@ func ExitCodeFor(err error) int {
 	if errors.Is(err, ErrInterrupted) {
 		return int(KindInterrupted)
 	}
-	if errors.Is(err, ErrIntegrity) {
+	// crypt.ErrIntegrity and index.ErrBadSchema are the two shapes a refused
+	// blob arrives in: an authentication failure and a blob that is not the
+	// authenticated envelope the backup claims. Both are integrity answers,
+	// and reporting them as the generic exit 1 hides from a script the one
+	// distinction that matters — the backup is not what it says it is.
+	if errors.Is(err, ErrIntegrity) || errors.Is(err, crypt.ErrIntegrity) || errors.Is(err, index.ErrBadSchema) {
 		return int(KindIntegrity)
 	}
 	return int(KindGeneric)
