@@ -113,12 +113,13 @@ uno stato.
 | Prossima azione | nessuna sul piano. Fuori dal piano restano aperti B-A001 e B-A002; B-A006 e B-A008 sono chiusi, la release e' T-A001 (0.5.0, DA-06) |
 | Lavoro a metà | none — tree consistent |
 
-CI su `main`: run **34450479510** (`37d400f`) verde su tutti e 22 i job — quality, cross-build,
-windows, macos e le diciotto fasi e2e, `A7` compresa. E' la prima corsa che contiene A7.3, A7.4,
-A7.5 e l'uscita di fase. Il run successivo, 34453581698 (`ef7c23c`, sette righe di markdown e
-nient'altro), e' uscito rosso su `e2e phase 09` ed e' tornato 22/22 verde al rerun dello stesso
-job, senza toccare una riga: e' il flake registrato come B-A006. Le corse vengono cancellate dal
-gruppo di concorrenza quando ne parte un'altra: fa fede l'ultima.
+CI su `main`: run **34474393211** (`dc93bc1`) verde su tutti e 22 i job — quality, cross-build,
+windows, macos e le diciotto fasi e2e. E' la prima corsa che contiene i fix di B-A008 e B-A006, i
+due difetti che tenevano rossa la CI del tag `v0.5.0` (run 34469867722): la fixture A20 della fase
+A6, che misurava a volte il rifiuto sbagliato, e lo spool orfano che la fase 09 trovava in
+`--work-dir`. Con B-A006 chiuso, `e2e phase 09` non ha piu' il flake registrato sui run
+34436146427 e 34453581698. Le corse vengono cancellate dal gruppo di concorrenza quando ne parte
+un'altra: fa fede l'ultima.
 
 ### Ledger
 
@@ -168,8 +169,8 @@ gruppo di concorrenza quando ne parte un'altra: fa fede l'ultima.
 | 42 | bug | B-A006 | `e2e phase 09` fallisce a intermittenza in CI e le sue asserzioni sono mute: sotto `set -e` un `[ ... ]` nudo termina lo script senza stampare niente, quindi il log dice che la fase e' caduta nell'ultima sezione ma non quale proprieta' sia venuta meno. Ogni asserzione della fase ora si nomina (`ok` e `same`), il controllo del work dir elenca i file che trova, il trap dumpa anche `server.out` e `noauth-server.err` | `make e2e PHASE=09` verde in locale con le asserzioni nuove; il flake e' provato non essere una regressione dal diff `37d400f..ef7c23c` (solo `plan/astra/resume.md`) e dal rerun del solo job, tornato verde sullo stesso commit; la causa **non** e' chiusa e resta APERTA nel ledger bug | ff908e4 |
 | 43 | bug | B-A007 | `release.yml` eseguiva `make check` installando golangci-lint **v1**.64.8 (il Makefile pretende `v2.1.6` e `.golangci.yml` e' schema v2) e nessun `govulncheck` (il target `vuln`, aggiunto in A0.3, fallisce se manca): nessun tag avrebbe potuto pubblicare. Allineato a `ci.yml`, piu' `BACKIMAGE_REQUIRE_PROTOC=1` sul gate | trovato leggendo il workflow prima di usarlo, non da una corsa rossa: dalla v0.4.0 non e' stato pubblicato niente; la prova e' la corsa di release del tag v0.5.0 | 855bbec |
 | 44 | task | T-A001 | la release del piano si chiama 0.5.0: `0.4.1` → `0.5.0` in 21 file fuori da `plan/`, sezione changelog `## [0.5.0] - 2026-09-10`, preambolo riscritto sulla compatibilita' reale (envelope 3, materiale di chiave schema 2, legame nel blob privato; cosa una 0.4.0 non legge piu'; il costo del primo incrementale cifrato), decisione DA-06 | make check verde (fmt, vet, lint 0 issues, build, test, race, deps-check, docs-check, proto-check SKIP, vuln 0 raggiungibili); la versione di v0.4.0 verificata sui sorgenti del tag (`envelopeVersion = 2`, accetta 1 e 2) invece che a memoria | 855bbec |
-| 45 | bug | B-A008 | la fixture A20 di `test/e2e/phase_A6.sh` scambiava fra due chunk sia `ss` sia `sb`: quando i due cadevano in layer diversi la somma per layer si muoveva e `index.ValidateChunkTable` (A7.1) rifiutava prima del legame sigillato, misurando un'altra proprieta'. La forgia scambia ora solo il digest memorizzato, che nessun controllo di quantita' guarda | `make e2e PHASE=A6` verde in locale; `make check` verde (fmt, vet, lint, build, test, race, deps-check, docs-check, proto-check, vuln) | uncommitted |
-| 46 | bug | B-A006 | `Session.Run` liberava la pipeline a ogni `return` che ne aveva bisogno, e `throttle` ritorna `ctx.Err()` senza passare da `fail()`: una sessione annullata dentro il rate limiter usciva con l'ingest ancora vivo e lo spool del layer restava in `--work-dir`. Il teardown e' ora un `defer` di `Run` | `TestACancelledSessionInsideTheRateLimiterLeavesNoSpool` rosso senza il `defer` (anche sotto `-race`, con il nome del file rimasto) e verde con; `make check` verde; `make e2e PHASE=09` verde 3 volte su 3 | uncommitted |
+| 45 | bug | B-A008 | la fixture A20 di `test/e2e/phase_A6.sh` scambiava fra due chunk sia `ss` sia `sb`: quando i due cadevano in layer diversi la somma per layer si muoveva e `index.ValidateChunkTable` (A7.1) rifiutava prima del legame sigillato, misurando un'altra proprieta'. La forgia scambia ora solo il digest memorizzato, che nessun controllo di quantita' guarda | `make e2e PHASE=A6` verde in locale; `make check` verde (fmt, vet, lint, build, test, race, deps-check, docs-check, proto-check, vuln) | 3ffa54c |
+| 46 | bug | B-A006 | `Session.Run` liberava la pipeline a ogni `return` che ne aveva bisogno, e `throttle` ritorna `ctx.Err()` senza passare da `fail()`: una sessione annullata dentro il rate limiter usciva con l'ingest ancora vivo e lo spool del layer restava in `--work-dir`. Il teardown e' ora un `defer` di `Run` | `TestACancelledSessionInsideTheRateLimiterLeavesNoSpool` rosso senza il `defer` (anche sotto `-race`, con il nome del file rimasto) e verde con; `make check` verde; `make e2e PHASE=09` verde 3 volte su 3 | dc93bc1 |
 
 ### Deviazioni a runtime
 
