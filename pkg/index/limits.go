@@ -240,3 +240,28 @@ func (l *metadataLimiter) exceeded() error {
 	return fmt.Errorf("%w: %s is larger than the %d bytes a reader will hold for it",
 		ErrBadSchema, l.what, l.max)
 }
+
+// MaxIndexEntries and MaxPathBytes bound the shape of the file index.
+//
+// Neither derives from a field of the backup: the number of archived files is
+// confidential (it lives in the sealed metadata) and is not available while
+// the index itself is being parsed. They are documented defaults instead.
+//
+//   - MaxIndexEntries is 10 million. What it really bounds is the entry slice,
+//     which at that count is already a couple of gigabytes of live objects,
+//     and 10 million files is far past what this tool can archive inside its
+//     own layer limits.
+//   - MaxPathBytes is 4096, the longest path a Linux filesystem accepts. A tar
+//     can carry a longer one through a PAX record, but nothing could ever
+//     restore it, and the index is where the reader decides how much memory a
+//     name costs.
+const (
+	MaxIndexEntries = 10_000_000
+	MaxPathBytes    = 4096
+)
+
+// maxIndexEntries is the value actually enforced. It is a variable so a test
+// can lower it: building an index of ten million entries to prove that ten
+// million and one are refused would cost more memory than the limit exists
+// to save.
+var maxIndexEntries = MaxIndexEntries

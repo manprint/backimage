@@ -266,3 +266,25 @@ quel valore non c'è ancora, il tetto è la dimensione massima del chunk
 dichiarata dal manifest. Il limite non consegna il byte che dimostra il
 superamento: chi legge di solito sta scrivendo altrove, e un rifiuto che
 emette parte di ciò che rifiuta non è un rifiuto.
+
+### Forma dell'indice dei file
+
+`validateEntries` controllava path non vuoto, tipo noto, dimensioni non
+negative, modo parsabile, digest esadecimale e link target presente. Non
+controllava nulla di quel che i suoi lettori **assumono**:
+
+| Vincolo | Perché |
+| --- | --- |
+| al massimo `MaxIndexEntries` (10 milioni) voci, verificato *mentre* si decodifica | il costo è la slice delle voci, non il blob compresso |
+| path e link target al massimo `MaxPathBytes` (4096 byte) | è il più lungo che un filesystem Linux accetti: un nome più lungo non sarebbe comunque ripristinabile |
+| un path compare una volta sola | due voci con lo stesso path rendono ambigua la selezione e priva di senso l'estensione della prima |
+| gli offset tar crescono in senso stretto | il recupero parziale calcola la fine di una voce dall'inizio della successiva |
+
+I due numeri assoluti non derivano da un campo del backup: quanti file
+contiene è un dato riservato, che vive nei metadati sigillati e non è
+disponibile mentre l'indice viene letto. Sono default motivati, e 10 milioni
+di voci sono già un paio di gigabyte di oggetti vivi.
+
+La copertura degli offset entro la fine del contenuto resta dov'era, in
+`pkg/recovery/partial.go`: dipende dal totale in chiaro, che l'indice non
+conosce.

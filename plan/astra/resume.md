@@ -44,7 +44,7 @@ DA-01…DA-05 in `overview.md` §3 e non si rinegoziano senza aggiornare quel do
 | A7.1 allocazioni derivate da campi pubblici | A09 | Sonnet | **fatto** |
 | A7.2 blob di metadati con tetto | A09 | Sonnet | **fatto** |
 | A7.3 limite di memoria in decompressione | A09 | Sonnet | **fatto** |
-| A7.4 limiti di forma dell'indice | A09 | Sonnet | da fare |
+| A7.4 limiti di forma dell'indice | A09 | Sonnet | **fatto** |
 | A7.5 conteggi e risorse sul remoto | A09 | Sonnet | da fare |
 
 ## Da chiedere al team di quality
@@ -109,7 +109,7 @@ uno stato.
 | ID | — |
 | Stato | none |
 | Intento | — |
-| Prossima azione | A7.4 limiti di forma dell'indice |
+| Prossima azione | A7.5 conteggi e risorse sul remoto |
 | Lavoro a metà | none — tree consistent |
 
 CI su `main`: run 34439467365 (30d78b0) **verde** su quality, cross-build, windows, macos e
@@ -160,8 +160,13 @@ layer puo' assorbire.
 | 36 | sub-fase | A7.2 | `index.LimitMetadata` e `DefaultMaxMetadataBytes` (512 MiB, derivazione documentata): tetto su tutti e quattro i lettori di metadati, dimensione reale del file dove misurabile (`measure` in `pkg/recovery`), budget dell'intero layer dei metadati in `pkg/restore`; un chiamante puo' stringere il tetto, mai allargarlo | make check verde (fmt, vet, lint 0 issues, build, test, race, deps-check, docs-check, proto-check SKIP, vuln 0 raggiungibili); `TestAMetadataLayerCannotAskForMoreThanAReaderWillHold` misura l'allocazione su una bomba vera (generatore infinito dentro il tar del layer) e verificato in negativo: senza il budget la stessa corsa alloca 1 282 436 840 byte, con il budget meno di 4 MiB; tre test sul primitivo in `pkg/index/limits_test.go` | 5aa43fe |
 | 37 | bug | B-A005 | le fasi e2e A1 e A3 sono diventate rosse in CI dopo A6.3: `forgeclear` ripara i numeri pubblici dei blob che falsifica, e da A6.3 quella riparazione cambia il digest canonico del manifest, quindi il legame sigillato rifiutava **prima** della regola che ogni fixture misura. `forgeclear` ri-sigilla ora il legame quando ha la passphrase (e' l'attaccante con la chiave, lo stesso modello di `resealBinding` negli unit test) e lo lascia intatto quando non ce l'ha | phase A1, A3, A6 e phase_04 e2e verdi in locale; make check verde; il rifiuto del legame resta osservabile dove serve, cioe' nei casi A20 di `phase_A6.sh`, che non passano la passphrase | 01da173 |
 | 38 | sub-fase | A7.3 | `compress.MaxDecoderMemory` (128 MiB) su tutti i reader zstd (codec e i due lettori di metadati), piu' il tetto per chunk: la decompressione si ferma alla dimensione in chiaro dichiarata (`pb`, autenticata nel blob privato; il massimo del manifest come ripiego) e `index.LimitBytes` non consegna il byte che dimostra il superamento | make check verde (fmt, vet, lint 0 issues, build, test, race, deps-check, docs-check, proto-check SKIP, vuln 0 raggiungibili); `TestADecoderIsNotToldToHoldWhateverTheFrameAsksFor` su un frame di 115 byte che dichiara una finestra doppia del tetto; `TestAChunkCannotDecompressPastTheSizeItDeclares` su una bomba da 512 MiB compressa in meno di 1 MiB, misura l'allocazione (< 32 MiB) e i byte prodotti (esattamente il dichiarato, zero oltre); verificato in negativo (senza il tetto la bomba produce 512 MiB senza errore) | uncommitted |
+| 39 | sub-fase | A7.4 | forma dell'indice: `MaxIndexEntries` (10 milioni) fermato **durante** la decodifica, `MaxPathBytes` (4096) su path e link target, path unici, offset tar strettamente crescenti | make check verde (fmt, vet, lint 0 issues, build, test, race, deps-check, docs-check, proto-check SKIP, vuln 0 raggiungibili); `TestAnIndexHasAShapeItsReadersAlreadyAssume` copre 5 forme ostili, `TestTheEntryCountIsBoundedWhileItIsRead` prova che il tetto ferma il decoder e non la slice gia' costruita, verificato in negativo (disattivando la guardia nello streaming il rifiuto arriva solo da validateEntries, cioe' dopo l'allocazione) | uncommitted |
 
 ### Deviazioni a runtime
+
+- A7.4 — il conteggio massimo delle voci non deriva da un campo del backup: `Totals.Files` vive nel blob sigillato e non e' disponibile mentre l'indice viene decodificato; inoltre una corsa degradata puo' far divergere i conteggi dalle voci effettivamente registrate. E' quindi un default documentato (10 milioni), come il piano consente.
+- A7.4 — la copertura degli offset entro `contentEnd` resta in `pkg/recovery/partial.go`, dove gia' era: dipende dal totale in chiaro, che `pkg/index` non conosce. Qui e' stata aggiunta la monotonia stretta, che e' la proprieta' che il calcolo delle estensioni assume.
+- A7.4 — il tetto sulle voci e' una variabile non esportata (`maxIndexEntries`) accanto alla costante esportata: costruire un indice da dieci milioni di voci per provare che dieci milioni e uno vengono rifiutati costerebbe piu' memoria di quanta il limite ne risparmi. E' lo stesso motivo per cui `zstdWorkers` e' una variabile in `pkg/compress`.
 
 - A7.3 — `WithDecoderMaxMemory` limita la **finestra** di uno stream, non quanto lo stream emette: un frame con finestra piccola puo' produrre byte all'infinito. Sono quindi due limiti separati, ed e' il secondo (la dimensione in chiaro dichiarata per il chunk) a fermare una bomba. Il piano li tratta come una cosa sola.
 - A7.3 — il limitatore e' stato cambiato perche' non consegni il byte in eccesso: la prima forma leggeva `max+1` per distinguere «esattamente al tetto» da «oltre», e su un restore a passata singola quel byte sarebbe finito nella destinazione prima del rifiuto. Ora la prova del superamento e' una lettura di sonda che non viene mai consegnata.

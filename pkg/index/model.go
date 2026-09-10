@@ -476,6 +476,10 @@ func decodeIndexStreaming(r io.Reader, idx *Index) error {
 				return fmt.Errorf("index: entries is not an array")
 			}
 			for dec.More() {
+				if len(idx.Entries) >= maxIndexEntries {
+					return fmt.Errorf("%w: the index holds more than %d entries",
+						ErrBadSchema, maxIndexEntries)
+				}
 				var e FileEntry
 				if err := dec.Decode(&e); err != nil {
 					return fmt.Errorf("index entry: %w", err)
@@ -496,10 +500,37 @@ func decodeIndexStreaming(r io.Reader, idx *Index) error {
 }
 
 func validateEntries(entries []FileEntry) error {
+	if len(entries) > maxIndexEntries {
+		return fmt.Errorf("%w: the index holds %d entries, more than the %d a reader will take",
+			ErrBadSchema, len(entries), maxIndexEntries)
+	}
+	// Two entries with one path make the selection ambiguous and the range of
+	// the first one meaningless; offsets that do not grow make the range of
+	// every entry meaningless. Both are checked here, once, because both are
+	// assumed by every consumer of the index.
+	seen := make(map[string]int, len(entries))
+	previousOffset := int64(-1)
 	for i, e := range entries {
 		if e.Path == "" {
 			return fmt.Errorf("%w: entry[%d] empty path", ErrBadSchema, i)
 		}
+		if len(e.Path) > MaxPathBytes {
+			return fmt.Errorf("%w: entry[%d] has a %d byte path, more than the %d a filesystem can hold",
+				ErrBadSchema, i, len(e.Path), MaxPathBytes)
+		}
+		if len(e.LinkTarget) > MaxPathBytes {
+			return fmt.Errorf("%w: entry[%d] points at a %d byte target, more than the %d a filesystem can hold",
+				ErrBadSchema, i, len(e.LinkTarget), MaxPathBytes)
+		}
+		if first, dup := seen[e.Path]; dup {
+			return fmt.Errorf("%w: entry[%d] repeats the path of entry[%d]: %q", ErrBadSchema, i, first, e.Path)
+		}
+		seen[e.Path] = i
+		if e.TarOffset <= previousOffset {
+			return fmt.Errorf("%w: entry[%d] starts at offset %d, entry[%d] already started at %d",
+				ErrBadSchema, i, e.TarOffset, i-1, previousOffset)
+		}
+		previousOffset = e.TarOffset
 		if !entryTypes[e.Type] {
 			return fmt.Errorf("%w: entry[%d] unknown type %q", ErrBadSchema, i, e.Type)
 		}

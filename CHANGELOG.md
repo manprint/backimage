@@ -111,6 +111,15 @@ cambiano se i dati non sono cambiati, quindi il costo è il solo layer tool.
 
 ### Security
 
+- **L'indice dei file ha una forma, e ora è verificata.** Il numero di voci
+  non aveva tetto, i path e i link target nemmeno, un path poteva comparire
+  due volte e gli offset tar potevano non crescere — mentre il recupero
+  parziale calcola la fine di una voce dall'inizio della successiva. Ora il
+  conteggio è fermato *mentre* si decodifica (non dopo aver costruito la
+  slice), path e link target sono limitati a 4096 byte, i path duplicati sono
+  rifiutati e gli offset devono crescere in senso stretto. Tetti e loro
+  motivazione in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
 - **Nessun decoder costruito col default della libreria.** I reader zstd non
   passavano `WithDecoderMaxMemory`, il cui default è 64 GiB: la finestra la
   sceglie chi scrive il frame, e un frame valido che ne dichiara una enorme
