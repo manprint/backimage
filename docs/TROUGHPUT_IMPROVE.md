@@ -318,7 +318,7 @@ paths that need the bytes at write time. Not attempted here.
 
 The audit above is about pushing a backup. Reading one back had two costs of
 its own, both quadratic in the number of chunks rather than linear in the size
-of the data, and both removed in 0.4.1.
+of the data, and both removed in 0.5.0.
 
 ### 11. Every chunk re-read its layer blob from the start
 

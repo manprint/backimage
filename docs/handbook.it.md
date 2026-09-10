@@ -637,7 +637,7 @@ Tips:
 `--remove-local-image` rimuove la reference locale dal Docker daemon solo
 dopo che il restore è terminato senza errori. Richiede che l'host esponga il
 Docker socket (`DOCKER_HOST` o `/var/run/docker.sock`). Se il restore fallisce,
-l'immagine non viene rimossa. È un flag del **binario host**: dalla 0.4.1
+l'immagine non viene rimossa. È un flag del **binario host**: dalla 0.5.0
 l'autoestraente dentro l'immagine non ce l'ha più e non contiene il client
 Docker. `--cpus N` limita il budget CPU del restore;
 senza il flag il valore predefinito è metà dei processori disponibili, con
@@ -776,7 +776,7 @@ In modalità diretta Docker scarica l'immagine con `docker pull` oppure
 automaticamente al primo `docker run`; non serve installare `backimage` sul
 computer di destinazione. Il comando `extract` dell'immagine è il self-
 extractor incorporato e supporta anche `--include`, `--exclude`,
-`--strip-components` e `--no-preserve-owner`. Dalla 0.4.1
+`--strip-components` e `--no-preserve-owner`. Dalla 0.5.0
 `--remove-local-image` **non esiste più** nell'estrattore dell'immagine: la
 pulizia è un'operazione dell'host, `backimage restore --remove-local-image`,
 dove il socket del daemon è già disponibile. L'estrattore non contiene più il
@@ -952,7 +952,7 @@ destinazione».
 | `--overwrite` | se la destinazione non è vuota | senza il flag l'estrazione si rifiuta di sovrascrivere |
 | `--no-preserve-owner` | **da non usare** in questo scenario | serve solo per ripristini non privilegiati in una directory dell'utente |
 | spazio libero | ≥ dimensione dichiarata dal manifest, con margine | i file sparsi vengono riscritti densi e un hardlink non ricreabile diventa una copia |
-| `--allow-unencrypted` | **da non usare** qui | dalla 0.4.1 una passphrase su un backup non cifrato è un errore di integrità, perché è l'aspetto che avrebbe un'immagine sostituita con una in chiaro; il flag serve solo a chi legge di proposito backup misti in automazione |
+| `--allow-unencrypted` | **da non usare** qui | dalla 0.5.0 una passphrase su un backup non cifrato è un errore di integrità, perché è l'aspetto che avrebbe un'immagine sostituita con una in chiaro; il flag serve solo a chi legge di proposito backup misti in automazione |
 
 ```console
 # Con la CLI installata.
@@ -969,7 +969,7 @@ docker run --rm --privileged \
   extract --out /restore --overwrite --strict
 ```
 
-Nessun mount del socket Docker: l'estrattore non ne ha bisogno e dalla 0.4.1
+Nessun mount del socket Docker: l'estrattore non ne ha bisogno e dalla 0.5.0
 non contiene nemmeno il client. Se serve rimuovere l'immagine locale dopo il
 restore, è l'host a farlo con `backimage restore --remove-local-image`.
 

@@ -384,7 +384,7 @@ make vuln
 pinza `toolchain go1.26.6`, che chiude tutte le advisory della standard
 library raggiungibili da questo codice. Le advisory che restano sono negli
 import e nei moduli richiesti e non risultano chiamate; sono elencate nel
-`CHANGELOG.md` della 0.4.1.
+`CHANGELOG.md` della 0.5.0.
 
 I test root-gated e alcuni e2e richiedono privilegi reali, xattr, ACL,
 capability, device/FIFO, Docker o rete. Non sostituirli con mock quando il gate

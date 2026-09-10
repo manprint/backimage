@@ -93,7 +93,7 @@ func TestOnlyTheAttestationDecidesReuse(t *testing.T) {
 		material *crypt.KeyMaterial
 		want     string
 	}{
-		{"pre-0.4.1 material has no attestation", legacy, "epoca crittografica"},
+		{"pre-0.5.0 material has no attestation", legacy, "epoca crittografica"},
 		{"older envelope", oldEpoch, "un'altra versione"},
 		{"newer envelope", newEpoch, "un'altra versione"},
 		{"random nonces", randomMode, "modalita' nonce"},

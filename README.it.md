@@ -114,7 +114,7 @@ backimage restore local/dumps:t --oci-layout ./layout -x -C ./restore
 ```
 
 Fornire una passphrase o un'identità dichiara che ci si aspetta un backup
-cifrato. Dalla 0.4.1, se non lo è, il comando fallisce con un errore di
+cifrato. Dalla 0.5.0, se non lo è, il comando fallisce con un errore di
 integrità invece di ignorare in silenzio la credenziale: è esattamente
 l'aspetto che avrebbe un'immagine sostituita con una in chiaro. Per leggere di
 proposito backup misti c'è `--allow-unencrypted`.
@@ -200,7 +200,7 @@ docker run --rm --cap-drop ALL --security-opt no-new-privileges \
 ```
 
 `extract` accetta anche `--include`, `--exclude`, `--strip-components`,
-`--overwrite`, `--strict`, `--no-preserve-owner` e `--cpus`. Dalla 0.4.1
+`--overwrite`, `--strict`, `--no-preserve-owner` e `--cpus`. Dalla 0.5.0
 `--overwrite` sovrappone l'archivio alla destinazione invece di sostituirla:
 una directory già esistente non viene più cancellata con tutto il suo
 contenuto, quindi i file che il backup non contiene sopravvivono. `tar` scrive dati

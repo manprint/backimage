@@ -5,7 +5,7 @@
 > vettori golden e domande aperte — c'è il
 > [dossier per una review crittografica indipendente](crypto-review.md).
 
-Versione: 3 · Aggiornato: 0.4.1 · Applicabile a: envelope `BIMGCHK1` v3, keyfile age (schema 2, attestato), CLI (`--dedup`, `--rotate-key`, `genpass`).
+Versione: 3 · Aggiornato: 0.5.0 · Applicabile a: envelope `BIMGCHK1` v3, keyfile age (schema 2, attestato), CLI (`--dedup`, `--rotate-key`, `genpass`).
 
 ## Catena di elaborazione (ordine invariabile)
 
@@ -70,7 +70,7 @@ scrive. Un `backimage` precedente rifiuta un blob nuovo con
   dizionario pubblico. Questa modalità rivela comunque l'uguaglianza dei chunk a
   chi osserva il registry.
 - No riutilizzo nonce tra modalità: il client riusa una `KeyMaterial` solo se
-  **quel materiale lo dichiara di sé**. Da 0.4.1 il JSON avvolto da age porta
+  **quel materiale lo dichiara di sé**. Da 0.5.0 il JSON avvolto da age porta
   `envelopeVersion`, `nonceMode` e `reuse`, ed è l'unica autorità sul riuso; da
   `random` a `convergent`, da un'altra epoca dell'envelope, o da una chiave
   senza attestazione, genera sempre una nuova chiave. GCM con nonce ripetuti
@@ -91,7 +91,7 @@ I blob di metadati (`index.json.zst`, `private.json.zst`) sono sigillati con lo
 stesso schema e con un `role` distinto, quindi il nonce dipende dal contenuto e
 dal tipo di blob.
 
-#### Perché il nonce copre i dati autenticati (0.4.1)
+#### Perché il nonce copre i dati autenticati (0.5.0)
 
 Fino alla 0.4.0 il nonce convergente derivava da ruolo e payload, mentre l'AAD
 copriva l'header intero. Due blob con lo stesso payload e header diverso
@@ -190,7 +190,7 @@ Restano inevitabilmente osservabili: l'esistenza del backup, il momento in cui
 cifrato (quindi un profilo grossolano di comprimibilità), oltre a quanto
 `--dedup` rivela per costruzione.
 
-### Legame fra i file di metadati (0.4.1)
+### Legame fra i file di metadati (0.5.0)
 
 `manifest.json` e `chunks.json` sono pubblici e non firmati, e l'unico
 controllo incrociato che sia mai esistito era che i conteggi dei chunk
@@ -262,7 +262,7 @@ Regressione: `TestNoVerifyStillCatchesForgedChunk` in `pkg/recovery` costruisce
 un blob forgiato che supera GCM, il controllo di dimensione e
 `verify --quick`, e verifica che venga comunque respinto.
 
-### Un backup cifrato non ha blob in chiaro (0.4.1)
+### Un backup cifrato non ha blob in chiaro (0.5.0)
 
 L'envelope dichiara nel proprio header quale AEAD lo protegge, e `aead=none` è
 un valore legittimo: è la forma che assume un backup **non** cifrato. Fino alla
@@ -273,7 +273,7 @@ chiave — quindi il percorso di lettura cifrato poteva essere convinto a
 consegnare byte che nessuno aveva autenticato: dati, indice dei file o metadati
 riservati, singolarmente o insieme.
 
-Dalla 0.4.1 i due lettori sono tipi distinti e la scelta fra loro si fa **una
+Dalla 0.5.0 i due lettori sono tipi distinti e la scelta fra loro si fa **una
 volta sola**, da `encryption.enabled` nel manifesto, mai dall'header del blob
 che si sta per leggere:
 
@@ -390,7 +390,7 @@ non esegue il controllo che gli si chiede di fare. La difesa è **fuori banda**:
 `docker run IMAGE restore` resta il percorso comodo e va bene per un'immagine
 che non ha mai lasciato un perimetro fidato.
 
-### `--expect-digest`: ancorare la lettura a un valore esterno (0.4.1)
+### `--expect-digest`: ancorare la lettura a un valore esterno (0.5.0)
 
 `restore`, `verify`, `ls`, `find` e `inspect` del **binario host** accettano
 `--expect-digest sha256:…`. Se l'immagine che il riferimento risolve non ha

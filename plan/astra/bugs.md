@@ -11,6 +11,7 @@ nessuna fase. Ognuno ha un ID stabile, non riusato.
 | B-A004 | CI (job macos, aggiunto in A1) | RISOLTO | fuori da Linux il writer non riconosceva hardlink e device e azzerava atime/ctime |
 | B-A005 | CI (e2e A1 e A3, dopo A6.3) | RISOLTO | `forgeclear` invalidava il legame sigillato riparando i numeri pubblici, e il rifiuto arrivava prima della regola che la fixture misura |
 | B-A006 | CI (e2e 09) | APERTO | la fase 09 fallisce a intermittenza nell'ultima sezione, e le sue asserzioni sono mute: il log non dice quale sia caduta |
+| B-A007 | preparazione della release 0.5.0 | RISOLTO | `release.yml` installava golangci-lint v1 e nessun govulncheck: il suo `make check` sarebbe fallito al primo gate, quindi nessun tag poteva pubblicare |
 
 ---
 
@@ -253,3 +254,36 @@ ricevendo un layer (e' il punto del test di resume), e un processo terminato
 mentre scrive il proprio spool puo' lasciarlo li'. E' un'ipotesi, non una
 diagnosi: la prossima corsa rossa lo dira' da sola, ed e' esattamente per
 questo che la diagnosticabilita' viene prima del fix.
+
+---
+
+## B-A007 — il workflow di release non poteva superare il proprio gate
+
+**Trovato**: preparando il tag `v0.5.0`, leggendo `.github/workflows/release.yml`
+prima di usarlo. Non e' stato trovato da una corsa rossa perche' dalla v0.4.0
+in poi non e' stato pubblicato niente: il workflow e' rimasto fermo mentre il
+gate che invoca cambiava sotto di lui.
+
+**Il difetto**, due volte lo stesso: il job `verify` esegue `make check`, e non
+installava quel che `make check` pretende.
+
+- `go install github.com/golangci/golangci-lint/cmd/golangci-lint@v1.64.8` — il
+  modulo **v1**. A0.1 ha portato `.golangci.yml` allo schema v2 e il target
+  `lint` del Makefile confronta la versione trovata con `GOLANGCI_VERSION`
+  (`v2.1.6`), quindi il gate sarebbe uscito con
+  «golangci-lint v2.1.6 expected, found 1.64.8» prima ancora di lintare.
+- Nessuna installazione di `govulncheck`. A0.3 ha aggiunto il target `vuln` in
+  coda a `make check`, e quel target fallisce esplicitamente quando il binario
+  non c'e'.
+
+`ci.yml` era stato aggiornato in entrambi i casi, `release.yml` no: e' la copia
+che nessuna corsa esercitava.
+
+**Fatto**: `release.yml` installa ora lo stesso golangci-lint v2.1.6 e lo stesso
+govulncheck v1.6.0 di `ci.yml`, e passa `BACKIMAGE_REQUIRE_PROTOC=1` al gate —
+protoc e' installato in quel job, quindi uno skip del confronto sul generato
+protobuf sarebbe un controllo mai eseguito.
+
+**Come si evita la prossima volta**: i due workflow eseguono lo stesso
+`make check` e devono installare lo stesso insieme di strumenti. Finche' sono
+due elenchi copiati a mano, il secondo si scopre rotto solo quando serve.

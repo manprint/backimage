@@ -67,7 +67,7 @@ riservati stanno nel blob privato:
   blob privato) e **non** contiene `sources`, `host`, `totals`,
   `encryption.keyFingerprint` né `encryption.recipients`.
   `encryption.envelopeVersion` è pubblico perché una corsa possa pianificare
-  prima di aprire qualsiasi cosa. È un **suggerimento**: da 0.4.1 la decisione
+  prima di aprire qualsiasi cosa. È un **suggerimento**: da 0.5.0 la decisione
   se una chiave può ancora sigillare si prende dall'attestazione dentro il
   materiale avvolto, non da qui (vedi [security.md](security.md)). Assente
   significa envelope v1.
@@ -83,7 +83,7 @@ riservati stanno nel blob privato:
   `pkg/recovery` lo fonde in memoria nel manifest e nella chunk table, così i
   lettori a valle vedono la forma di sempre.
 
-  Da 0.4.1 porta anche `binding`, il legame autenticato fra i file di
+  Da 0.5.0 porta anche `binding`, il legame autenticato fra i file di
   metadati: digest canonico del manifest, digest canonico della chunk table,
   digest del blob indice e la politica attesa (`schema`, `aead`,
   `envelopeVersion`, `nonceMode`, indice cifrato sì/no). Il lettore lo
@@ -96,7 +96,7 @@ riservati stanno nel blob privato:
   sblocco (`sources`, `host`, `totals`, impronta e recipient), che è già
   autenticato per il fatto di stare lì dentro.
 - `keys.age` / `keys.pass.age`: materiale di chiave avvolto da age (solo se
-  cifrato). Il JSON dentro l'involucro ha `schemaVersion` **2** da 0.4.1:
+  cifrato). Il JSON dentro l'involucro ha `schemaVersion` **2** da 0.5.0:
   oltre a `dek` e `nonceKey` porta l'**attestazione** — `envelopeVersion`
   (l'epoca crittografica in cui è stato generato), `nonceMode` e `reuse`
   (`never` o `convergent-dedup`). È dentro l'involucro, quindi è autenticata
@@ -107,7 +107,7 @@ Un backimage che legge un'immagine di schema 1 la restaura come prima; un
 backimage precedente allo schema 2 rifiuta un'immagine nuova con
 `backup creato da un backimage più recente`.
 
-Da 0.4.1 i blob usano l'envelope `BIMGCHK1` **versione 3**: stesso layout di
+Da 0.5.0 i blob usano l'envelope `BIMGCHK1` **versione 3**: stesso layout di
 byte della 2, ma il nonce convergente è derivato anche dai dati autenticati
 (versione, codec, aead, flag, ruolo) e non più dal solo payload. Le versioni 1
 e 2 continuano a essere lette, quindi le immagini già pubblicate si

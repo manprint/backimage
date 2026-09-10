@@ -23,7 +23,7 @@ docker run --rm -v "$PWD/restore:/restore" registry.example/team/backup:tag \
   extract --out /restore
 ```
 
-### L'estrattore non parla con il daemon (0.4.1)
+### L'estrattore non parla con il daemon (0.5.0)
 
 `--remove-local-image` **è stato rimosso** dall'autoestraente, e il pacchetto
 Docker non è più nemmeno collegato nel binario (`scripts/check-deps.sh` lo

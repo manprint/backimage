@@ -41,6 +41,7 @@ vanno riconciliati.
 | DA-03 | **Hardlink il cui primo nome è escluso dal restore: skip + report** | Elimina alla radice la classe A02. Si perde la fedeltà odierna (copia dal disco) in cambio dell'impossibilità di aprire pathname fuori dal set ripristinato. In `--strict` resta fatale |
 | DA-04 | **A08: digest atteso più hardening**, non firma nativa | `--expect-digest` sul binario host rifiuta prima di ricevere la passphrase; il cleanup Docker esce dall'autoestraente; il profilo confinato diventa l'esempio primario. La firma cosign delle immagini utente resta una feature da decidere a parte, anche perché collide con il vincolo di dipendenze di `scripts/check-deps.sh:32` |
 | DA-05 | **A10/A11: nota nel changelog e nuova release**, senza yank | La 0.4.1 pinza `toolchain go1.26.6`, mette gli asset nella catena di build e porta i gate verdi; il changelog dichiara che le release precedenti sono anteriori ai fix e costruite con una stdlib con 15 advisory raggiungibili |
+| DA-06 (2026-09-10) | **Il piano esce in una sola release, numerata 0.5.0.** Supera la numerazione di DA-05 e la mappa di §5, non il loro contenuto | La mappa prevedeva tre release (0.4.1, 0.5.0, 0.6.0) perche' immaginava tre momenti di pubblicazione. Le fasi sono state eseguite di seguito e nessuna delle tre e' mai stata pubblicata: quel che esiste e' un solo salto dalla v0.4.0, e chiamarlo 0.4.1 direbbe «patch» a fronte di un envelope che passa a 3 e di un materiale di chiave che passa a schema 2. La 0.5.0 e' la prima release del piano ed e' anche l'ultima |
 
 ## 4. Copertura dei rilievi
 
@@ -88,6 +89,10 @@ A6  formato autenticato        ─┐
 A7  limiti e risorse           ├─→ 0.6.0  (un solo bump di envelope/schema)
                                ─┘
 ```
+
+**Superata da DA-06**: nessuna delle tre release e' stata pubblicata separatamente. Le fasi sono
+state eseguite di seguito e il piano esce tutto insieme nella **0.5.0**, la prima versione dopo la
+v0.4.0. Lo schema resta qui perche' spiega i vincoli d'ordine sotto, che valgono ancora.
 
 Vincoli d'ordine non negoziabili:
 

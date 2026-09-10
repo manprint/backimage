@@ -91,7 +91,7 @@ avvolto da age, non dal manifest pubblico: `envelopeVersion`, `nonceMode` e
 li può contraddire. La corsa rifiuta di riusare la chiave, lo dice e ne
 dichiara il costo, in quattro casi:
 
-- il backup precedente è stato scritto prima della 0.4.1 e la sua chiave non
+- il backup precedente è stato scritto prima della 0.5.0 e la sua chiave non
   attesta nulla;
 - attesta un'altra versione dell'envelope (in entrambe le direzioni);
 - attesta un'altra modalità nonce, per esempio un backup senza `--dedup`;

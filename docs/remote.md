@@ -216,7 +216,7 @@ chose and refuses anything else *before* calling the credential provider:
 another repository, an action outside `pull` and `push`, a wildcard, a
 repeated action, or more than a handful of distinct scopes in one session. A
 refused request produces no call to the provider and no token on the wire, and
-the backup stops with exit code 3. Until 0.4.1 repository and actions went
+the backup stops with exit code 3. Until 0.5.0 repository and actions went
 straight from the message into the provider, so a server could have the client
 mint `unrelated/repository:delete` and hand it over; what the registry then
 granted depended on the account's privileges, which is precisely the decision

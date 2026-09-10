@@ -7,7 +7,7 @@ residuo: raccoglie in un solo posto le derivazioni, i dati autenticati, le
 decisioni sulle chiavi e i vettori di prova, con il puntatore al codice e al
 test che fissa ciascuna affermazione.
 
-Versione dell'albero descritta: **0.4.1**, envelope **v3**, schema del
+Versione dell'albero descritta: **0.5.0**, envelope **v3**, schema del
 materiale di chiave **2**.
 
 Documenti adiacenti, che questo non sostituisce:
@@ -91,7 +91,7 @@ Il JSON avvolto, schema 2:
 }
 ```
 
-I tre campi di attestazione sono la novità della 0.4.1 e sono il soggetto
+I tre campi di attestazione sono la novità della 0.5.0 e sono il soggetto
 della §7. Lo schema 1 (fino alla 0.4.0) ha solo `dek` e `nonceKey`: si apre
 ancora, non si riusa mai.
 
@@ -129,7 +129,7 @@ essere — l'header lo scrive chi ha scritto il blob
 | --- | --- | --- | --- |
 | 1 | fino a 0.2.3 | 16 B, senza ruolo | `HMAC(NonceKey, sha256(plaintext))` |
 | 2 | 0.2.4 – 0.4.0 | 17 B, con ruolo | `HMAC(NonceKey, "backimage/nonce/v2\0" ‖ role ‖ sha256(payload sigillato))` |
-| 3 | 0.4.1 | 17 B, con ruolo | `HMAC(NonceKey, "backimage/nonce/v3\0" ‖ AAD ‖ sha256(payload sigillato))` |
+| 3 | 0.5.0 | 17 B, con ruolo | `HMAC(NonceKey, "backimage/nonce/v3\0" ‖ AAD ‖ sha256(payload sigillato))` |
 
 Le versioni 1 e 2 sono ancora **lette** (fixture congelate in
 `pkg/recovery/testdata`, vettori golden in `pkg/crypt/golden_test.go`) e non
@@ -245,7 +245,7 @@ Cosa porta l'integrità posizionale al posto suo:
    volte: la prima passata calcola il digest e non consegna nulla, la seconda
    scrive solo se la prima è passata (fase A3.1). Un chunk spostato non emette
    byte prima di essere rifiutato.
-3. Dalla 0.4.1 il blob privato lega anche i file di metadati fra loro (§10),
+3. Dalla 0.5.0 il blob privato lega anche i file di metadati fra loro (§10),
    quindi la tabella dei chunk che porta quei digest non è sostituibile.
 
 Un chunk trapiantato fra due backup che condividono la chiave apre quindi
@@ -262,7 +262,7 @@ riguarda i dati consegnati, non l'autenticazione del singolo blob.
 
 ---
 
-## 7. Gestione delle chiavi e rotazione (0.4.1)
+## 7. Gestione delle chiavi e rotazione (0.5.0)
 
 ### 7.1 Il problema chiuso
 
@@ -380,7 +380,7 @@ blob di metadati sono più piccoli di così: il limite non è raggiungibile.
 
 ---
 
-## 10. Legame fra i file di metadati (0.4.1)
+## 10. Legame fra i file di metadati (0.5.0)
 
 Non è crittografia nuova, ma cambia cosa un attaccante può comporre, quindi
 appartiene al perimetro della review.

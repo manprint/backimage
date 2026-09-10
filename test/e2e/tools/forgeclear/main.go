@@ -324,7 +324,7 @@ func unwrap(dir, passphraseFile string) (*crypt.KeyMaterial, error) {
 // metadata as it now stands, and re-seals it with the backup key.
 //
 // It is a no-op on a backup that has no private blob, or whose private blob
-// carries no binding (every format before 0.4.1).
+// carries no binding (every format before 0.5.0).
 func resealBinding(dir string, m *index.Manifest, t *index.ChunkTable, passphraseFile string) error {
 	if m.Private == nil {
 		return nil

@@ -743,7 +743,7 @@ func keyRefusalWarning(err error) string {
 	switch {
 	case errors.Is(err, crypt.ErrKeyNotAttested):
 		return "dedup: la chiave del backup precedente non dichiara con quale epoca crittografica " +
-			"e' stata creata (formato anteriore alla 0.4.1): non viene riusata" + cost
+			"e' stata creata (formato anteriore alla 0.5.0): non viene riusata" + cost
 	case errors.Is(err, crypt.ErrKeyEpoch):
 		return "dedup: la chiave del backup precedente e' stata creata per un'altra versione " +
 			"dell'envelope: non viene riusata" + cost

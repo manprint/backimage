@@ -260,7 +260,7 @@ func (b *Backup) loadPrivate(ctx context.Context) error {
 // and refuses a backup that should carry one and does not.
 //
 // "Should" is decided from authenticated state only: the key material of a
-// backup written from 0.4.1 on attests the envelope it was made for, and
+// backup written from 0.5.0 on attests the envelope it was made for, and
 // every such backup binds its metadata. A blob with no binding under a key
 // that attests the current envelope is therefore a private blob from
 // somewhere else. Older key material attests nothing, so those backups are

@@ -36,7 +36,7 @@ type PrivateEncryption struct {
 type Private struct {
 	SchemaVersion int `json:"schemaVersion"`
 	// Binding ties this backup's public metadata together. Absent in blobs
-	// written before 0.4.1, which had nothing of the sort.
+	// written before 0.5.0, which had nothing of the sort.
 	Binding    *Binding          `json:"binding,omitempty"`
 	Sources    []string          `json:"sources,omitempty"`
 	Host       HostInfo          `json:"host"`

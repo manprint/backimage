@@ -105,7 +105,7 @@ solo dopo la pubblicazione del manifest finale.
 ### Quanto costa rileggerlo
 
 Il tempo di restore è lineare nella dimensione del backup, non nel numero di
-chunk: dalla 0.4.1 la lettura di un chunk si posiziona sul suo offset invece di
+chunk: dalla 0.5.0 la lettura di un chunk si posiziona sul suo offset invece di
 rileggere il layer dall'inizio, e un layer che la cache non può tenere viene
 materializzato una volta per layer invece di una volta per chunk. Prima di quel
 cambio un layer da 1 GiB diviso in 64 chunk poteva costare ~32 GiB di letture

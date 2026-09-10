@@ -7,14 +7,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.4.1] - non ancora rilasciata
+## [0.5.0] - 2026-09-10
 
-Release di sicurezza e di gate. Il formato dei metadati dell'immagine non
-cambia — manifest, chunk table, indice e blob privato sono quelli della 0.4.0,
-e ogni backup già pubblicato resta leggibile. Cambia il **materiale di
-chiave**: da questa versione il JSON avvolto da age porta l'attestazione della
-propria epoca crittografica (`schemaVersion` 2), quindi un backimage 0.4.0
-apre i backup vecchi ma non il keyfile di un backup nuovo.
+Release di sicurezza. Chiude i venti rilievi di una review esterna e, per
+farlo, **cambia il formato di ciò che viene scritto**. Vale la pena leggere
+questo paragrafo prima di aggiornare.
+
+**Cosa cambia nei backup nuovi.**
+
+- I blob cifrati usano l'envelope `BIMGCHK1` **versione 3**: il nonce
+  convergente è derivato da tutti i campi autenticati e non più dal solo
+  ruolo, il che chiude il riuso di nonce che la review classificava come
+  critico.
+- Il materiale di chiave avvolto da age passa a `schemaVersion` **2**: porta
+  l'attestazione della propria epoca crittografica, e da lì — non più dal
+  manifest pubblico, che chiunque sappia pubblicare un tag può riscrivere —
+  si decide se una chiave può sigillare ancora.
+- Il blob privato sigillato porta il **legame** fra i file di metadati: nomina
+  il manifest, la tabella dei chunk e il blob dell'indice che gli
+  appartengono, così una composizione fatta di pezzi di backup diversi viene
+  rifiutata anche quando tutti i conteggi tornano.
+
+**Cosa si può ancora leggere, e con cosa.**
+
+- Questa versione legge **tutto** quello che le precedenti hanno scritto:
+  envelope 1 (fino alla 0.2.3) e 2 (0.2.4–0.4.0), materiale di chiave schema
+  1, blob privati senza legame. Non è una promessa a parole: in
+  `pkg/recovery/testdata/` c'è un backup completo congelato per ciascuno di
+  quei formati, e i test di compatibilità li aprono, li elencano, li
+  ripristinano e li verificano a ogni corsa.
+- Un binario **0.4.0 non legge un backup cifrato scritto dalla 0.5.0**:
+  accetta gli envelope 1 e 2 e rifiuta il 3, e non apre il keyfile schema 2.
+  Le immagini eseguibili non ne risentono, perché ognuna incorpora
+  l'estrattore coetaneo del codice che l'ha scritta: un'immagine prodotta
+  dalla 0.5.0 si apre da sé, come sempre.
+- I backup **non cifrati** non hanno envelope, quindi per loro non cambia
+  nulla.
+
+**Cosa costa il primo backup dopo l'aggiornamento.** Una chiave di
+deduplicazione dichiara l'epoca per cui è stata creata, e questa release
+cambia epoca: al primo backup incrementale cifrato la chiave precedente non
+viene riusata, il comando lo annuncia e ricarica tutti i blob, una volta sola.
+I backup successivi deduplicano di nuovo normalmente. Un backup non cifrato,
+o un backup senza `--dedup`, non paga niente.
 
 ### Nota sulle release già pubblicate (v0.1.0 → v0.4.0)
 
@@ -41,13 +76,15 @@ dichiara ora la propria identità:
 docker run --rm ghcr.io/tuo/backup@sha256:… version
 ```
 
-Un'immagine prodotta prima della 0.4.1 non ha il sotto-comando `version`: in
+Un'immagine prodotta prima della 0.5.0 non ha il sotto-comando `version`: in
 quel caso l'immagine è per definizione anteriore a questa release. Il campo
 `tool.version` del manifesto pubblico resta leggibile in entrambi i casi con
 `backimage inspect`.
 
-**Come rigenerarla.** Rieseguire il backup con la 0.4.1: i layer dati non
-cambiano se i dati non sono cambiati, quindi il costo è il solo layer tool.
+**Come rigenerarla.** Rieseguire il backup con la 0.5.0. Per un backup non
+cifrato il costo è il solo layer tool, perché i layer dati non cambiano se i
+dati non sono cambiati; per uno cifrato è un ricaricamento completo, una volta
+sola, perché l'envelope cambia versione e con esso ogni blob memorizzato.
 
 ### Changed
 
@@ -56,7 +93,7 @@ cambiano se i dati non sono cambiati, quindi il costo è il solo layer tool.
   documento quel che un revisore esterno deve poter leggere senza attraversare
   il codice: gerarchia delle chiavi, layout dell'envelope e composizione
   dell'AAD versione per versione, le tre derivazioni del nonce convergente
-  (fino alla 0.2.3, 0.2.4–0.4.0, 0.4.1) con il motivo di ciascun cambio,
+  (fino alla 0.2.3, 0.2.4–0.4.0, 0.5.0) con il motivo di ciascun cambio,
   perché `chunkIndex` è deliberatamente fuori dall'AAD convergente e cosa lo
   compensa, garanzie e perdite della deduplica, regole di riuso e rotazione
   delle chiavi, bilancio delle collisioni, vettori golden e fixture di
@@ -119,7 +156,7 @@ cambiano se i dati non sono cambiati, quindi il costo è il solo layer tool.
   `maxDataLayers` — il budget overlayfs di un'immagine eseguibile, gia'
   applicato dalla pipeline di streaming — **prima** dell'allocazione.
 - **Un server remoto non puo' piu' far coniare credenziali all'infinito.** Il
-  tetto agli scope di una sessione (0.4.1, A4.1) limitava *quali* credenziali
+  tetto agli scope di una sessione (0.5.0, A4.1) limitava *quali* credenziali
   chiedere, non *quante volte*: ripetere lo stesso scope non costa nulla al
   peer e costa al client una chiamata al provider di token — un giro di rete
   verso l'endpoint di autorizzazione del registry, sull'account dell'utente —

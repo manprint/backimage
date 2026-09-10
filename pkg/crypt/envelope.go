@@ -162,7 +162,7 @@ func ParseHeader(src []byte) (Header, int, error) {
 // that the three were sealed with an identical AAD at chunk index 0, which
 // made them interchangeable under one key.
 //
-// The version byte is inside the AAD, and from 0.4.1 the convergent nonce is
+// The version byte is inside the AAD, and from 0.5.0 the convergent nonce is
 // derived from the AAD: a bump of envelopeVersion therefore moves both the
 // authenticated data and the nonce of every blob, and two epochs of the same
 // key can never land on one nonce.

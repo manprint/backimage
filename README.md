@@ -113,7 +113,7 @@ backimage restore local/dumps:t --oci-layout ./layout -x -C ./restore
 ```
 
 Passing a passphrase or an identity states that the backup is expected to be
-encrypted. Since 0.4.1, if it is not, the command fails with an integrity error
+encrypted. Since 0.5.0, if it is not, the command fails with an integrity error
 instead of quietly ignoring the credential — that is what a substituted
 plaintext image would look like. Use `--allow-unencrypted` when reading mixed
 backups on purpose.
@@ -198,7 +198,7 @@ docker run --rm --cap-drop ALL --security-opt no-new-privileges \
 ```
 
 `extract` also accepts `--include`, `--exclude`, `--strip-components`,
-`--overwrite`, `--strict`, `--no-preserve-owner` and `--cpus`. Since 0.4.1
+`--overwrite`, `--strict`, `--no-preserve-owner` and `--cpus`. Since 0.5.0
 `--overwrite` overlays the archive onto the destination instead of replacing
 it: a directory that already exists is no longer deleted with everything under
 it, so files the backup does not contain survive. `tar` writes

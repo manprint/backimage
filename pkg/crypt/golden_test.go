@@ -11,7 +11,7 @@ import (
 // Deterministic inputs: fixed KeyMaterial, codec=store, role=data, chunk
 // index 0, payload "vector". The vector has changed twice, each time together
 // with the envelope version: in 0.2.4 (v2) the convergent nonce moved to the
-// sealed payload and the AAD gained the role; in 0.4.1 (v3) the nonce is
+// sealed payload and the AAD gained the role; in 0.5.0 (v3) the nonce is
 // derived from the AAD as well, so a version bump moves it too. Breaking this
 // test intentionally = bump envelopeVersion and re-document.
 func TestGoldenConvergentVector(t *testing.T) {

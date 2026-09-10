@@ -52,7 +52,7 @@ Il default `--platform linux/amd64` sceglie il manifest di bootstrap; i layer
 dati sono identici fra le piattaforme. `--cache-size` limita davvero la cache:
 i file meno recenti vengono eliminati prima che il limite venga superato.
 
-## `--overwrite` sovrappone, non sostituisce (0.4.1)
+## `--overwrite` sovrappone, non sostituisce (0.5.0)
 
 `--overwrite` significa «scrivi sopra ciò che trovi», non «sostituisci
 l'albero». Fino alla 0.4.0 una directory già esistente sulla destinazione
@@ -65,7 +65,7 @@ silenzio i file che il backup non conteneva:
 backimage restore IMAGE -x -C /srv/data --include '**/docs/report.pdf' --overwrite
 ```
 
-Dalla 0.4.1 la semantica è quella di `tar -x`:
+Dalla 0.5.0 la semantica è quella di `tar -x`:
 
 | Sulla destinazione | Nell'archivio | Cosa succede |
 | --- | --- | --- |
@@ -79,11 +79,11 @@ Chi contava sulla cancellazione — per esempio per ottenere una destinazione
 identica al backup e non un'unione — deve svuotarla esplicitamente prima del
 restore.
 
-## Una credenziale dichiara cosa ci si aspetta di leggere (0.4.1)
+## Una credenziale dichiara cosa ci si aspetta di leggere (0.5.0)
 
 Fornire `--passphrase-file`, `--passphrase-stdin`, `--password`, `--identity`
 oppure `BACKIMAGE_PASSPHRASE` significa dire «questo backup è cifrato». Dalla
-0.4.1, se il backup che si sta leggendo **non** lo è, il comando fallisce con
+0.5.0, se il backup che si sta leggendo **non** lo è, il comando fallisce con
 un errore di integrità (exit 5) invece di ignorare la credenziale e riuscire.
 
 Serve a rendere visibile una sostituzione: nessun controllo interno a un backup
@@ -106,7 +106,7 @@ docker run --rm -e BACKIMAGE_PASSPHRASE IMAGE extract --out /restore --allow-une
 Senza credenziali il comportamento è quello di sempre: un backup in chiaro si
 legge senza dire nulla a nessuno.
 
-## `--expect-digest`: rifiutare l'immagine sbagliata prima della passphrase (0.4.1)
+## `--expect-digest`: rifiutare l'immagine sbagliata prima della passphrase (0.5.0)
 
 `--expect-digest sha256:…` ancora la lettura a un digest **ottenuto fuori
 banda**. Se l'immagine che il riferimento risolve non ha quel digest, il
@@ -254,7 +254,7 @@ qualcosa: i dati mancanti sono un fallimento, per quanto parziale. Una entry è
 scritta solo se completa — un record tar troncato romperebbe tutte le entry
 successive.
 
-### `--continue` rispetta i filtri (0.4.1)
+### `--continue` rispetta i filtri (0.5.0)
 
 Fino alla 0.4.0 `--continue` **annullava** `--include` e `--exclude`: il flag
 sostituiva lo stream selettivo con quello tollerante, che non conosceva alcuna
@@ -267,7 +267,7 @@ backimage restore IMAGE -x -C ./dest --continue --include '**/*.pdf' --overwrite
 
 estraeva **l'intero backup** sopra la destinazione.
 
-Dalla 0.4.1 tolleranza ai chunk danneggiati e selezione sono proprietà
+Dalla 0.5.0 tolleranza ai chunk danneggiati e selezione sono proprietà
 indipendenti e si combinano: `--continue` con dei filtri emette solo le entry
 selezionate, e di quelle salta e rendiconta le non recuperabili. Vale sia verso
 il filesystem sia verso il tar, e `--strip-components` continua ad applicarsi
