@@ -167,3 +167,53 @@ Un singolo layer si dimensiona sul dato effettivo (mai sotto MinLayerBytes):
 store 1.0). Se il flusso reale supera `LayerCount * LayerBytes`, gli ultimi
 layer **crescono**, non se ne aggiungono: il numero di layer è vincolato dal
 gate overlayfs e non cambia durante lo streaming.
+## Tetti del lettore e da dove derivano
+
+I metadati pubblici di un backup — `manifest.json` e `chunks.json` — decidono
+quanta memoria un lettore sta per allocare. Nessuno dei due porta una firma,
+quindi ogni numero che arriva da lì è una **dichiarazione**, non un fatto.
+
+La regola è che nessun tetto sia scelto a caso: ogni limite deriva da un
+valore che il backup stesso dichiara, oppure da qualcosa che il lettore può
+misurare, e la verifica precede l'allocazione.
+
+### Tabella dei chunk (`index.ValidateChunkTable`)
+
+Eseguita una volta sola, all'apertura del backup, prima che qualunque
+percorso di lettura usi una dimensione:
+
+| Vincolo | Derivato da |
+| --- | --- |
+| `count` del manifest = numero di righe | `manifest.chunking.count` |
+| ogni riga è al proprio indice (`i` = posizione) | la tabella stessa |
+| `sb > 0` e `p` non vuoto | — (una riga senza blob non è leggibile) |
+| i layer coprono `[0, count)` in ordine e senza buchi | `manifest.layers[].chunkFrom/chunkTo` |
+| tutti i chunk di un layer nominano lo stesso blob | il writer produce un blob per layer |
+| due layer non leggono lo stesso blob | gli offset sono progressivi dentro un blob |
+| `sb ≤ storedBytes` del proprio layer | `manifest.layers[].storedBytes` |
+| somma degli `sb` di un layer = `storedBytes` | `manifest.layers[].storedBytes` |
+| `sb ≤ maxChunkBytes` (o `targetChunkBytes`) più un margine | `manifest.chunking` |
+
+Il margine è l'unico numero senza controparte nei file: `dimensione/64 + 4096
+byte`, cioè assai più di quanto qualunque codec di questo progetto aggiunga a
+un input incomprimibile, più l'header dell'envelope e il tag GCM. Serve a
+rifiutare una dichiarazione assurda, non a indovinare il comportamento di un
+compressore.
+
+Ogni violazione è `index.ErrBadSchema`, che la CLI classifica come risposta di
+integrità (exit code 5).
+
+### La dimensione reale del blob, dove è disponibile
+
+I vincoli sopra mettono d'accordo due file pubblici fra loro; se un attaccante
+li riscrive **entrambi** restano coerenti. L'ultima autorità è allora il blob
+sul disco:
+
+- `pkg/recovery` interroga la sorgente con `Stat()` quando questa lo permette —
+  un backup locale e l'immagine autoestraente restituiscono un `*os.File`,
+  quindi è il caso comune e costa una `fstat`;
+- `pkg/restore` misura il file di layer già materializzato prima di leggerne un
+  chunk.
+
+In entrambi i casi, `offset + sb` oltre la fine del blob è un errore di formato
+prima di essere un'allocazione.

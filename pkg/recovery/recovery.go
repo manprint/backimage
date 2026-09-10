@@ -150,6 +150,13 @@ func newBackup(source Source, blobs BlobSource, m *index.Manifest, t *index.Chun
 	if err := checkEncryptionShape(m); err != nil {
 		return nil, err
 	}
+	// Every stored size the reader is about to allocate from comes from
+	// chunks.json, which is public. Check the whole table against the manifest
+	// once, here, so no later code path has to decide whether a number it was
+	// handed is plausible.
+	if err := index.ValidateChunkTable(m, t); err != nil {
+		return nil, err
+	}
 	b := &Backup{source: source, blobs: blobs, Manifest: m, Chunks: t}
 	b.computeLayout()
 	if !m.Encryption.Enabled {
@@ -402,6 +409,12 @@ func (b *Backup) StoredChunk(ctx context.Context, i int) ([]byte, error) {
 	if err := skipTo(r, b.offsets[i]); err != nil {
 		return nil, fmt.Errorf("chunk %d seek: %w", i, err)
 	}
+	// ValidateChunkTable has already bounded Sb by what the manifest declares.
+	// When the source can say how large the blob really is, that is a better
+	// authority than either file: check it before allocating.
+	if err := fitsInBlob(r, b.offsets[i], c.Sb); err != nil {
+		return nil, fmt.Errorf("chunk %d: %w", i, err)
+	}
 	if c.Sb > int64(int(^uint(0)>>1)) {
 		return nil, fmt.Errorf("chunk %d too large", i)
 	}
@@ -410,6 +423,29 @@ func (b *Backup) StoredChunk(ctx context.Context, i int) ([]byte, error) {
 		return nil, fmt.Errorf("chunk %d truncated: %w", i, err)
 	}
 	return buf, nil
+}
+
+// fitsInBlob refuses a stored size that the blob cannot hold, when the source
+// is able to say how large the blob is.
+//
+// A local backup and the self-extracting image both hand back an *os.File, so
+// this is the common case and it costs one fstat. A source that cannot answer
+// leaves the declared size bounded only by the manifest, which
+// index.ValidateChunkTable has already checked.
+func fitsInBlob(r io.Reader, offset, size int64) error {
+	stat, ok := r.(interface{ Stat() (os.FileInfo, error) })
+	if !ok {
+		return nil
+	}
+	fi, err := stat.Stat()
+	if err != nil || !fi.Mode().IsRegular() {
+		return nil
+	}
+	if offset+size > fi.Size() {
+		return fmt.Errorf("%w: %d stored bytes declared at offset %d of a %d byte blob",
+			index.ErrBadSchema, size, offset, fi.Size())
+	}
+	return nil
 }
 
 // plainChunkPayload returns the authenticated compressed payload of one chunk

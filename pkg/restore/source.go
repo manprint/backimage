@@ -319,7 +319,7 @@ func (s *imageSource) Manifest(_ context.Context) (*index.Manifest, error) {
 	return s.manifest, s.manifestErr
 }
 
-func (s *imageSource) ChunkTable(_ context.Context) (*index.ChunkTable, error) {
+func (s *imageSource) ChunkTable(ctx context.Context) (*index.ChunkTable, error) {
 	s.tableOnce.Do(func() {
 		data, err := s.metadata("chunks.json")
 		if err != nil {
@@ -327,6 +327,14 @@ func (s *imageSource) ChunkTable(_ context.Context) (*index.ChunkTable, error) {
 			return
 		}
 		s.table, s.tableErr = index.ReadChunkTable(bytes.NewReader(data))
+		if s.tableErr == nil {
+			// Both public files are parsed now: check they describe the same
+			// backup before any caller allocates from either.
+			var m *index.Manifest
+			if m, s.tableErr = s.Manifest(ctx); s.tableErr == nil {
+				s.tableErr = index.ValidateChunkTable(m, s.table)
+			}
+		}
 		if s.tableErr == nil {
 			s.offsets = make([]int64, len(s.table.Chunks))
 			byPath := make(map[string]int64)
@@ -390,6 +398,17 @@ func (s *imageSource) Blob(ctx context.Context, i int) ([]byte, error) {
 	defer f.Close()
 	if _, err := f.Seek(s.offsets[i], io.SeekStart); err != nil {
 		return nil, err
+	}
+	// The layer is on disk now, so its real size is the authority over what
+	// chunks.json declares. Checking it here means an absurd stored size is a
+	// format error instead of an allocation.
+	fi, err := f.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if s.offsets[i]+c.Sb > fi.Size() {
+		return nil, fmt.Errorf("%w: chunk %d declares %d stored bytes at offset %d of a %d byte layer",
+			index.ErrBadSchema, i, c.Sb, s.offsets[i], fi.Size())
 	}
 	if c.Sb > int64(int(^uint(0)>>1)) {
 		return nil, fmt.Errorf("chunk %d too large", i)

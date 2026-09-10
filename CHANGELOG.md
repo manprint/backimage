@@ -111,6 +111,20 @@ cambiano se i dati non sono cambiati, quindi il costo è il solo layer tool.
 
 ### Security
 
+- **Nessuna allocazione decisa da un campo pubblico.** `chunks.json` dichiara
+  quanti byte occupa un chunk memorizzato, e il lettore allocava quella cifra
+  con il massimo intero come unica guardia: un `chunks.json` che dichiarava
+  100 GiB provocava un tentativo di allocazione da 100 GiB, prima di
+  autenticare alcunché. Ora la tabella è verificata una volta all'apertura
+  contro il manifest — i layer devono coprire tutti i chunk, la somma degli
+  `sb` di un layer deve essere esattamente il suo `storedBytes`, e nessun
+  chunk può superare la dimensione che lo stesso manifest dichiara per i
+  chunk di quel backup — e, quando la sorgente sa dire quanto è grande il
+  blob davvero (un backup locale, l'immagine autoestraente, un layer già
+  materializzato), quella misura ha l'ultima parola. Ogni scarto è un errore
+  di formato con codice 5. I tetti e la loro derivazione sono in
+  [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
 - **I metadati di un backup non si ricombinano più fra backup diversi.**
   L'unico controllo incrociato fra `manifest.json`, `chunks.json`, indice e
   blob privato era che i conteggi dei chunk coincidessero: si poteva servire
