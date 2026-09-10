@@ -47,6 +47,15 @@ cambiano se i dati non sono cambiati, quindi il costo è il solo layer tool.
 
 ### Changed
 
+- **L'esempio primario di restore non è più `docker run --privileged`.** In
+  entrambi i readme e nell'handbook il primo comando mostrato è ora il profilo
+  confinato — `--network none`, `--read-only --tmpfs /tmp`, `--cap-drop ALL`,
+  `--security-opt no-new-privileges`, `--user "$(id -u):$(id -g)"`, un solo
+  volume, nessun socket del daemon — che è lo stesso profilo che gli
+  end-to-end esercitano. Il profilo a fedeltà massima resta documentato più in
+  basso, con cosa compra, cosa costa e la raccomandazione di confinarlo in una
+  VM: la documentazione non promette più insieme «ripristino illimitato di
+  device e capability» e «assenza dei privilegi necessari».
 - **Rottura deliberata: `--remove-local-image` non esiste più
   nell'autoestraente.** Il flag richiedeva di montare `/var/run/docker.sock`
   dentro l'ambiente di estrazione; su un daemon rootful quel socket è

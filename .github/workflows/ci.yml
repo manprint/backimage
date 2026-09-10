@@ -107,6 +107,10 @@ jobs:
         shell: bash
         run: |
           for arch in amd64 arm64; do
+            # go build refuses to overwrite the committed placeholder, which
+            # is not an object file; the Makefile removes it for the same
+            # reason.
+            rm -f internal/embedded/backimage-selfextract-linux-$arch
             GOOS=linux GOARCH=$arch go build \
               -o internal/embedded/backimage-selfextract-linux-$arch \
               ./cmd/backimage-selfextract
@@ -147,6 +151,10 @@ jobs:
         shell: bash
         run: |
           for arch in amd64 arm64; do
+            # go build refuses to overwrite the committed placeholder, which
+            # is not an object file; the Makefile removes it for the same
+            # reason.
+            rm -f internal/embedded/backimage-selfextract-linux-$arch
             GOOS=linux GOARCH=$arch go build \
               -o internal/embedded/backimage-selfextract-linux-$arch \
               ./cmd/backimage-selfextract

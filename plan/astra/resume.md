@@ -34,7 +34,7 @@ DA-01…DA-05 in `overview.md` §3 e non si rinegoziano senza aggiornare quel do
 | A4.2 bearer permanente non delegabile | A07 | Sonnet | **fatto** |
 | A5.1 `--expect-digest` | A08 | Opus + Sonnet | **fatto** |
 | A5.2 Docker fuori dall'autoestraente | A08 | Sonnet | **fatto** |
-| A5.3 profilo confinato come esempio primario | A08 | Haiku | da fare |
+| A5.3 profilo confinato come esempio primario | A08 | Haiku | **fatto** |
 | A5.4 e2e autoestraente confinato | A08 | Haiku | da fare |
 | A6.0 congelare fixture dei formati attuali | A05, A20 | Sonnet | da fare, **prima di A6.1** |
 | A6.1 epoca e politica nel materiale avvolto | A05 | Opus + Sonnet | da fare |
@@ -109,7 +109,7 @@ uno stato.
 | ID | — |
 | Stato | none |
 | Intento | — |
-| Prossima azione | A5.3 profilo confinato come esempio primario |
+| Prossima azione | A5.4 e2e autoestraente confinato |
 | Lavoro a metà | none — tree consistent |
 
 CI su `main`: run 34429719223 (c72db6a) verde su quality, cross-build e tutte le fasi e2e;
@@ -144,6 +144,7 @@ CI su `main`: run 34429719223 (c72db6a) verde su quality, cross-build e tutte le
 | 23 | bug | B-A003, B-A004 | i job windows e macos aggiunti in A2.5 erano rossi al primo giro: readMeta su Windows scartava ogni entry, e fuori da Linux il writer perdeva hardlink, device e atime/ctime; piu' la portabilita' della suite | make check verde (fmt, vet, lint 0 issues, build, test, race, deps-check, docs-check, proto-check SKIP, vuln 0 raggiungibili); GOOS=windows/darwin go vet ./pkg/... ./internal/... puliti; nessuna asserzione rimossa su Linux | uncommitted |
 | 24 | sub-fase | A5.1 | `--expect-digest` sui comandi di lettura del binario host: ExpectedDigest come tipo separato, confronto col descrittore della sorgente prima di ogni lettura, classificazione a integrita' | make check verde (fmt, vet, lint 0 issues, build, test, race, deps-check, docs-check, proto-check SKIP, vuln 0 raggiungibili); verificato in negativo (rimuovendo il confronto falliscono 3 test di pkg/restore e l'ordinamento in internal/cli); TestExpectDigestRefusesBeforeReadingThePassphrase prova l'ordine con una corsa di controllo che dimostra che quel file viene letto quando nulla rifiuta prima | uncommitted |
 | 25 | sub-fase | A5.2 | `--remove-local-image` rimosso dall'autoestraente con errore d'uso che indica l'equivalente host, prima di estrarre; `pkg/docker` vietato nel fence di `scripts/check-deps.sh` | make check verde; fence verificato in negativo (reintroducendo l'import di pkg/docker `check-deps.sh` esce 1); TestExtractRefusesRemoveLocalImage verifica exit 2, il testo che nomina il comando host, nessun output e nessuna directory di destinazione creata | uncommitted |
+| 26 | sub-fase | A5.3 | profilo confinato come primo esempio in README.md, README.it.md e handbook; `--privileged` spostato sotto con costi, benefici e raccomandazione VM; procedura di ancoraggio del digest in tutte e tre le pagine; socket Docker tolto dagli esempi | make check verde; docs-check verde; nessun esempio monta piu' /var/run/docker.sock; `--privileged` compare solo nella sezione dichiarata a fedelta' massima | uncommitted |
 
 ### Deviazioni a runtime
 

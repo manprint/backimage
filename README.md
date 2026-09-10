@@ -9,8 +9,10 @@ registry is the storage.
 
 ```console
 backimage backup /srv/data --repo ghcr.io/me/dumps --tag daily --passphrase-file ./pass
-docker run --rm --privileged -v "$PWD/restore:/restore" \
-  ghcr.io/me/dumps:daily extract --out /restore
+docker run --rm --network none --read-only --tmpfs /tmp \
+  --cap-drop ALL --security-opt no-new-privileges \
+  --user "$(id -u):$(id -g)" -v "$PWD/restore:/restore" \
+  ghcr.io/me/dumps:daily extract --out /restore --no-preserve-owner
 ```
 
 ## Install
@@ -124,19 +126,63 @@ restore as root.
 
 ### `restore` without installing anything
 
-The image restores itself. This is the point of the format:
+The image restores itself. This is the point of the format, and this is the
+profile to use:
+
+```console
+docker run --rm \
+  --network none \
+  --read-only --tmpfs /tmp \
+  --cap-drop ALL --security-opt no-new-privileges \
+  --user "$(id -u):$(id -g)" \
+  -e BACKIMAGE_PASSPHRASE="$(cat ./pass)" \
+  -v "$PWD/restore:/restore" \
+  ghcr.io/me/dumps:daily extract --out /restore --no-preserve-owner
+```
+
+No network, no capabilities, no daemon socket, files owned by the invoking
+user. This is what the end-to-end tests exercise, and it restores contents,
+names, permissions, timestamps and symlinks. What it cannot restore is stated
+in the summary the extraction prints, class by class.
+
+#### The full-fidelity profile, and what it costs
+
+Ownership, device nodes, POSIX ACLs and `trusted.*` xattrs need privileges no
+confined container has:
 
 ```console
 docker run --rm --privileged \
   -e BACKIMAGE_PASSPHRASE="$(cat ./pass)" \
   -v "$PWD/restore:/restore" \
-  ghcr.io/me/dumps:daily extract --out /restore
+  ghcr.io/me/dumps:daily extract --out /restore --strict
 ```
 
-`--privileged` is what buys full fidelity (ownership, devices, ACLs, overlayfs
-xattrs). Without it the extraction still succeeds and the summary states which
-metadata classes were degraded. On Docker Desktop for macOS and Windows, prefer
-`tar` and extract on the host.
+`--privileged` gives the container the host's capabilities: a program running
+there can reach far past the directory it was asked to write. Use it when the
+metadata genuinely matters, on an image you trust, and prefer to confine it in
+a VM rather than on the machine you care about. Without it the extraction
+still succeeds and the summary states which metadata classes were degraded.
+On Docker Desktop for macOS and Windows, prefer `tar` and extract on the host.
+
+#### Anchoring the image to a digest you obtained elsewhere
+
+A program inside an image cannot authenticate the image that contains it. The
+anchor has to come from outside, and it is checked by the host binary before
+the passphrase is read:
+
+```console
+# on the machine that took the backup
+backimage backup /srv/data --repo ghcr.io/me/dumps --tag daily --json | jq -r .digest
+sha256:9f2c…
+
+# elsewhere, with that value delivered by some other route than the image
+backimage restore ghcr.io/me/dumps:daily --expect-digest sha256:9f2c… \
+  -x -C ./restore --passphrase-file ./pass
+```
+
+A mismatch exits 5 and no credential is handed over. A digest read from the
+same place that served the image proves nothing: whoever can replace one can
+replace the other.
 
 The embedded extractor takes five commands, and `info` is what you get with no
 arguments at all:
@@ -146,8 +192,9 @@ docker run --rm IMAGE                        # info: public metadata, no passphr
 docker run --rm -e BACKIMAGE_PASSPHRASE=... IMAGE list -l
 docker run --rm -e BACKIMAGE_PASSPHRASE=... IMAGE verify
 docker run --rm -i -e BACKIMAGE_PASSPHRASE=... IMAGE tar > backup.tar
-docker run --rm --privileged -e BACKIMAGE_PASSPHRASE=... \
-  -v "$PWD/restore:/restore" IMAGE extract --out /restore
+docker run --rm --cap-drop ALL --security-opt no-new-privileges \
+  --user "$(id -u):$(id -g)" -e BACKIMAGE_PASSPHRASE=... \
+  -v "$PWD/restore:/restore" IMAGE extract --out /restore --no-preserve-owner
 ```
 
 `extract` also accepts `--include`, `--exclude`, `--strip-components`,

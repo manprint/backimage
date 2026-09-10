@@ -9,8 +9,10 @@ nessun server di backup. Il registry fa da storage.
 
 ```console
 backimage backup /srv/data --repo ghcr.io/me/dumps --tag daily --passphrase-file ./pass
-docker run --rm --privileged -v "$PWD/restore:/restore" \
-  ghcr.io/me/dumps:daily extract --out /restore
+docker run --rm --network none --read-only --tmpfs /tmp \
+  --cap-drop ALL --security-opt no-new-privileges \
+  --user "$(id -u):$(id -g)" -v "$PWD/restore:/restore" \
+  ghcr.io/me/dumps:daily extract --out /restore --no-preserve-owner
 ```
 
 ## Installazione
@@ -125,19 +127,64 @@ e dichiara ciò che è andato perso. Per ownership, device node, ACL e xattr
 
 ### `restore` senza installare nulla
 
-L'immagine si ripristina da sé. È il senso del formato:
+L'immagine si ripristina da sé. È il senso del formato, e questo è il profilo
+da usare:
+
+```console
+docker run --rm \
+  --network none \
+  --read-only --tmpfs /tmp \
+  --cap-drop ALL --security-opt no-new-privileges \
+  --user "$(id -u):$(id -g)" \
+  -e BACKIMAGE_PASSPHRASE="$(cat ./pass)" \
+  -v "$PWD/restore:/restore" \
+  ghcr.io/me/dumps:daily extract --out /restore --no-preserve-owner
+```
+
+Nessuna rete, nessuna capability, nessun socket del daemon, file di proprietà
+dell'utente che invoca. È il profilo che gli end-to-end esercitano, e
+ripristina contenuti, nomi, permessi, timestamp e symlink. Quello che non può
+ripristinare lo dichiara il riepilogo finale, classe per classe.
+
+#### Il profilo a fedeltà massima, e cosa costa
+
+Ownership, device node, ACL POSIX e xattr `trusted.*` richiedono privilegi che
+nessun container confinato ha:
 
 ```console
 docker run --rm --privileged \
   -e BACKIMAGE_PASSPHRASE="$(cat ./pass)" \
   -v "$PWD/restore:/restore" \
-  ghcr.io/me/dumps:daily extract --out /restore
+  ghcr.io/me/dumps:daily extract --out /restore --strict
 ```
 
-`--privileged` è ciò che compra la fedeltà massima (ownership, device, ACL, xattr
-overlayfs). Senza, l'estrazione riesce comunque e il riepilogo dichiara quali
-classi di metadati sono state degradate. Su Docker Desktop per macOS e Windows è
-preferibile prendere il `tar` ed estrarlo sull'host.
+`--privileged` dà al container le capability dell'host: un programma che gira
+lì dentro arriva ben oltre la directory in cui gli è stato chiesto di
+scrivere. Va usato quando quei metadati servono davvero, su un'immagine di cui
+ci si fida, e preferibilmente confinato in una VM invece che sulla macchina a
+cui si tiene. Senza, l'estrazione riesce comunque e il riepilogo dichiara
+quali classi di metadati sono state degradate. Su Docker Desktop per macOS e
+Windows è preferibile prendere il `tar` ed estrarlo sull'host.
+
+#### Ancorare l'immagine a un digest ottenuto altrove
+
+Un programma dentro un'immagine non può autenticare l'immagine che lo
+contiene. L'ancora deve arrivare da fuori, e viene controllata dal binario
+host prima che la passphrase venga letta:
+
+```console
+# sulla macchina che ha eseguito il backup
+backimage backup /srv/data --repo ghcr.io/me/dumps --tag daily --json | jq -r .digest
+sha256:9f2c…
+
+# altrove, con quel valore arrivato per un canale diverso dall'immagine
+backimage restore ghcr.io/me/dumps:daily --expect-digest sha256:9f2c… \
+  -x -C ./restore --passphrase-file ./pass
+```
+
+Se non coincide il comando esce 5 e nessuna credenziale viene consegnata. Un
+digest letto dalla stessa fonte che serve l'immagine non prova niente: chi può
+sostituire l'una può sostituire anche l'altro.
 
 L'estrattore incorporato accetta cinque comandi, e `info` è quello che si ottiene
 senza alcun argomento:
@@ -147,8 +194,9 @@ docker run --rm IMAGE                        # info: metadati pubblici, senza pa
 docker run --rm -e BACKIMAGE_PASSPHRASE=... IMAGE list -l
 docker run --rm -e BACKIMAGE_PASSPHRASE=... IMAGE verify
 docker run --rm -i -e BACKIMAGE_PASSPHRASE=... IMAGE tar > backup.tar
-docker run --rm --privileged -e BACKIMAGE_PASSPHRASE=... \
-  -v "$PWD/restore:/restore" IMAGE extract --out /restore
+docker run --rm --cap-drop ALL --security-opt no-new-privileges \
+  --user "$(id -u):$(id -g)" -e BACKIMAGE_PASSPHRASE=... \
+  -v "$PWD/restore:/restore" IMAGE extract --out /restore --no-preserve-owner
 ```
 
 `extract` accetta anche `--include`, `--exclude`, `--strip-components`,

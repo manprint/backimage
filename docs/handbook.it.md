@@ -698,20 +698,55 @@ Per scrivere su una directory dell'host, usare un bind mount:
 mkdir -p ./restore
 docker pull docker.io/demoarchiveuser/mindhunters:mindhunters-test
 
-# Fedeltà massima: --privileged serve per ownership, device, ACL e per gli
-# xattr trusted.* (metadati overlayfs). Senza, l'estrazione riesce comunque
-# ma quei metadati vengono degradati e il riepilogo finale lo dichiara.
-docker run --rm --privileged \
+# Profilo consigliato: nessuna rete, nessuna capability, nessun socket del
+# daemon, filesystem del container in sola lettura, file di proprietà
+# dell'utente che invoca. È il profilo che gli end-to-end esercitano.
+docker run --rm \
+  --network none \
+  --read-only --tmpfs /tmp \
+  --cap-drop ALL --security-opt no-new-privileges \
+  --user "$(id -u):$(id -g)" \
   -e BACKIMAGE_PASSPHRASE="$BACKUP_PASSPHRASE" \
   -v "$PWD/restore:/restore" \
   docker.io/demoarchiveuser/mindhunters:mindhunters-test \
-  extract --out /restore
+  extract --out /restore --no-preserve-owner
 
 # Diretto: semplice, ma la password resta nella history e nella lista processi.
 docker run --rm -v "$PWD/restore:/restore" \
   docker.io/demoarchiveuser/mindhunters:mindhunters-test \
   extract --out /restore --password mypassword
 ```
+
+Il profilo confinato ripristina contenuti, nomi, permessi, timestamp e
+symlink. Ownership, device node, ACL e xattr `trusted.*` richiedono privilegi
+che non ha, e il riepilogo finale dichiara classe per classe cosa è stato
+degradato. Il profilo a fedeltà massima — `docker run --privileged` — è
+descritto in «Parametri del restore»: dà al container le capability
+dell'host, quindi va usato quando quei metadati servono davvero, su
+un'immagine di cui ci si fida, preferibilmente dentro una VM.
+
+#### Ancorare l'immagine a un digest ottenuto fuori banda
+
+Un programma dentro un'immagine non può autenticare l'immagine che lo
+contiene: l'estrattore incorporato non ha e non avrà `--expect-digest`.
+L'ancora si usa dal **binario host**, che confronta il digest prima di
+leggere la passphrase:
+
+```console
+# sulla macchina che ha eseguito il backup
+backimage backup /srv/data --repo docker.io/acme/backup --tag daily --json | jq -r .digest
+sha256:9f2c…
+
+# sul computer di destinazione, con quel valore arrivato per un canale
+# diverso da quello che serve l'immagine
+backimage restore docker.io/acme/backup:daily --expect-digest sha256:9f2c… \
+  --extract --destination ./restore --passphrase-file ./backup.pass
+```
+
+Se il digest non coincide il comando esce con codice 5 e la passphrase non
+viene nemmeno letta. Il valore deve arrivare da un canale diverso
+dall'immagine: chi può sostituire l'immagine può sostituire anche il digest
+che la accompagna.
 
 Tips:
 
@@ -898,6 +933,15 @@ sudo backimage verify docker.io/acme/backup:seafile-20260821T031500Z \
 verifica completa non va usato.
 
 ### Parametri del restore
+
+Quella che segue è la configurazione della **fedeltà massima**, non il
+default. È un profilo dichiarato: `docker run --privileged` dà al container
+le capability dell'host, quindi vale quando ownership, device, ACL e xattr
+`trusted.*` servono davvero, su un'immagine di cui ci si fida, e
+preferibilmente dentro una VM. Il profilo confinato — nessuna rete, nessuna
+capability, nessun socket, utente non privilegiato — è quello consigliato per
+tutto il resto ed è descritto in «Senza installare la CLI sul computer di
+destinazione».
 
 | Parametro | Valore per la fedeltà massima | Perché |
 | --- | --- | --- |
@@ -2055,10 +2099,17 @@ può osservare il registry quali chunk sono uguali tra backup.
 - Usare `repo rm` e `repo prune` solo dopo un `--dry-run`; sono operazioni
   distruttive lato registry.
 - `--no-verify` e `--insecure-no-auth` sono eccezioni operative, non default.
+- Il profilo di restore consigliato è quello confinato: `--network none`,
+  `--read-only`, `--cap-drop ALL`, `--security-opt no-new-privileges`,
+  `--user "$(id -u):$(id -g)"`, nessun socket del daemon montato.
 - Per la fedeltà massima: backup come root **senza** `--allow-degraded`, restore
   con `sudo` (CLI) o `docker run --privileged` (immagine), `--strict` per
-  dimostrare che nessun metadato è stato degradato. Ricetta completa in
+  dimostrare che nessun metadato è stato degradato. È un profilo dichiarato,
+  non il default: `--privileged` dà al container le capability dell'host.
+  Ricetta completa in
   [Backup e restore in fedeltà massima](#backup-e-restore-in-fedeltà-massima).
+- Con un digest ottenuto fuori banda, `--expect-digest` sul binario host
+  rifiuta un'immagine sostituita prima di leggere la passphrase.
 
 ## Sviluppo e qualità
 
