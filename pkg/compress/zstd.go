@@ -51,8 +51,21 @@ func (c *zstdCodec) NewWriter(w io.Writer, level int) (io.WriteCloser, error) {
 	return &closeOnly{WriteCloser: zw}, nil
 }
 
+// MaxDecoderMemory bounds what one zstd decoder may hold: the decoded size
+// for a whole-buffer decode, the window size for a stream.
+//
+// The library default is 64 GiB, which is a decision left to whoever wrote
+// the frame — and every frame this project reads comes from an image someone
+// else can publish. The bound here is derived from what the writers actually
+// produce: the encoder levels in use (1..4) top out at an 8 MiB window, and
+// the largest chunk the chunker will ever hand them is 1 GiB of plaintext
+// compressed in one frame. 128 MiB is therefore more than an order of
+// magnitude above the widest window this project writes, and still a number
+// a machine can be asked for.
+const MaxDecoderMemory = 128 << 20
+
 func (c *zstdCodec) NewReader(r io.Reader) (io.ReadCloser, error) {
-	dec, err := zstd.NewReader(r)
+	dec, err := zstd.NewReader(r, zstd.WithDecoderMaxMemory(MaxDecoderMemory))
 	if err != nil {
 		return nil, err
 	}

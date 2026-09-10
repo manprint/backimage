@@ -111,6 +111,16 @@ cambiano se i dati non sono cambiati, quindi il costo è il solo layer tool.
 
 ### Security
 
+- **Nessun decoder costruito col default della libreria.** I reader zstd non
+  passavano `WithDecoderMaxMemory`, il cui default è 64 GiB: la finestra la
+  sceglie chi scrive il frame, e un frame valido che ne dichiara una enorme
+  costa un centinaio di byte da pubblicare. Ora ogni reader è costruito con
+  un tetto di 128 MiB, oltre un ordine di grandezza sopra la finestra più
+  larga che questo progetto scrive. In più la decompressione di un chunk si
+  ferma alla dimensione in chiaro che il backup dichiara per quel chunk — un
+  valore che viaggia nel blob privato sigillato, quindi autenticato — senza
+  consegnare il byte che dimostra il superamento.
+
 - **Nessun blob di metadati letto senza un tetto.** `manifest.json`,
   `chunks.json`, `index.json.zst` e `private.json.zst` arrivavano da un
   `io.ReadAll` senza limite. Il layer che li trasporta è compresso, quindi i

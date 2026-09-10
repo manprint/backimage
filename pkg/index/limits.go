@@ -1,6 +1,7 @@
 package index
 
 import (
+	"errors"
 	"fmt"
 	"io"
 )
@@ -176,7 +177,32 @@ func LimitMetadata(r io.Reader, max int64, what string) io.Reader {
 	if max <= 0 || max > DefaultMaxMetadataBytes {
 		max = DefaultMaxMetadataBytes
 	}
+	return LimitBytes(r, max, what)
+}
+
+// LimitBytes wraps r so that reading past max is ErrBadSchema instead of an
+// allocation or an unbounded loop. Unlike LimitMetadata it has no default:
+// the caller states the bound, and a max of zero or less means no bound at
+// all — for callers whose metadata declares nothing to derive one from.
+func LimitBytes(r io.Reader, max int64, what string) io.Reader {
+	if max <= 0 {
+		return r
+	}
 	return &metadataLimiter{r: r, max: max, what: what}
+}
+
+// MaxPlainChunkBytes is the largest plaintext one chunk of this backup can
+// hold, as the manifest declares it. It is the bound used when the exact
+// plaintext size of a chunk is not (yet) known; 0 means the manifest says
+// nothing to derive it from.
+func MaxPlainChunkBytes(m *Manifest) int64 {
+	if m == nil {
+		return 0
+	}
+	if m.Chunking.MaxChunkBytes > 0 {
+		return m.Chunking.MaxChunkBytes
+	}
+	return m.Chunking.TargetChunkBytes
 }
 
 type metadataLimiter struct {
@@ -186,18 +212,27 @@ type metadataLimiter struct {
 	what string
 }
 
+// Read never hands out the byte that proves the cap was exceeded. A
+// consumer of this reader is often writing what it reads straight to a
+// destination — the restore of one chunk does exactly that — and a refusal
+// that first emits one byte of the thing it is refusing is not a refusal.
 func (l *metadataLimiter) Read(p []byte) (int, error) {
-	if l.n > l.max {
-		return 0, l.exceeded()
+	if l.n >= l.max {
+		var probe [1]byte
+		switch _, err := io.ReadFull(l.r, probe[:]); {
+		case err == nil:
+			return 0, l.exceeded()
+		case errors.Is(err, io.EOF):
+			return 0, io.EOF
+		default:
+			return 0, err
+		}
 	}
-	if room := l.max - l.n + 1; int64(len(p)) > room {
+	if room := l.max - l.n; int64(len(p)) > room {
 		p = p[:room]
 	}
 	n, err := l.r.Read(p)
 	l.n += int64(n)
-	if l.n > l.max {
-		return n, l.exceeded()
-	}
 	return n, err
 }
 

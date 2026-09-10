@@ -26,6 +26,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/manprint/backimage/pkg/compress"
 	"github.com/manprint/backimage/pkg/crypt"
 )
 
@@ -367,9 +368,14 @@ func writeZstdJSON(dst io.Writer, v any) error {
 	return closeErr
 }
 
-// newZstdReader opens a single-worker zstd stream over r.
+// newZstdReader opens a single-worker zstd stream over r, bounded by
+// compress.MaxDecoderMemory. Without that bound the library allows a frame to
+// ask for 64 GiB, and a metadata blob is exactly the kind of small file whose
+// header a publisher chooses.
 func newZstdReader(r io.Reader) (*zstd.Decoder, error) {
-	zr, err := zstd.NewReader(nil, zstd.WithDecoderConcurrency(1))
+	zr, err := zstd.NewReader(nil,
+		zstd.WithDecoderConcurrency(1),
+		zstd.WithDecoderMaxMemory(compress.MaxDecoderMemory))
 	if err != nil {
 		return nil, fmt.Errorf("zstd init: %w", err)
 	}
@@ -417,15 +423,9 @@ func ReadIndex(r io.Reader, opener crypt.Opener) (*Index, error) {
 			return nil, fmt.Errorf("opening index envelope: %w", err)
 		}
 	}
-	zr, err := zstd.NewReader(nil, zstd.WithDecoderConcurrency(1))
+	zr, err := newZstdReader(bytes.NewReader(payload))
 	if err != nil {
-		return nil, fmt.Errorf("zstd init: %w", err)
-	}
-	if err := zr.Reset(bytes.NewReader(payload)); err != nil {
-		return nil, fmt.Errorf("zstd reset: %w", err)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("zstd init: %w", err)
+		return nil, err
 	}
 	defer zr.Close()
 

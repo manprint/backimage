@@ -243,3 +243,26 @@ layer.
 
 Un tetto più stretto passato da chi sa misurare il blob vince; uno più largo
 no, perché i numeri che un chiamante potrebbe passare vengono dall'immagine.
+
+### Decompressione (`compress.MaxDecoderMemory` e il tetto per chunk)
+
+Due limiti distinti, perché sono due cose distinte.
+
+**Quanta memoria un decoder può chiedere.** I reader zstd venivano costruiti
+senza `WithDecoderMaxMemory`, il cui default di libreria è **64 GiB**: la
+finestra la sceglie chi ha scritto il frame, e ogni frame che questo progetto
+legge arriva da un'immagine che qualcun altro può pubblicare. Un frame valido
+che dichiara una finestra enorme costa un centinaio di byte da produrre. Ora
+tutti i reader — il codec in `pkg/compress` e i due lettori di metadati in
+`pkg/index` — sono costruiti con `compress.MaxDecoderMemory` = **128 MiB**,
+più di un ordine di grandezza sopra la finestra più larga che questo progetto
+scrive (i livelli 1..4 arrivano a 8 MiB).
+
+**Quanto plaintext un chunk può produrre.** La finestra non limita quanto un
+flusso emette: un frame con finestra piccola può produrre byte all'infinito.
+Il backup però dichiara quanto plaintext contiene ogni chunk — `pb` nel blob
+privato sigillato, quindi autenticato — e la decompressione si ferma lì. Dove
+quel valore non c'è ancora, il tetto è la dimensione massima del chunk
+dichiarata dal manifest. Il limite non consegna il byte che dimostra il
+superamento: chi legge di solito sta scrivendo altrove, e un rifiuto che
+emette parte di ciò che rifiuta non è un rifiuto.

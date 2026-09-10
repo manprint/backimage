@@ -507,7 +507,7 @@ func (b *Backup) plainChunkPayload(ctx context.Context, i int) ([]byte, compress
 // decompressPayload opens one decompression pass over an already
 // authenticated payload. It does not own the payload: closing the reader
 // leaves the bytes intact, so the same payload can be read again.
-func decompressPayload(payload []byte, codecID compress.ID, i int) (io.ReadCloser, error) {
+func decompressPayload(payload []byte, codecID compress.ID, i int, plainCap int64) (io.ReadCloser, error) {
 	codec, err := compress.ByID(codecID)
 	if err != nil {
 		return nil, err
@@ -516,7 +516,32 @@ func decompressPayload(payload []byte, codecID compress.ID, i int) (io.ReadClose
 	if err != nil {
 		return nil, fmt.Errorf("chunk %d decompress: %w", i, err)
 	}
-	return r, nil
+	// How much plaintext this chunk is supposed to yield is recorded in the
+	// backup — in the sealed private blob when there is one, in the manifest
+	// otherwise. A frame that produces more than that is a bomb, and saying
+	// so while decompressing costs nothing; noticing afterwards costs
+	// whatever it produced.
+	return &cappedReader{ReadCloser: r, r: index.LimitBytes(r, plainCap, fmt.Sprintf("the plaintext of chunk %d", i))}, nil
+}
+
+// cappedReader reads through a limit while closing the decompressor beneath
+// it.
+type cappedReader struct {
+	io.ReadCloser
+	r io.Reader
+}
+
+func (c *cappedReader) Read(p []byte) (int, error) { return c.r.Read(p) }
+
+// plainCap is the largest plaintext chunk i may produce. The per-chunk size
+// is authenticated (it travels in the sealed private blob of an encrypted
+// backup) and exact; the manifest bound is the fallback for a backup that
+// does not carry one, or for a read before the private blob is merged.
+func (b *Backup) plainCap(i int) int64 {
+	if i >= 0 && i < len(b.Chunks.Chunks) && b.Chunks.Chunks[i].Pb > 0 {
+		return b.Chunks.Chunks[i].Pb
+	}
+	return index.MaxPlainChunkBytes(b.Manifest)
 }
 
 // skipTo positions r at offset.
@@ -550,7 +575,7 @@ func (b *Backup) PlainChunk(ctx context.Context, i int) (io.ReadCloser, error) {
 	if err != nil {
 		return nil, err
 	}
-	r, err := decompressPayload(payload, codecID, i)
+	r, err := decompressPayload(payload, codecID, i, b.plainCap(i))
 	if err != nil {
 		clear(payload)
 		return nil, err
@@ -672,8 +697,8 @@ func (b *Backup) streamOneChunk(ctx context.Context, i int, dst io.Writer, verif
 
 // copyPass decompresses payload once into dst and reports how much plaintext
 // came out. It leaves payload untouched so it can be read again.
-func (*Backup) copyPass(payload []byte, codecID compress.ID, i int, dst io.Writer) (int64, error) {
-	r, err := decompressPayload(payload, codecID, i)
+func (b *Backup) copyPass(payload []byte, codecID compress.ID, i int, dst io.Writer) (int64, error) {
+	r, err := decompressPayload(payload, codecID, i, b.plainCap(i))
 	if err != nil {
 		return 0, err
 	}
