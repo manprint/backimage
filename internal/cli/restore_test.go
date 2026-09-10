@@ -392,8 +392,10 @@ func TestOpenImageSourceFactories(t *testing.T) {
 	fromRegistryCLI = func(context.Context, name.Reference, registry.Keychain, restorepkg.SourceOptions) (restorepkg.Source, error) {
 		return s, nil
 	}
-	fromLayoutCLI = func(string, string) (restorepkg.Source, error) { return s, nil }
-	fromDaemonCLI = func(context.Context, name.Reference) (restorepkg.Source, error) { return s, nil }
+	fromLayoutCLI = func(string, string, restorepkg.SourceOptions) (restorepkg.Source, error) { return s, nil }
+	fromDaemonCLI = func(context.Context, name.Reference, restorepkg.SourceOptions) (restorepkg.Source, error) {
+		return s, nil
+	}
 	t.Setenv("BACKIMAGE_AUTH_FILE", filepath.Join(t.TempDir(), "auth.json"))
 	for _, flags := range []sourceFlags{{cacheSize: "1MiB", platform: "linux/amd64"}, {ociLayout: "/layout"}, {localRepo: true}} {
 		got, err := openImageSource(ctx, "example.test/repo:tag", flags)
@@ -407,7 +409,9 @@ func TestOpenImageSourceFactories(t *testing.T) {
 	if _, err := openImageSource(ctx, "example.test/repo:tag", sourceFlags{cacheSize: "1MiB"}); ExitCodeFor(err) != int(KindNetwork) {
 		t.Fatalf("registry error = %v", err)
 	}
-	fromDaemonCLI = func(context.Context, name.Reference) (restorepkg.Source, error) { return nil, io.EOF }
+	fromDaemonCLI = func(context.Context, name.Reference, restorepkg.SourceOptions) (restorepkg.Source, error) {
+		return nil, io.EOF
+	}
 	if _, err := openImageSource(ctx, "example.test/repo:tag", sourceFlags{localRepo: true}); ExitCodeFor(err) != int(KindNetwork) {
 		t.Fatalf("daemon error = %v", err)
 	}

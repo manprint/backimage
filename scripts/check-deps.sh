@@ -28,8 +28,11 @@ while IFS= read -r mod; do
   fi
 done < "$used"
 
-# Self-extract import fence: cobra/ggcr/quic-go/protobuf are forbidden.
-if go list -deps ./cmd/backimage-selfextract | grep -E 'cobra|go-containerregistry|quic-go|google.golang.org/protobuf' ; then
+# Self-extract import fence: cobra/ggcr/quic-go/protobuf are forbidden, and so
+# is the Docker client. The extractor runs inside the image being restored;
+# reaching the daemon socket from there is control of the host far beyond
+# deleting one image, so the package must not even be linked in.
+if go list -deps ./cmd/backimage-selfextract | grep -E 'cobra|go-containerregistry|quic-go|google.golang.org/protobuf|github.com/manprint/backimage/pkg/docker' ; then
   echo "ERROR: self-extract binary imports a forbidden dependency"
   fail=1
 fi

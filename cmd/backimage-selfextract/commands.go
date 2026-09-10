@@ -8,21 +8,18 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"golang.org/x/term"
 
 	"github.com/manprint/backimage/pkg/archive"
 	"github.com/manprint/backimage/pkg/cpu"
-	dockerd "github.com/manprint/backimage/pkg/docker"
 	"github.com/manprint/backimage/pkg/index"
 	"github.com/manprint/backimage/pkg/progress"
 	"github.com/manprint/backimage/pkg/recovery"
 )
 
 var stdoutIsTerminal = func() bool { return term.IsTerminal(int(os.Stdout.Fd())) }
-var removeDockerImage = dockerd.RemoveLocalImage
 
 func cmdInfo(ctx context.Context, args []string) error {
 	var common commonOptions
@@ -185,12 +182,23 @@ func cmdExtract(ctx context.Context, args []string) error {
 	noXattrs := fs.Bool("no-preserve-xattrs", false, "do not restore extended attributes")
 	strict := fs.Bool("strict", false, "abort the extraction when a metadata operation is refused instead of degrading it")
 	keepGoing := fs.Bool("continue", false, "do not stop at the first damaged chunk: extract every entry that verifies and report the ones lost")
-	removeLocalImage := fs.Bool("remove-local-image", false, "remove the local Docker image after a successful extraction")
+	// Kept only so the flag has an answer instead of "flag provided but not
+	// defined": it was removed, and the removal is the point.
+	removeLocalImage := fs.Bool("remove-local-image", false, "removed: image cleanup is a host operation, run `backimage restore --remove-local-image` instead")
 	overwrite := fs.Bool("overwrite", false, "replace existing files")
 	strip := fs.Int("strip-components", 0, "remove leading path components")
 	asJSON := fs.Bool("json", false, "JSON output")
 	if err := parseFlags(fs, args); err != nil {
 		return err
+	}
+	if *removeLocalImage {
+		// The flag needed the daemon socket inside the extraction
+		// environment, which on a rootful daemon is control of the host well
+		// beyond deleting one image. Cleanup belongs to whoever already has
+		// that socket.
+		return usageErrorf("--remove-local-image non esiste più nell'autoestraente: " +
+			"la cancellazione dell'immagine è un'operazione dell'host, " +
+			"eseguire `backimage restore --remove-local-image` dove il socket del daemon è già disponibile")
 	}
 	if *out == "" {
 		return usageErrorf("--out è obbligatorio")
@@ -285,15 +293,6 @@ func cmdExtract(ctx context.Context, args []string) error {
 	}
 	if producerErr != nil {
 		return withCode(exitIntegrity, producerErr)
-	}
-	if *removeLocalImage {
-		ref := strings.TrimSpace(os.Getenv("BACKIMAGE_IMAGE_REF"))
-		if ref == "" {
-			return usageErrorf("--remove-local-image richiede BACKIMAGE_IMAGE_REF")
-		}
-		if err := removeDockerImage(ctx, ref); err != nil {
-			return fmt.Errorf("rimozione immagine locale fallita: %w", err)
-		}
 	}
 	if *asJSON {
 		return json.NewEncoder(stdout).Encode(stats)

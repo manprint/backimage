@@ -106,6 +106,30 @@ docker run --rm -e BACKIMAGE_PASSPHRASE IMAGE extract --out /restore --allow-une
 Senza credenziali il comportamento è quello di sempre: un backup in chiaro si
 legge senza dire nulla a nessuno.
 
+## `--expect-digest`: rifiutare l'immagine sbagliata prima della passphrase (0.4.1)
+
+`--expect-digest sha256:…` ancora la lettura a un digest **ottenuto fuori
+banda**. Se l'immagine che il riferimento risolve non ha quel digest, il
+comando esce con codice 5 prima di leggere `--passphrase-file`, `--identity` o
+`BACKIMAGE_PASSPHRASE`: la credenziale non arriva mai a un'immagine diversa da
+quella richiesta.
+
+```sh
+backimage restore ghcr.io/me/dumps:daily --expect-digest sha256:9f2c… \
+    -x -C ./restore --passphrase-file ./pass
+```
+
+Vale su `restore`, `verify`, `ls`, `find` e `inspect` del binario host. Non
+esiste nell'autoestraente: un programma dentro l'immagine non può autenticare
+l'immagine che lo contiene.
+
+Il digest confrontato dipende dalla sorgente — per un registry è quello che il
+registry associa al riferimento, per `--oci-layout` è quello dell'indice della
+layout (il campo `digest` stampato da `backimage backup`), per `--local-repo`
+è quello che l'immagine ha nel daemon, che non coincide con quello del
+registry. **Un digest letto dalla stessa sorgente che fornisce l'immagine non
+serve a niente**: dettagli e procedura in `docs/security.md`.
+
 ## Ispezione
 
 ```sh

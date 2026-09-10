@@ -47,6 +47,16 @@ cambiano se i dati non sono cambiati, quindi il costo è il solo layer tool.
 
 ### Changed
 
+- **Rottura deliberata: `--remove-local-image` non esiste più
+  nell'autoestraente.** Il flag richiedeva di montare `/var/run/docker.sock`
+  dentro l'ambiente di estrazione; su un daemon rootful quel socket è
+  controllo dell'host molto oltre la cancellazione di un'immagine, e il
+  processo non era vincolato alla funzione che l'utente intendeva invocare.
+  Invocarlo ora produce un errore d'uso (exit 2) che indica l'equivalente
+  dell'host — `backimage restore --remove-local-image`, che resta e gira dove
+  il socket già c'è — **prima** di estrarre qualsiasi cosa. Il pacchetto
+  Docker non è più nemmeno collegato nel binario: `scripts/check-deps.sh` lo
+  vieta come già vieta cobra, go-containerregistry, quic-go e protobuf.
 - **Rottura deliberata: un backup remoto con un token statico nel docker
   config ora fallisce subito.** Chi usa `AuthConfig.RegistryToken` (tipicamente
   una CI con un PAT) insieme a `--remote` vedeva il token partire verso il
@@ -216,6 +226,19 @@ cambiano se i dati non sono cambiati, quindi il costo è il solo layer tool.
 
 ### Added
 
+- **`--expect-digest sha256:…` sui comandi di lettura del binario host**
+  (`restore`, `verify`, `ls`, `find`, `inspect`). Ancora la lettura a un digest
+  ottenuto **fuori banda**: se l'immagine che il riferimento risolve non ha
+  quel digest, il comando esce con codice 5 **prima** di leggere la passphrase
+  o il file di identità, quindi la credenziale non arriva a un'immagine che non
+  è quella richiesta. Il valore confrontato è quello che la sorgente dichiara
+  per l'oggetto risolto — il descrittore del registry, l'indice della layout
+  OCI, l'immagine del daemon — mai un digest ricalcolato sull'oggetto già
+  scelto. Il flag **non** esiste nell'autoestraente: un programma dentro
+  l'immagine non può autenticare l'immagine che lo contiene, e fingerlo
+  sarebbe teatro.
+- **`--platform` conta anche con `--oci-layout`.** Era accettato e ignorato: la
+  layout veniva letta sempre come `linux/amd64`.
 - **`--forward-static-token` su `backup`.** Consenso esplicito a inviare al
   server remoto una credenziale che non è una delega limitata. Il comando lo
   dichiara su stderr quando succede: il server riceve una credenziale

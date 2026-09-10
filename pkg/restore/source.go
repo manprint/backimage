@@ -51,11 +51,17 @@ type Source interface {
 	Close() error
 }
 
-// SourceOptions controls platform selection and the persistent layer cache.
+// SourceOptions controls platform selection, the persistent layer cache and
+// the out-of-band digest the source must match before it is read.
 type SourceOptions struct {
 	Platform  string
 	CacheDir  string
 	CacheSize int64
+	// ExpectDigest, when set, is compared with the digest the source reports
+	// for the object the reference resolved to. The comparison happens before
+	// any layer, key file or metadata blob is read, so a caller that holds a
+	// trusted digest never hands a secret to the wrong image.
+	ExpectDigest ExpectedDigest
 }
 
 type imageSource struct {
@@ -95,6 +101,12 @@ func FromRegistry(ctx context.Context, ref name.Reference, kc registry.Keychain,
 	if err != nil {
 		return nil, fmt.Errorf("reading image manifest %s: %w", ref.Name(), err)
 	}
+	// Before the layers: desc.Digest is what the registry says the reference
+	// resolves to, which is the one value a caller can have obtained
+	// elsewhere.
+	if err := opts.ExpectDigest.matchResolved("registry image "+ref.Name(), desc.Digest); err != nil {
+		return nil, err
+	}
 	img, err := desc.Image()
 	if err != nil {
 		return nil, fmt.Errorf("selecting platform %s: %w", p.String(), err)
@@ -104,7 +116,10 @@ func FromRegistry(ctx context.Context, ref name.Reference, kc registry.Keychain,
 
 // FromOCILayout builds a Source over a local OCI layout directory. ref is
 // accepted for API symmetry and future annotation selection.
-func FromOCILayout(path, ref string) (Source, error) {
+//
+// Only Platform and ExpectDigest are read from opts: a layout is already on
+// disk, so there is nothing to cache.
+func FromOCILayout(path, ref string, opts SourceOptions) (Source, error) {
 	_ = ref
 	lp, err := layout.FromPath(path)
 	if err != nil {
@@ -114,7 +129,10 @@ func FromOCILayout(path, ref string) (Source, error) {
 	if err != nil {
 		return nil, fmt.Errorf("reading OCI index: %w", err)
 	}
-	p, err := sourcePlatform("")
+	if err := matchLayoutDigest(opts.ExpectDigest, path, idx); err != nil {
+		return nil, err
+	}
+	p, err := sourcePlatform(opts.Platform)
 	if err != nil {
 		return nil, err
 	}
@@ -125,11 +143,55 @@ func FromOCILayout(path, ref string) (Source, error) {
 	return newImageSource(img, SourceOptions{Platform: p.String()})
 }
 
+// matchLayoutDigest anchors a layout to an expected digest. A layout has no
+// registry to ask, so the identities it can be named by are the ones it
+// carries: its own top-level index — the digest `backimage backup` reports
+// and the digest a push of this layout would produce — and each manifest that
+// index advertises, which is what a caller holding a single-platform digest
+// has.
+//
+// The anchor is only worth something if the digest travelled by a different
+// route than the layout itself; the documentation says so.
+func matchLayoutDigest(want ExpectedDigest, path string, idx v1.ImageIndex) error {
+	if !want.Set() {
+		return nil
+	}
+	top, err := idx.Digest()
+	if err != nil {
+		return fmt.Errorf("reading OCI index: %w", err)
+	}
+	im, err := idx.IndexManifest()
+	if err != nil {
+		return fmt.Errorf("reading OCI index: %w", err)
+	}
+	advertised := make([]v1.Hash, 0, len(im.Manifests)+1)
+	advertised = append(advertised, top)
+	for _, d := range im.Manifests {
+		advertised = append(advertised, d.Digest)
+	}
+	return want.matchResolved("OCI layout "+path, advertised...)
+}
+
 // FromDaemon builds a Source over an image in the local Docker daemon.
-func FromDaemon(ctx context.Context, ref name.Reference) (Source, error) {
+//
+// Only ExpectDigest is read from opts: the daemon holds one image per
+// reference and keeps no layer cache of ours.
+func FromDaemon(ctx context.Context, ref name.Reference, opts SourceOptions) (Source, error) {
 	img, err := daemon.Image(ref, daemon.WithContext(ctx))
 	if err != nil {
 		return nil, fmt.Errorf("reading daemon image %s: %w", ref.Name(), err)
+	}
+	if opts.ExpectDigest.Set() {
+		// The daemon recompresses what it stores, so this digest is the one
+		// the local image has now, not the one it had in a registry. The
+		// documentation says which anchor is worth what.
+		h, err := img.Digest()
+		if err != nil {
+			return nil, fmt.Errorf("reading daemon image digest %s: %w", ref.Name(), err)
+		}
+		if err := opts.ExpectDigest.matchResolved("daemon image "+ref.Name(), h); err != nil {
+			return nil, err
+		}
 	}
 	return newImageSource(img, SourceOptions{})
 }

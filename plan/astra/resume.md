@@ -32,8 +32,8 @@ DA-01…DA-05 in `overview.md` §3 e non si rinegoziano senza aggiornare quel do
 | A3.4 layer materializzato una volta | A16 | Sonnet | **fatto** |
 | A4.1 scope derivato localmente | A06 | Sonnet | **fatto** |
 | A4.2 bearer permanente non delegabile | A07 | Sonnet | **fatto** |
-| A5.1 `--expect-digest` | A08 | Opus + Sonnet | da fare |
-| A5.2 Docker fuori dall'autoestraente | A08 | Sonnet | da fare |
+| A5.1 `--expect-digest` | A08 | Opus + Sonnet | **fatto** |
+| A5.2 Docker fuori dall'autoestraente | A08 | Sonnet | **fatto** |
 | A5.3 profilo confinato come esempio primario | A08 | Haiku | da fare |
 | A5.4 e2e autoestraente confinato | A08 | Haiku | da fare |
 | A6.0 congelare fixture dei formati attuali | A05, A20 | Sonnet | da fare, **prima di A6.1** |
@@ -109,7 +109,7 @@ uno stato.
 | ID | — |
 | Stato | none |
 | Intento | — |
-| Prossima azione | A5.1 `--expect-digest` |
+| Prossima azione | A5.3 profilo confinato come esempio primario |
 | Lavoro a metà | none — tree consistent |
 
 CI su `main`: run 34429719223 (c72db6a) verde su quality, cross-build e tutte le fasi e2e;
@@ -142,9 +142,15 @@ CI su `main`: run 34429719223 (c72db6a) verde su quality, cross-build e tutte le
 | 21 | sub-fase | A4.2 | delegabilita' del token decisa alla conio: bearer statico e registry solo-Basic non delegabili, scadenza inventata rimossa, --forward-static-token come consenso esplicito dichiarato nell'output | make check verde; TestClientRefusesToForwardACredentialThatIsNotADelegation e TestForwardStaticTokenIsAnExplicitChoice costruiscono la credenziale col provider reale, verificato in negativo (ripristinando le 24 ore inventate la credenziale statica viene inoltrata) | 64f83bc |
 | 22 | sub-fase | A4 e2e | test/e2e/phase_A4.sh e utensile greedyremote; A4 nella matrice e2e; docs/remote.md, docs/handbook.it.md, README*.md, docs/cli.md, CHANGELOG.md | phase A4 e2e verde; verificato in negativo su due assunzioni indipendenti (senza scope guard esce 6 invece di 3; con le 24 ore inventate la credenziale statica pubblica il tag) | 64f83bc |
 | 23 | bug | B-A003, B-A004 | i job windows e macos aggiunti in A2.5 erano rossi al primo giro: readMeta su Windows scartava ogni entry, e fuori da Linux il writer perdeva hardlink, device e atime/ctime; piu' la portabilita' della suite | make check verde (fmt, vet, lint 0 issues, build, test, race, deps-check, docs-check, proto-check SKIP, vuln 0 raggiungibili); GOOS=windows/darwin go vet ./pkg/... ./internal/... puliti; nessuna asserzione rimossa su Linux | uncommitted |
+| 24 | sub-fase | A5.1 | `--expect-digest` sui comandi di lettura del binario host: ExpectedDigest come tipo separato, confronto col descrittore della sorgente prima di ogni lettura, classificazione a integrita' | make check verde (fmt, vet, lint 0 issues, build, test, race, deps-check, docs-check, proto-check SKIP, vuln 0 raggiungibili); verificato in negativo (rimuovendo il confronto falliscono 3 test di pkg/restore e l'ordinamento in internal/cli); TestExpectDigestRefusesBeforeReadingThePassphrase prova l'ordine con una corsa di controllo che dimostra che quel file viene letto quando nulla rifiuta prima | uncommitted |
+| 25 | sub-fase | A5.2 | `--remove-local-image` rimosso dall'autoestraente con errore d'uso che indica l'equivalente host, prima di estrarre; `pkg/docker` vietato nel fence di `scripts/check-deps.sh` | make check verde; fence verificato in negativo (reintroducendo l'import di pkg/docker `check-deps.sh` esce 1); TestExtractRefusesRemoveLocalImage verifica exit 2, il testo che nomina il comando host, nessun output e nessuna directory di destinazione creata | uncommitted |
 
 ### Deviazioni a runtime
 
+- A5.1 — il flag è dichiarato in `addSourceFlags`, quindi arriva anche a `inspect` e `find` oltre ai quattro comandi nominati dal piano. Sono comandi che leggono la stessa immagine dalla stessa sorgente: lasciarli senza ancora sarebbe stata una lacuna, non una scelta.
+- A5.1 — «`tar`» nel piano non è un comando del binario host: l'uscita tar è `restore --output tar`, coperta dallo stesso flag.
+- A5.1 — per una layout OCI l'ancora accetta **due** identità: il digest dell'indice della layout (quello che `backup` stampa) e quello di uno dei manifest che l'indice pubblica. Sono due nomi dello stesso oggetto e un chiamante può legittimamente avere l'uno o l'altro; un digest estraneo non passa.
+- A5.1 — `FromOCILayout` ignorava `--platform` e leggeva sempre `linux/amd64`. Passando ora `SourceOptions` il valore viene onorato: è una correzione nello stesso punto, dichiarata nel CHANGELOG.
 - A0.1 — golangci-lint v2 fonde staticcheck+gosimple+stylecheck+quickfix in un solo linter. Per non allargare il gate nella commit di migrazione, `staticcheck.checks` esclude `ST1*` e `QF1*`, che in v1 non erano attivi (nessun `stylecheck` fra i linter abilitati). Restano 9 rilievi ST1005/QF1001/QF1008 non indirizzati: abilitarli è una decisione separata con modifiche al codice.
 - A0.1 — la regola `issues.exclude-rules` su `test/fixtures/compare.go` aveva una chiave `linters:` vuota che rendeva la configurazione non validabile e bloccava `golangci-lint migrate`. Rimossa la chiave vuota prima di migrare.
 - A0.1 — il messaggio della guardia di versione nel Makefile è in inglese, non in italiano come nel testo di `phase_A0.md` §A0.1: AGENTS.md impone messaggi di errore in inglese.

@@ -4,3 +4,7 @@
 * text=auto eol=lf
 *.golden.json -text
 testdata/** -text
+
+# The embedded extractors are ELF binaries kept in the tree (skip-worktree,
+# rebuilt by `make selfextract`). Never let a line-ending rule near them.
+internal/embedded/backimage-selfextract-* binary

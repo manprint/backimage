@@ -202,6 +202,7 @@ backimage find IMAGE PATTERN [flags]
 ```
       --allow-unencrypted        accept an unencrypted backup even when a passphrase or an identity was supplied
       --cache-size string        maximum size of the downloaded-layer cache, e.g. 512MiB, 4GiB (0 disables it) (default "2GiB")
+      --expect-digest string     refuse the image unless it resolves to this digest, e.g. sha256:… (obtain it out of band: a digest read from the same image proves nothing)
   -h, --help                     help for find
       --identity string          age private key file, for a backup encrypted with --recipient
       --local-repo               read the image from the local Docker daemon instead of a registry
@@ -315,6 +316,7 @@ backimage inspect IMAGE [flags]
 ```
       --allow-unencrypted        accept an unencrypted backup even when a passphrase or an identity was supplied
       --cache-size string        maximum size of the downloaded-layer cache, e.g. 512MiB, 4GiB (0 disables it) (default "2GiB")
+      --expect-digest string     refuse the image unless it resolves to this digest, e.g. sha256:… (obtain it out of band: a digest read from the same image proves nothing)
       --files                    also list archived files (decrypts the index: needs the passphrase or age identity)
   -h, --help                     help for inspect
       --identity string          age private key file, for a backup encrypted with --recipient
@@ -532,6 +534,7 @@ backimage ls IMAGE [PATH] [flags]
       --allow-unencrypted        accept an unencrypted backup even when a passphrase or an identity was supplied
       --cache-size string        maximum size of the downloaded-layer cache, e.g. 512MiB, 4GiB (0 disables it) (default "2GiB")
       --exclude strings          skip paths matching this glob (repeatable)
+      --expect-digest string     refuse the image unless it resolves to this digest, e.g. sha256:… (obtain it out of band: a digest read from the same image proves nothing)
   -h, --help                     help for ls
       --identity string          age private key file, for a backup encrypted with --recipient
       --include strings          list only paths matching this glob, e.g. '**/*.pdf' (repeatable)
@@ -877,6 +880,7 @@ backimage restore [IMAGE] [flags]
       --cpus int                 maximum CPUs used for decompression and decryption (default: half the available CPUs) (default 8)
   -C, --destination string       directory the files are extracted into (with -x) (default ".")
       --exclude strings          skip paths matching this glob (repeatable)
+      --expect-digest string     refuse the image unless it resolves to this digest, e.g. sha256:… (obtain it out of band: a digest read from the same image proves nothing)
   -x, --extract                  extract the files into --destination instead of writing a tar
   -h, --help                     help for restore
       --identity string          age private key file, for a backup encrypted with --recipient
@@ -941,6 +945,7 @@ backimage verify IMAGE [flags]
       --allow-unencrypted        accept an unencrypted backup even when a passphrase or an identity was supplied
       --cache-size string        maximum size of the downloaded-layer cache, e.g. 512MiB, 4GiB (0 disables it) (default "2GiB")
       --continue                 do not stop at the first integrity error: report them all
+      --expect-digest string     refuse the image unless it resolves to this digest, e.g. sha256:… (obtain it out of band: a digest read from the same image proves nothing)
   -h, --help                     help for verify
       --identity string          age private key file, for a backup encrypted with --recipient
       --local-repo               read the image from the local Docker daemon instead of a registry

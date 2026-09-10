@@ -21,16 +21,25 @@ docker run --rm -it registry.example/team/backup:tag list
 docker run --rm -i registry.example/team/backup:tag tar > backup.tar
 docker run --rm -v "$PWD/restore:/restore" registry.example/team/backup:tag \
   extract --out /restore
-
-# Rimuove l'immagine locale solo dopo un'estrazione riuscita.
-docker run --rm \
-  -e BACKIMAGE_PASSPHRASE="$BACKUP_PASSPHRASE" \
-  -e BACKIMAGE_IMAGE_REF="registry.example/team/backup:tag" \
-  -v "$PWD/restore:/restore" \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  registry.example/team/backup:tag \
-  extract --out /restore --remove-local-image
 ```
+
+### L'estrattore non parla con il daemon (0.4.1)
+
+`--remove-local-image` **è stato rimosso** dall'autoestraente, e il pacchetto
+Docker non è più nemmeno collegato nel binario (`scripts/check-deps.sh` lo
+vieta). Il flag richiedeva di montare `/var/run/docker.sock` dentro l'ambiente
+di estrazione: su un daemon rootful quel socket è controllo dell'host molto
+oltre la cancellazione di un'immagine, e il processo non era vincolato alla
+funzione che l'utente intendeva invocare.
+
+Invocarlo ora produce un errore d'uso (exit 2) che indica l'equivalente
+dell'host, prima che venga estratto qualcosa:
+
+```sh
+backimage restore registry.example/team/backup:tag -x -C ./restore --remove-local-image
+```
+
+La pulizia è un'operazione di chi ha già il socket, non dell'estrattore.
 
 ## Comandi
 
@@ -47,9 +56,8 @@ docker run --rm \
 - `tar [--cpus N] [--no-verify]` scrive esclusivamente il tar in chiaro su stdout.
 - `extract --out DIR` ripristina direttamente; supporta `--include`,
   `--exclude`, `--strip-components N`, `--cpus N`, `--overwrite`,
-  `--no-preserve-owner`, `--remove-local-image` e `--json`. Quest'ultimo
-  richiede `BACKIMAGE_IMAGE_REF` e il mount di `/var/run/docker.sock` e rimuove
-  l'immagine solo dopo il successo dell'estrazione.
+  `--no-preserve-owner` e `--json`. `--remove-local-image` non esiste più:
+  vedere sopra.
 - `verify [--continue] [--json]` controlla tutti i digest memorizzati. Senza
   credenziali, su un backup cifrato, esegue una verifica parziale esplicita;
   con la chiave controlla anche autenticazione, plaintext e indice.

@@ -637,7 +637,9 @@ Tips:
 `--remove-local-image` rimuove la reference locale dal Docker daemon solo
 dopo che il restore è terminato senza errori. Richiede che l'host esponga il
 Docker socket (`DOCKER_HOST` o `/var/run/docker.sock`). Se il restore fallisce,
-l'immagine non viene rimossa. `--cpus N` limita il budget CPU del restore;
+l'immagine non viene rimossa. È un flag del **binario host**: dalla 0.4.1
+l'autoestraente dentro l'immagine non ce l'ha più e non contiene il client
+Docker. `--cpus N` limita il budget CPU del restore;
 senza il flag il valore predefinito è metà dei processori disponibili, con
 minimo uno. Il limite viene applicato anche quando l'archivio usa gzip, lz4 o
 un altro algoritmo: per decoder non paralleli non crea parallelismo aggiuntivo,
@@ -701,8 +703,6 @@ docker pull docker.io/demoarchiveuser/mindhunters:mindhunters-test
 # ma quei metadati vengono degradati e il riepilogo finale lo dichiara.
 docker run --rm --privileged \
   -e BACKIMAGE_PASSPHRASE="$BACKUP_PASSPHRASE" \
-  -e BACKIMAGE_IMAGE_REF="docker.io/demoarchiveuser/mindhunters:mindhunters-test" \
-  -v /var/run/docker.sock:/var/run/docker.sock \
   -v "$PWD/restore:/restore" \
   docker.io/demoarchiveuser/mindhunters:mindhunters-test \
   extract --out /restore
@@ -720,8 +720,6 @@ Tips:
 - aggiungi `--no-preserve-owner` a `extract` se non vuoi ripristinare ownership
   e gruppi;
 - aggiungi `--cpus N` a `extract` per limitare la CPU;
-- `--remove-local-image` non richiede altro: `BACKIMAGE_IMAGE_REF` e il socket
-  Docker sono già nel comando qui sopra;
 - aggiungi `--include GLOB`, `--exclude GLOB` o `--overwrite` quando servono.
 
 Si può anche estrarre un tar e affidare la materializzazione agli strumenti
@@ -743,10 +741,11 @@ In modalità diretta Docker scarica l'immagine con `docker pull` oppure
 automaticamente al primo `docker run`; non serve installare `backimage` sul
 computer di destinazione. Il comando `extract` dell'immagine è il self-
 extractor incorporato e supporta anche `--include`, `--exclude`,
-`--strip-components` e `--no-preserve-owner`. Per usare
-`--remove-local-image` servono anche `BACKIMAGE_IMAGE_REF` e il mount del
-Docker socket mostrati nei Tips; il flag forza la rimozione dell'immagine
-solo dopo un'estrazione riuscita.
+`--strip-components` e `--no-preserve-owner`. Dalla 0.4.1
+`--remove-local-image` **non esiste più** nell'estrattore dell'immagine: la
+pulizia è un'operazione dell'host, `backimage restore --remove-local-image`,
+dove il socket del daemon è già disponibile. L'estrattore non contiene più il
+client Docker e non chiede mai quel socket.
 
 Per ispezionare senza copiare file:
 
@@ -921,15 +920,14 @@ printf '%s\n' "$BACKUP_PASSPHRASE" | sudo backimage restore \
 mkdir -p ./restore
 docker run --rm --privileged \
   -e BACKIMAGE_PASSPHRASE="$BACKUP_PASSPHRASE" \
-  -e BACKIMAGE_IMAGE_REF="docker.io/acme/backup:seafile-20260821T031500Z" \
-  -v /var/run/docker.sock:/var/run/docker.sock \
   -v "$PWD/restore:/restore" \
   docker.io/acme/backup:seafile-20260821T031500Z \
   extract --out /restore --overwrite --strict
 ```
 
-Il socket Docker e `BACKIMAGE_IMAGE_REF` servono solo a `--remove-local-image`,
-ma stanno già nel comando: aggiungere quel flag non richiede altro.
+Nessun mount del socket Docker: l'estrattore non ne ha bisogno e dalla 0.4.1
+non contiene nemmeno il client. Se serve rimuovere l'immagine locale dopo il
+restore, è l'host a farlo con `backimage restore --remove-local-image`.
 
 Senza `sudo` o senza `--privileged` l'estrazione **riesce comunque**: owner,
 permessi, timestamp, ACL, xattr e hardlink non applicabili vengono degradati,

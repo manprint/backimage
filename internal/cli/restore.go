@@ -38,6 +38,7 @@ type sourceFlags struct {
 	identity         string
 	allowUnencrypted bool
 	registryUser     string // --registry-user: which login to use on this host
+	expectDigest     string // --expect-digest: anchor obtained out of band
 }
 
 // hasCredential reports whether the caller offered a way to unlock a backup.
@@ -72,6 +73,7 @@ func addSourceFlags(f *cobra.Command, repoAlias bool) {
 	flags.String("password", "", "backup passphrase inline (visible in shell history and in `ps`: prefer --passphrase-file)")
 	flags.String("identity", "", "age private key file, for a backup encrypted with --recipient")
 	flags.Bool("allow-unencrypted", false, "accept an unencrypted backup even when a passphrase or an identity was supplied")
+	flags.String("expect-digest", "", "refuse the image unless it resolves to this digest, e.g. sha256:… (obtain it out of band: a digest read from the same image proves nothing)")
 }
 
 func readSourceFlags(cmd *cobra.Command) sourceFlags {
@@ -81,7 +83,7 @@ func readSourceFlags(cmd *cobra.Command) sourceFlags {
 		passphraseFile: getFlagString(cmd, "passphrase-file"), passphraseStdin: getFlagBool(cmd, "passphrase-stdin"),
 		password: getFlagString(cmd, "password"), passwordSet: cmd.Flags().Changed("password"),
 		identity: getFlagString(cmd, "identity"), allowUnencrypted: getFlagBool(cmd, "allow-unencrypted"),
-		registryUser: registryUser(cmd),
+		registryUser: registryUser(cmd), expectDigest: getFlagString(cmd, "expect-digest"),
 	}
 	if cmd.Flags().Lookup("repo") != nil {
 		f.repo = getFlagString(cmd, "repo")
@@ -110,15 +112,25 @@ func openImageSource(ctx context.Context, refText string, flags sourceFlags) (re
 	if err != nil {
 		return nil, usageErrorf("reference %q non valida: %v", refText, err)
 	}
+	expect, err := restorepkg.ParseExpectedDigest(flags.expectDigest)
+	if err != nil {
+		return nil, usageErrorf("--expect-digest: %v", err)
+	}
 	if flags.localRepo {
-		s, err := fromDaemonCLI(ctx, ref)
+		s, err := fromDaemonCLI(ctx, ref, restorepkg.SourceOptions{ExpectDigest: expect})
 		if err != nil {
-			return nil, &Error{Kind: KindNetwork, Msg: "lettura daemon fallita", Err: err}
+			return nil, wrapSourceError("lettura daemon fallita", err)
 		}
 		return s, nil
 	}
 	if flags.ociLayout != "" {
-		return fromLayoutCLI(flags.ociLayout, refText)
+		s, err := fromLayoutCLI(flags.ociLayout, refText, restorepkg.SourceOptions{
+			Platform: flags.platform, ExpectDigest: expect,
+		})
+		if err != nil {
+			return nil, wrapSourceError("lettura OCI layout fallita", err)
+		}
+		return s, nil
 	}
 	cacheBytes, err := parseSize(flags.cacheSize)
 	if err != nil {
@@ -129,12 +141,28 @@ func openImageSource(ctx context.Context, refText string, flags sourceFlags) (re
 		return nil, err
 	}
 	s, err := fromRegistryCLI(ctx, ref, registry.NewKeychainForUser(nil, store, flags.registryUser), restorepkg.SourceOptions{
-		Platform: flags.platform, CacheSize: cacheBytes,
+		Platform: flags.platform, CacheSize: cacheBytes, ExpectDigest: expect,
 	})
 	if err != nil {
-		return nil, &Error{Kind: KindNetwork, Msg: "lettura registry fallita", Err: err}
+		return nil, wrapSourceError("lettura registry fallita", err)
 	}
 	return s, nil
+}
+
+// wrapSourceError classifies a failure to open a source. A refused digest is
+// an integrity answer, not a network one: the image was reachable, it is the
+// wrong image. Getting the class right is what lets a script tell "the
+// registry is down" from "somebody replaced the backup".
+func wrapSourceError(msg string, err error) error {
+	if errors.Is(err, restorepkg.ErrDigestMismatch) {
+		return &Error{
+			Kind: KindIntegrity,
+			Msg:  msg,
+			Hint: "il digest atteso non corrisponde: l'immagine non è quella richiesta, e nessuna credenziale le è stata consegnata",
+			Err:  err,
+		}
+	}
+	return &Error{Kind: KindNetwork, Msg: msg, Err: err}
 }
 
 var openSourceForCLI = openImageSource

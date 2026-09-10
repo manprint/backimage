@@ -296,27 +296,28 @@ func TestExtractPartialStripAndValidation(t *testing.T) {
 	}
 }
 
-func TestExtractRemovesLocalImageAfterSuccess(t *testing.T) {
+// The flag is gone, and the binary must say where the operation lives now
+// instead of failing with "flag provided but not defined". It must also
+// refuse before extracting anything: a partial restore followed by a usage
+// error would be the worst of both.
+func TestExtractRefusesRemoveLocalImage(t *testing.T) {
 	f := newCommandFixture(t, false)
 	dst := filepath.Join(t.TempDir(), "restore")
-	t.Setenv("BACKIMAGE_IMAGE_REF", "syncbssuser/mindhunt:mindhunters-test")
-	oldRemove := removeDockerImage
-	t.Cleanup(func() { removeDockerImage = oldRemove })
-	var removed string
-	removeDockerImage = func(_ context.Context, ref string) error {
-		removed = ref
-		return nil
-	}
-
 	out, _, err := captureRun(t, "extract", "--root", f.root, "--out", dst, "--no-preserve-owner", "--remove-local-image")
-	if err != nil {
-		t.Fatalf("extract with image removal = %v", err)
+	if err == nil {
+		t.Fatal("--remove-local-image must be refused")
 	}
-	if !strings.Contains(out, "estratti: 1 file") {
-		t.Fatalf("extract output = %q", out)
+	if code := exitCode(err); code != exitUsage {
+		t.Fatalf("exit = %d, want %d (usage)", code, exitUsage)
 	}
-	if removed != "syncbssuser/mindhunt:mindhunters-test" {
-		t.Fatalf("removed image = %q", removed)
+	if !strings.Contains(err.Error(), "backimage restore --remove-local-image") {
+		t.Fatalf("the refusal must name the host equivalent: %v", err)
+	}
+	if out != "" {
+		t.Fatalf("nothing must be extracted before the refusal, got %q", out)
+	}
+	if _, statErr := os.Stat(dst); statErr == nil {
+		t.Fatal("the destination was created before the flag was refused")
 	}
 }
 

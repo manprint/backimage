@@ -316,6 +316,40 @@ non esegue il controllo che gli si chiede di fare. La difesa è **fuori banda**:
 `docker run IMAGE restore` resta il percorso comodo e va bene per un'immagine
 che non ha mai lasciato un perimetro fidato.
 
+### `--expect-digest`: ancorare la lettura a un valore esterno (0.4.1)
+
+`restore`, `verify`, `ls`, `find` e `inspect` del **binario host** accettano
+`--expect-digest sha256:…`. Se l'immagine che il riferimento risolve non ha
+quel digest, il comando esce con **codice 5 (integrità) prima di leggere la
+passphrase o il file di identità**: la credenziale non viene consegnata a
+un'immagine che non è quella richiesta.
+
+Cosa viene confrontato, per sorgente:
+
+| Sorgente | Valore letto dalla sorgente |
+| --- | --- |
+| registry | il digest che il registry associa al riferimento (`remote.Get`), cioè l'indice multi-arch per un tag multi-piattaforma |
+| `--oci-layout` | il digest dell'indice della layout — lo stesso che `backimage backup` stampa nel campo `digest` — oppure quello di uno dei manifest che l'indice pubblica |
+| `--local-repo` (daemon) | il digest che l'immagine ha **nel daemon**, che non è quello che aveva nel registry: il daemon ricomprime i layer |
+
+**Il flag vale quanto vale il canale da cui arriva il digest.** Un digest letto
+dalla stessa sorgente che fornisce l'immagine non prova niente: chi può
+sostituire l'immagine può sostituire anche il digest che la accompagna. Va
+ottenuto altrove — una nota di rilascio firmata, un ticket, la macchina che ha
+eseguito il backup — e confrontato qui. Per la stessa ragione il flag **non
+esiste nell'autoestraente**: dentro l'immagine non c'è nulla da confrontare che
+l'autore dell'immagine non controlli già.
+
+```console
+# sulla macchina che ha eseguito il backup
+$ backimage backup /srv --repo ghcr.io/me/dumps --tag daily --json | jq -r .digest
+sha256:9f2c…
+
+# altrove, con quel valore arrivato per un canale diverso dall'immagine
+$ backimage restore ghcr.io/me/dumps:daily --expect-digest sha256:9f2c… \
+    -x -C ./out --passphrase-file ./pass
+```
+
 ## Trattamento dei segreti nel runtime
 
 - `KeyMaterial` zera (wipe) DEK e KeyNonce in `Wipe()` (chiamato da

@@ -370,7 +370,7 @@ func TestPipelineEncryptedPublishesNoContentMetadata(t *testing.T) {
 		t.Fatalf("Run: %v", err)
 	}
 
-	source, err := restore.FromOCILayout(outPath, "")
+	source, err := restore.FromOCILayout(outPath, "", restore.SourceOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

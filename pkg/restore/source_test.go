@@ -356,7 +356,7 @@ func TestMissingAndMalformedMetadata(t *testing.T) {
 			}
 		})
 	}
-	if _, err := FromOCILayout(filepath.Join(t.TempDir(), "missing"), "x"); err == nil {
+	if _, err := FromOCILayout(filepath.Join(t.TempDir(), "missing"), "x", SourceOptions{}); err == nil {
 		t.Fatal("missing layout accepted")
 	}
 	idx, err := ociimg.BuildIndex([]ociimg.BuiltImage{{Platform: v1.Platform{OS: "linux", Architecture: "amd64"}, Image: fixture}})
@@ -389,7 +389,7 @@ func TestFromOCILayoutSelectsNestedPlatformIndex(t *testing.T) {
 	if err := lp.AppendIndex(idx); err != nil {
 		t.Fatal(err)
 	}
-	s, err := FromOCILayout(dir, "example.test/repo:tag")
+	s, err := FromOCILayout(dir, "example.test/repo:tag", SourceOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
