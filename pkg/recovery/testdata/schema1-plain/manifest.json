@@ -1,0 +1,56 @@
+{
+  "schemaVersion": 1,
+  "tool": {
+    "name": "backimage",
+    "version": "dev"
+  },
+  "createdAt": "2026-01-02T03:04:05Z",
+  "sources": [
+    "/tmp/tmp.IKF4WbZW1o/src"
+  ],
+  "host": {
+    "hostname": "i7-lenovo-work",
+    "os": "linux",
+    "arch": "amd64"
+  },
+  "totals": {
+    "files": 2,
+    "dirs": 2,
+    "symlinks": 1,
+    "hardlinks": 0,
+    "devices": 0,
+    "bytesRaw": 23,
+    "bytesStored": 346
+  },
+  "archive": {
+    "format": "tar",
+    "compression": "zstd",
+    "compressionLevel": 2
+  },
+  "encryption": {
+    "enabled": false,
+    "kdf": "",
+    "aead": "",
+    "nonceMode": "",
+    "recipients": null
+  },
+  "chunking": {
+    "strategy": "length",
+    "targetChunkBytes": 1048576,
+    "count": 1
+  },
+  "layers": [
+    {
+      "index": 0,
+      "digest": "sha256:ffe75e508970b0994103158489c0e6627a9a3e32322cb937361c0a6bf1b8450b",
+      "chunkFrom": 0,
+      "chunkTo": 0,
+      "storedBytes": 346
+    }
+  ],
+  "index": {
+    "path": "index.json.zst",
+    "storedSha256": "",
+    "encrypted": false
+  }
+}

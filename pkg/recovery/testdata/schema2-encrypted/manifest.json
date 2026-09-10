@@ -1,0 +1,60 @@
+{
+  "schemaVersion": 2,
+  "tool": {
+    "name": "backimage",
+    "version": "dev"
+  },
+  "createdAt": "2026-01-02T03:04:05Z",
+  "sources": null,
+  "host": {
+    "hostname": "",
+    "os": "",
+    "arch": ""
+  },
+  "totals": {
+    "files": 0,
+    "dirs": 0,
+    "symlinks": 0,
+    "hardlinks": 0,
+    "devices": 0,
+    "bytesRaw": 0,
+    "bytesStored": 0
+  },
+  "archive": {
+    "format": "tar",
+    "compression": "zstd",
+    "compressionLevel": 2
+  },
+  "encryption": {
+    "enabled": true,
+    "kdf": "scrypt-age",
+    "aead": "aes256-gcm",
+    "envelopeVersion": 2,
+    "nonceMode": "random",
+    "recipients": null
+  },
+  "chunking": {
+    "strategy": "length",
+    "targetChunkBytes": 1048576,
+    "count": 1
+  },
+  "layers": [
+    {
+      "index": 0,
+      "digest": "sha256:44501602fa03d5c9adf9753c41d4f7f47589ad79477d4e456c3ed590bac7df9d",
+      "chunkFrom": 0,
+      "chunkTo": 0,
+      "storedBytes": 386
+    }
+  ],
+  "index": {
+    "path": "index.json.zst",
+    "storedSha256": "",
+    "encrypted": true
+  },
+  "private": {
+    "path": "private.json.zst",
+    "storedSha256": "sha256:254e2cfb090fa5abc2c11ef74091a564857ab441e3cea3c51c6310f0938f781f",
+    "encrypted": true
+  }
+}

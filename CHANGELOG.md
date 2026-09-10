@@ -253,6 +253,15 @@ cambiano se i dati non sono cambiati, quindi il costo è il solo layer tool.
   dichiara su stderr quando succede: il server riceve una credenziale
   dell'intero account, non una delega a questo repository, e la tiene per la
   finestra dichiarata (un'ora) invece che per una durata scelta dal registry.
+- **Fixture congelate dei formati rilasciati** in `pkg/recovery/testdata/`:
+  un backup completo — manifest, chunks, indice, blob private, keyfile age e
+  layer dati — per `schema1-plain`, `schema2-encrypted` e `legacy-envelope1`
+  (envelope v1, scritto fino alla 0.2.3). `format_compat_test.go` le apre, le
+  elenca, le ripristina e le verifica tutte. Servono perché il giorno in cui
+  il writer cambia nessuna build sa più produrre i byte vecchi: un test di
+  compatibilità che genera il proprio input smette di coprire qualcosa senza
+  dirlo. `scripts/make-format-fixtures.sh` le rigenera, e la fixture legacy
+  esce da un `git worktree` sul tag che la scriveva.
 - **`make e2e PHASE=A5`.** Sostituisce l'entrypoint di un'immagine di backup
   con un programma che si limita a scrivere su file la passphrase ricevuta —
   la perdita che nessun controllo interno all'immagine può impedire — e poi

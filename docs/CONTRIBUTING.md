@@ -34,6 +34,30 @@
 - Nessun output su `stdout` che non sia il dato richiesto: log e progresso su `stderr`.
 - Codici di uscita: 0 ok, 1 generico, 2 uso, 3 privilegi, 4 passphrase, 5 integrità, 6 rete, 7 interrotto.
 
+## Fixture dei formati rilasciati
+
+`pkg/recovery/testdata/` contiene un backup completo per ogni formato su disco
+che questo progetto ha rilasciato: `schema1-plain`, `schema2-encrypted` e
+`legacy-envelope1` (envelope v1, scritto fino alla 0.2.3 e da allora solo
+letto). Non sono generate a runtime: appena il writer cambia, nessuna build è
+più in grado di produrre i byte vecchi, e un test di compatibilità che genera
+il proprio input smette silenziosamente di coprire qualcosa.
+
+`pkg/recovery/format_compat_test.go` le apre, le elenca, le ripristina e le
+verifica. **Se uno di quei test fallisce, il lettore ha perso la capacità di
+leggere un formato che è già in circolazione**: rigenerare la fixture non è la
+correzione, è la cancellazione della prova.
+
+Si rigenera solo per **congelare un formato nuovo**:
+
+```console
+bash scripts/make-format-fixtures.sh                   # tutte
+bash scripts/make-format-fixtures.sh legacy-envelope1  # una sola
+```
+
+Lo script costruisce la fixture legacy da un `git worktree` sul tag
+corrispondente, quindi richiede un albero git completo.
+
 ## Come far girare i gate
 
 ```console
