@@ -53,9 +53,10 @@ mutable noise for backup workloads.
 | POSIX ACLs | ✅ (`system.posix_acl_*`) | ❌ (NFSv4 ACLs are not xattr-backed) | n/a (owner ACLs) |
 | security.capability | ✅ (root/CAP_SETFCAP) | n/a | n/a |
 | trusted.* xattrs (overlayfs) | archived always, restored only with CAP_SYS_ADMIN | n/a | n/a |
-| hardlinks | ✅ | ✅ | ✅ (reflinks fallback) |
-| symlinks | ✅ | ✅ | ❌ (dangling allowed) |
-| devices / fifos | ✅ (root) | ✅ | n/a |
+| hardlinks | ✅ | ✅ | ✅ (NTFS; copy fallback otherwise) |
+| symlinks | ✅ | ✅ | ⚠️ requires developer mode or `SeCreateSymbolicLinkPrivilege`, otherwise reported as skipped |
+| devices / fifos | ✅ (root) | ✅ | ❌ reported as skipped, never created as empty files |
+| names with `\ : * ? " < > \|`, or a trailing space or dot | ✅ | ✅ | ❌ reported as skipped |
 | atime/ctime round-trip | only with `PreserveTimes` | same | ctime not supported |
 
 ## Extraction order (mandatory)
@@ -72,6 +73,33 @@ After all entries:
 7. re-apply mode and timestamps to ALL directories, deepest-first (writing
    into a directory changes its mtime; a 0500 directory is not writable until
    it is fully populated)
+
+## What a hardlink is allowed to point at
+
+A `TypeLink` entry names a file that must already exist. The extractor accepts
+only a **regular file this same restore has already written**, resolved inside
+the destination.
+
+The name in the header never went through the checks applied to the entry's own
+name, so it used to be joined to the destination and linked as-is:
+`Linkname="../outside"` gave the restore a second name for a file outside it,
+and the metadata pass then rewrote that file's owner, mode and timestamps
+through the shared inode — no privileges required.
+
+**Change of fidelity**: a hardlink whose first name is not part of this restore
+is now **skipped and reported** (`Stats.Skipped`, `Stats.Errors`, and `skipped`
+/ `skipped_reasons` in `restore --json`). Before, it was materialised as a copy
+by reading whatever happened to sit at that path on disk. Three cases produce
+it:
+
+- the first name was excluded by `--include` / `--exclude`;
+- `--strip-components` cut the first name away entirely;
+- the first name appears *after* the link in the archive (a forward link).
+  backimage's own writer never produces one.
+
+A selective restore rarely hits this: asking for a hardlink also asks for the
+name it points at, so the group comes back whole (`selectionSet` in
+`pkg/recovery`).
 
 ## Extended attributes that cannot be restored
 
@@ -92,6 +120,14 @@ Two families are skipped with a warning, even in strict mode, and counted in
 default, and counted separately per namespace; `--strict` turns any of them
 back into a hard failure whose error names the remediation.
 
+Attributes are written through a **descriptor** of the object, not through its
+pathname, because there is no `*at` form of `setxattr`. That has one
+consequence: only regular files, directories and hardlinks can receive them. A
+symlink cannot be opened to be written to, and opening a device node has
+effects on the device itself, so extended attributes on symlinks, devices and
+fifos are reported as skipped rather than applied through a path that could be
+swapped underneath.
+
 ## Degradation classes (restore)
 
 Without `--strict`, every metadata operation is best effort. `Stats.Degraded`
@@ -104,6 +140,38 @@ These abort regardless of the policy, because degrading them would hide a real
 problem: `ENOSPC`, `EDQUOT`, `EROFS`, `EIO`, `ENOMEM`, `EMFILE`, `ENFILE`, a
 truncated archive, a non-empty destination without `Overwrite`, and an
 unsupported typeflag.
+
+## Confinement of the extraction
+
+Every filesystem operation of a restore is resolved through a single
+`os.Root` opened on the destination, and never through a pathname rebuilt and
+reopened. The check and the use are the same syscall, so a component replaced
+by a symlink between them cannot move the operation outside the destination:
+there is no "between them" left.
+
+What `os.Root` does not cover — creating a device or a fifo, and the
+symlink-safe form of `utimensat` — uses the `*at` syscalls with the descriptor
+of the containing directory, obtained through that same root. On targets
+without `mknodat`/`mkfifoat` (macOS, and partly the BSDs) the final component
+of a device or fifo is created by pathname; its directory was still resolved
+through the root.
+
+## Names the archive can hold and the filesystem cannot
+
+A tar path is slash-separated, so on Unix a backslash is an ordinary character
+in a filename. `a\b` is one file, and it is archived, indexed and restored as
+one file. Quotes, newlines, tabs, leading and trailing spaces, and both Unicode
+normal forms are carried unchanged too.
+
+The one exception is a name that is not valid UTF-8. The tar keeps the real
+bytes and the file is archived and restored intact, but `index.json.zst` is
+JSON and JSON has no encoding for those bytes: each is replaced with U+FFFD.
+`ls`, `find` and a selective restore match against the index, so they will show
+and select the wrong name for such a file. A full restore is unaffected.
+
+On Windows a name containing `\ : * ? " < > |`, or ending in a space or a dot,
+cannot exist at all: those entries are reported as skipped instead of being
+rewritten into a name the backup does not describe.
 
 ## Other documented behaviours
 

@@ -148,7 +148,8 @@ Casi tipici in un dump di host reale:
 | file di altri utenti, restore non-root | owner = utente corrente |
 | `security.*` su destinazione senza SELinux | attributi ignorati |
 | destinazione senza xattr (vfat, NFS, alcuni bind mount) | attributi ignorati |
-| hardlink non ricreabile | materializzato come copia indipendente |
+| hardlink non ricreabile (device diverso, filesystem senza hardlink) | copia indipendente del file già ripristinato |
+| hardlink il cui primo nome non fa parte di questo restore | entry saltata e riportata, mai ricostruita leggendo dal disco |
 | device node senza `CAP_MKNOD` | oggetto non creato, contato in `Skipped` |
 
 Si fermano invece sempre, perché non sono degradazioni: destinazione piena o in
@@ -185,7 +186,28 @@ restore:   3 entry NON estratte: elenco completo in Stats.Errors (--json)
 
 Le classi sono `owner`, `mode`, `times`, `xattr.<namespace>`, `hardlink` e
 `object`. Con `--json` gli stessi dati sono in `Degraded`, `DegradedExamples`,
-`Warnings`, `XattrsSkipped`, `Skipped` ed `Errors`.
+`Warnings`, `XattrsSkipped`, `Skipped` ed `Errors`; `restore --extract --json`
+riporta inoltre `skipped` e `skipped_reasons`, cioè le entry che l'estrattore
+non ha potuto scrivere e il perché. Prima finivano solo in una riga di
+attenzione su stderr, e un'automazione non poteva accorgersi che il restore era
+incompleto.
+
+## Un hardlink punta solo a un file di questo restore
+
+Il primo nome di un hardlink deve essere **un file regolare che questa stessa
+corsa ha già scritto**, risolto dentro la destinazione.
+
+Il nome contenuto nell'header non passava dai controlli applicati al nome
+dell'entry: veniva unito alla destinazione e collegato così com'era. Con
+`Linkname="../fuori"` il restore otteneva un secondo nome per un file esterno,
+e la fase dei metadati ne riscriveva owner, permessi e timestamp attraverso
+l'inode condiviso, senza bisogno di privilegi.
+
+**Cambio di fedeltà**: un hardlink il cui primo nome non fa parte di questo
+restore viene ora **saltato e riportato**, mentre prima veniva materializzato
+come copia leggendo qualunque cosa si trovasse a quel percorso sul disco. Un
+restore selettivo lo incontra di rado: chiedere un hardlink chiede anche il
+nome a cui punta, quindi il gruppo torna intero.
 
 ## Recupero parziale: `--continue`
 

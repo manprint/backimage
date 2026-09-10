@@ -21,11 +21,11 @@ DA-01…DA-05 in `overview.md` §3 e non si rinegoziano senza aggiornare quel do
 | A1.2 policy `require-encryption` | A01 | Sonnet | **fatto** |
 | A1.3 `--overwrite` non cancella figli estranei | A12 | Sonnet | **fatto** |
 | A1.4 `--continue` non annulla i filtri | A13 | Sonnet | **fatto** |
-| A2.1 traversal con `os.Root` | A03 | Opus + Sonnet | da fare |
-| A2.2 hardlink dentro la radice | A02 | Sonnet | da fare |
-| A2.3 backslash nei nomi Unix | A17 | Sonnet | da fare |
-| A2.4 riscrittura Windows | A18 | Sonnet | da fare |
-| A2.5 matrice CI oltre Linux | — | Haiku | da fare |
+| A2.1 traversal con `os.Root` | A03 | Opus + Sonnet | **fatto** |
+| A2.2 hardlink dentro la radice | A02 | Sonnet | **fatto** |
+| A2.3 backslash nei nomi Unix | A17 | Sonnet | **fatto** |
+| A2.4 riscrittura Windows | A18 | Sonnet | **fatto** |
+| A2.5 matrice CI oltre Linux | — | Haiku | **fatto** |
 | A3.1 verifica prima dell'emissione | A04 | Sonnet | da fare |
 | A3.2 parziale senza buffer per entry | A14 | Sonnet | da fare |
 | A3.3 seek invece di letture quadratiche | A15 | Sonnet | da fare |
@@ -109,7 +109,7 @@ uno stato.
 | ID | — |
 | Stato | none |
 | Intento | — |
-| Prossima azione | A2.1 traversal con os.Root |
+| Prossima azione | A3.1 verifica prima dell'emissione |
 | Lavoro a metà | none — tree consistent |
 
 ### Ledger
@@ -125,6 +125,11 @@ uno stato.
 | 7 | sub-fase | A1.2 | policy require-encryption con uscita esplicita --allow-unencrypted su entrambi gli eseguibili | go test ./... verde; make lint 0 issues; docs-check verde; docs/cli.md rigenerato; test su restore/verify/ls/find + autoestraente list/verify/tar/extract, con passphrase-file, identity ed env, piu i due casi negativi (senza credenziale, e backup cifrato con passphrase corretta) | uncommitted |
 | 8 | sub-fase | A1.3 | --overwrite sovrappone invece di sostituire; RemoveAll solo su tipo discordante; O_TRUNC sulla creazione dei file regolari | go test ./... verde; make lint 0 issues; docs-check verde; TestOverwriteDoesNotDeleteChildrenTheBackupDoesNotContain verificato in negativo (con RemoveAll incondizionato fallisce); coperti figli estranei, tipi discordanti, troncamento, nomi ripetuti nel tar e il caso senza --overwrite | uncommitted |
 | 9 | sub-fase | A1.4 | --continue riapplica i filtri (alreadyFiltered corretto, StreamSelectedTarPartial per l'uscita tar), e2e phase_A1.sh con l'utensile di falsificazione forgeclear, classificazione a integrita' dei rifiuti | go test ./... verde; make check verde (fmt, vet, lint 0 issues, build, test, race, deps-check, docs-check, proto-check SKIP, vuln 0 raggiungibili); make e2e PHASE=A1 verde e verificato in negativo (rimuovendo il rifiuto aeadNone lo script fallisce su 'host tar restore'); A1 aggiunta alla matrice e2e di ci.yml | uncommitted |
+| 10 | sub-fase | A2.1 | traversal ancorato: unico os.Root sulla destinazione, primitive *at con il descrittore della directory contenitrice per mknod/mkfifo/utimensat, xattr via Fsetxattr su descrittore | go test ./... verde; make check verde; make lint 0 issues; docs-check verde; GOOS=windows/darwin go vet ./pkg/... ./internal/... puliti; TestDirectoryReplacedBySymlinkDoesNotLeakTheFinalChmod e TestHardlinkOutOfTheDestinationIsRefused verificati in negativo (ripristinando os.Chmod su pathname e os.Link su Linkname falliscono entrambi) | uncommitted |
+| 11 | sub-fase | A2.2 | hardlink solo verso un file regolare gia' ripristinato in questa corsa; DA-03 skip+report; fallback di copia dentro os.Root | go test ./... verde; make check verde; make lint 0 issues; docs-check verde; GOOS=windows/darwin go vet ./pkg/... ./internal/... puliti; coperti target fuori radice, primo nome filtrato, forward link, gruppo legittimo ancora condiviso, fallback di copia risolto dentro la radice | uncommitted |
+| 12 | sub-fase | A2.3 | CleanPath pura: il backslash resta un carattere del nome su Unix; roundtrip byte per byte su nomi ostili; limite non-UTF-8 dell'indice fissato e documentato (B-A002) | go test ./... verde; make check verde; make lint 0 issues; docs-check verde; GOOS=windows/darwin go vet ./pkg/... ./internal/... puliti; TestHostileNamesRoundTripByteForByte verificato in negativo (ripristinando la sostituzione dei backslash fallisce su 4 nomi) | uncommitted |
+| 13 | sub-fase | A2.4 | estrattore Windows riscritto: filtri e --strip-components condivisi con Unix, os.Root, tipi e nomi non rappresentabili riportati invece che inventati | go test ./... verde; make check verde; make lint 0 issues; docs-check verde; GOOS=windows/darwin go vet ./pkg/... ./internal/... puliti; test Windows compilati con GOOS=windows go vet, eseguiti dal nuovo job CI windows-latest | uncommitted |
+| 14 | sub-fase | A2.5 | job CI windows-latest e macos-latest (build + unit test dei package portabili, internal/embedded escluso perche' richiede make embed) | go test ./... verde; make check verde; make lint 0 issues; docs-check verde; GOOS=windows/darwin go vet ./pkg/... ./internal/... puliti; ci.yml valida come YAML; A2 aggiunta alla matrice e2e | uncommitted |
 
 ### Deviazioni a runtime
 
@@ -144,6 +149,11 @@ uno stato.
 - A1.4 — l'uscita di fase A1 ha aggiunto due cose non previste dal testo della fase. (1) test/e2e/tools/forgeclear: falsifica un backup reale riscrivendo i blob come envelope in chiaro e **riparando** ogni numero pubblico che li descrive (Sb, Ss, nome del blob, digest e storedBytes del layer, storedSha256 di index e private), poi ricostruisce l'immagine e la ripubblica su layout OCI e registry. Senza la riparazione il rifiuto sarebbe potuto arrivare da un digest discordante invece che dalla regola sull'AEAD, e il test non avrebbe provato nulla.
 - A1.4 — (2) classificazione: un blob privato non autenticato faceva fallire lo sblocco e usciva 4 («passphrase errata») su entrambi gli eseguibili. Il piano chiede che il rifiuto si classifichi come integrita'/formato, quindi crypt.ErrIntegrity e index.ErrBadSchema ora mappano su exit 5 (internal/cli/errors.go, cmd/backimage-selfextract/exit.go) e lo sblocco distingue manomissione da credenziale (unlockError in entrambi). Cambio di comportamento documentato in CHANGELOG, README, README.it, docs/cron.md, docs/security.md.
 - A1.4 — il daemon Docker resta fuori dalle sorgenti coperte dall'e2e: 'restore --local-repo' non legge nessun backup, nemmeno onesto, perche' docker save/daemon.Image ri-etichettano ogni layer come tar+gzip. Difetto anteriore al piano, registrato come B-A001 in plan/astra/bugs.md.
+- A2.1 — os.Root non copre xattr, mknod e mkfifo. Gli xattr passano ora da un descrittore (Fsetxattr) invece che da Lsetxattr su pathname: cambio di fedelta' documentato, solo file regolari, directory e hardlink possono riceverli, mentre symlink, device e fifo li riportano come saltati (un symlink non si puo' aprire, un device si' ma con effetti sul device).
+- A2.1 — macOS non ha mknodat ne' mkfifoat: nodeat_other_unix.go usa la forma con pathname, con la directory contenitrice comunque risolta attraverso il root. Su Linux si usano Mknodat/Mkfifoat.
+- A2.2 — DA-03 e' raggiungibile solo da archivi costruiti a mano: selectionSet in pkg/recovery aggiunge gia' il primo nome di ogni hardlink selezionato, quindi un restore selettivo dalla CLI riporta il gruppo intero. L'e2e fissa quella proprieta', gli unit test coprono lo skip.
+- A2.2 — restoreExtract scartava le Stats dell'estrattore: le entry saltate arrivavano solo come riga di attenzione su stderr. Aggiunti skipped e skipped_reasons a restore --extract --json, altrimenti DA-03 non e' rendicontabile da un'automazione.
+- A2.5 — internal/embedded e' escluso dai test dei job Windows e macOS: asserisce che gli asset Linux incorporati siano coetanei dell'albero, cosa che fa make embed sui job Linux.
 
 ### Blocchi
 

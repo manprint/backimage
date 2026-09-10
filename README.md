@@ -385,6 +385,16 @@ shell history and in `ps`.
 - Tag deletion depends on the registry — see
   [`docs/registries.md`](docs/registries.md).
 - A single `/` root is not supported (see *Archived path names*).
+- A hardlink whose first name is not part of the restore is skipped and
+  reported, not rebuilt from whatever sits at that path on disk. Selective
+  restores rarely hit it: asking for a hardlink also asks for the name it
+  points at.
+- A filename that is not valid UTF-8 is archived and restored intact, but the
+  index records it with replacement characters, so `ls`, `find` and selective
+  restores see a different name.
+- On Windows, devices, fifos, and names containing `\ : * ? " < > |` or ending
+  in a space or a dot are reported as skipped rather than restored; symlinks
+  need developer mode. See [`docs/FIDELITY.md`](docs/FIDELITY.md).
 - Losing the passphrase means losing the backup. There is no recovery.
 
 ---

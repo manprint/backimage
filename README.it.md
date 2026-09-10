@@ -393,6 +393,16 @@ nella history della shell e in `ps`.
 - La cancellazione dei tag dipende dal registry: vedere
   [`docs/registries.md`](docs/registries.md).
 - Una radice `/` singola non è supportata (vedi *Nomi dei path archiviati*).
+- Un hardlink il cui primo nome non fa parte del restore viene saltato e
+  riportato, non ricostruito leggendo dal disco. I restore selettivi lo
+  incontrano di rado: chiedere un hardlink chiede anche il nome a cui punta.
+- Un nome che non è UTF-8 valido viene archiviato e ripristinato intatto, ma
+  l'indice lo registra con caratteri di sostituzione: `ls`, `find` e i restore
+  selettivi vedono un nome diverso.
+- Su Windows device, fifo e i nomi che contengono `\ : * ? " < > |` o
+  terminano con uno spazio o un punto vengono riportati come saltati invece che
+  ripristinati; i symlink richiedono la modalità sviluppatore. Vedi
+  [`docs/FIDELITY.md`](docs/FIDELITY.md).
 - Perdere la passphrase significa perdere il backup. Non esiste recupero.
 
 ---

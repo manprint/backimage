@@ -37,7 +37,9 @@ func TestValidateEntry(t *testing.T) {
 
 func TestCleanPath(t *testing.T) {
 	cases := map[string]string{
-		"a\\b\\c": "a/b/c",
+		// A backslash is part of the name on Unix, not a separator: turning
+		// `a\b` into `a/b` renamed one file into a directory holding another.
+		"a\\b\\c": "a\\b\\c",
 		"a//b":    "a/b",
 		"a/./b":   "a/b",
 		"":        ".",

@@ -956,7 +956,16 @@ Se `--strict` non produce errori, ogni metadato archiviato è stato riapplicato.
 - file sparsi: vengono riscritti densi, quindi occupano più spazio
   dell'originale.
 - il numero di inode condivisi da un hardlink, quando la destinazione non
-  consente di ricrearlo: il contenuto è identico, l'inode no.
+  consente di ricrearlo: il contenuto è identico, l'inode no. Se invece il
+  primo nome del gruppo non fa parte del restore, l'entry viene saltata e
+  riportata, mai ricostruita leggendo dal disco.
+- un nome che non è UTF-8 valido: il tar ne conserva i byte e il file viene
+  ripristinato intatto, ma l'indice — che è JSON — sostituisce ogni byte non
+  valido con U+FFFD, quindi `ls`, `find` e il restore selettivo mostrano e
+  selezionano un nome diverso da quello reale.
+- su Windows: device, fifo, e i nomi che contengono `\ : * ? " < > |` o
+  terminano con uno spazio o un punto. Vengono riportati come saltati, mai
+  creati come file vuoti.
 
 La matrice completa per sistema operativo e metodo di estrazione è in
 [FIDELITY](FIDELITY.md); la politica di degradazione del restore è

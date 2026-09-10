@@ -330,6 +330,7 @@ func runRestore(cmd *cobra.Command, args []string) error {
 		}
 	}
 	var partial recovery.PartialReport
+	var extracted archive.Stats
 	stream := func(w io.Writer) error {
 		if keepGoing {
 			var perr error
@@ -355,7 +356,7 @@ func runRestore(cmd *cobra.Command, args []string) error {
 		if selected != nil {
 			total = selectedBytes(selected)
 		}
-		err = restoreExtract(cmd, stream, selected != nil, restoreProgress(cmd, total))
+		extracted, err = restoreExtract(cmd, stream, selected != nil, restoreProgress(cmd, total))
 	} else {
 		log("restore: ricostruzione tar in corso")
 		err = restoreTar(cmd, refText, stream)
@@ -389,10 +390,36 @@ func runRestore(cmd *cobra.Command, args []string) error {
 	}
 	pr := NewPrinter(cmd.OutOrStdout(), cmd.ErrOrStderr(), mustOptions(cmd))
 	if mustOptions(cmd).JSON {
-		return printerResult(pr, map[string]any{"ok": true, "reference": refText, "extract": getFlagBool(cmd, "extract"), "remove_local_image": imageRemoved, "duration": time.Since(started).String()})
+		result := map[string]any{"ok": true, "reference": refText, "extract": getFlagBool(cmd, "extract"),
+			"remove_local_image": imageRemoved, "duration": time.Since(started).String()}
+		if getFlagBool(cmd, "extract") {
+			// What the extractor could not write belongs in the machine
+			// readable answer, not only in a warning on stderr.
+			result["skipped"] = extracted.Skipped
+			result["skipped_reasons"] = errorTexts(extracted.Errors)
+			if len(extracted.Warnings) > 0 {
+				result["warnings"] = extracted.Warnings
+			}
+		}
+		return printerResult(pr, result)
+	}
+	if extracted.Skipped > 0 {
+		log(fmt.Sprintf("restore: attenzione: %d entry non ripristinate (vedi --json per l'elenco)", extracted.Skipped))
 	}
 	log(fmt.Sprintf("restore completato in %s", time.Since(started).Round(time.Millisecond)))
 	return nil
+}
+
+// errorTexts renders the per-entry failures for the JSON output.
+func errorTexts(errs []error) []string {
+	if len(errs) == 0 {
+		return []string{}
+	}
+	out := make([]string, 0, len(errs))
+	for _, err := range errs {
+		out = append(out, err.Error())
+	}
+	return out
 }
 
 func restoreTar(cmd *cobra.Command, refText string, stream func(io.Writer) error) error {
@@ -440,21 +467,28 @@ func restoreTar(cmd *cobra.Command, refText string, stream func(io.Writer) error
 // entries, so the extractor must not filter a second time — a second pass over
 // an already-filtered stream drops the parent directories the selection pulled
 // in on purpose.
-func restoreExtract(cmd *cobra.Command, stream func(io.Writer) error, alreadyFiltered bool, report func(int64)) error {
+// restoreExtract writes the stream into the destination and returns what the
+// extractor made of it. The stats used to be discarded: an entry the extractor
+// skipped and recorded — a hardlink whose first name is not part of this
+// restore, a name the platform cannot hold — reached the user as a warning
+// line on stderr and nothing at all in --json, so automation could not see
+// that the restore was incomplete.
+func restoreExtract(cmd *cobra.Command, stream func(io.Writer) error, alreadyFiltered bool, report func(int64)) (archive.Stats, error) {
+	var stats archive.Stats
 	dest := getFlagString(cmd, "destination")
 	if dest == "" {
-		return usageErrorf("--destination non può essere vuota")
+		return stats, usageErrorf("--destination non può essere vuota")
 	}
 	if !getFlagBool(cmd, "overwrite") {
 		if entries, err := os.ReadDir(dest); err == nil && len(entries) > 0 {
-			return usageErrorf("destinazione %s non vuota; usa --overwrite", dest)
+			return stats, usageErrorf("destinazione %s non vuota; usa --overwrite", dest)
 		}
 	}
 	strict := getFlagBool(cmd, "strict")
 	if !getFlagBool(cmd, "no-preserve-owner") {
 		caps, err := archive.PreflightRestore(cmd.Context(), dest)
 		if err != nil {
-			return err
+			return stats, err
 		}
 		for _, cap := range caps {
 			if cap.Available {
@@ -464,7 +498,7 @@ func restoreExtract(cmd *cobra.Command, stream func(io.Writer) error, alreadyFil
 			// restore in --strict mode only. Advisory capabilities (trusted.*
 			// xattrs: overlayfs bookkeeping) never stop it.
 			if strict && archive.BlockingCapability(cap) {
-				return &Error{Kind: KindPermission, Msg: cap.Reason, Hint: cap.Remedy}
+				return stats, &Error{Kind: KindPermission, Msg: cap.Reason, Hint: cap.Remedy}
 			}
 			restoreLog(cmd, "restore: attenzione: "+cap.Reason+" — "+cap.Remedy)
 		}
@@ -489,7 +523,7 @@ func restoreExtract(cmd *cobra.Command, stream func(io.Writer) error, alreadyFil
 		Strict:          strict,
 		Progress:        func(message string) { restoreLog(cmd, message) },
 	})
-	_, extractErr := x.Extract(cmd.Context(), progressReader, dest)
+	stats, extractErr := x.Extract(cmd.Context(), progressReader, dest)
 	if extractErr == nil {
 		progressReader.Finish()
 		restoreLog(cmd, "restore: verifica e finalizzazione filesystem completate")
@@ -499,9 +533,9 @@ func restoreExtract(cmd *cobra.Command, stream func(io.Writer) error, alreadyFil
 	}
 	streamErr := <-done
 	if extractErr != nil {
-		return extractErr
+		return stats, extractErr
 	}
-	return streamErr
+	return stats, streamErr
 }
 
 func selectedBytes(entries []index.FileEntry) int64 {

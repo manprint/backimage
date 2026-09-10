@@ -119,6 +119,36 @@ cambiano se i dati non sono cambiati, quindi il costo è il solo layer tool.
   altro modo. **Cambio di comportamento**: chi contava sulla cancellazione per
   ottenere una destinazione identica al backup deve svuotarla prima.
 
+- **L'estrazione è confinata da descrittori, non da stringhe.** Ogni operazione
+  di restore passa ora da un unico `os.Root` aperto sulla destinazione: la
+  validazione e l'uso sono la stessa syscall, quindi un componente sostituito
+  da un symlink fra l'una e l'altro non può più spostare l'operazione fuori
+  dalla destinazione. Prima la validazione restituiva un pathname e ogni
+  operazione successiva — creazione, chmod, chown, xattr, timestamp, e la fase
+  finale sulle directory — lo risolveva di nuovo. La prova non richiede una
+  corsa fra processi: un archivio con una directory `pivot` seguita da un
+  symlink `pivot` verso l'esterno, con `--overwrite`, portava il modo della
+  directory esterna da `0700` a `0777`. Per ciò che `os.Root` non copre (mknod,
+  mkfifo, `utimensat` con `AT_SYMLINK_NOFOLLOW`) si usano le forme `*at` con il
+  descrittore della directory contenitrice.
+
+- **Un hardlink può puntare solo a un file di questo restore.** Il nome nel
+  campo `Linkname` non passava dai controlli applicati al nome dell'entry:
+  `Linkname="../fuori"` dava al restore un secondo nome per un file esterno, e
+  la fase dei metadati ne riscriveva owner, permessi e timestamp attraverso
+  l'inode condiviso, senza privilegi. Ora il primo nome deve essere un file
+  regolare che la corsa ha già scritto, risolto dentro la destinazione.
+  **Cambio di fedeltà**: se non lo è — filtrato, tagliato da
+  `--strip-components`, o successivo nell'archivio — l'entry viene saltata e
+  riportata, mentre prima veniva materializzata come copia leggendo dal disco.
+
+- **Un backslash nel nome di un file non è più un separatore.** `CleanPath`
+  sostituiva `\` con `/` su ogni piattaforma, quindi il file Unix `a\b`
+  tornava da un restore come la directory `a` contenente `b`. Non era
+  un'evasione — dopo la sostituzione `..\..` diventa `../..` e veniva
+  rifiutato — era corruzione di dati nel roundtrip. La normalizzazione
+  appartiene al percorso Windows, dove quel carattere non è ammesso in un nome.
+
 - **`--continue` non annulla più `--include` e `--exclude`.** Il flag
   sostituiva lo stream selettivo con quello tollerante ai chunk danneggiati,
   che non conosceva alcuna selezione, e nello stesso momento diceva
@@ -128,8 +158,30 @@ cambiano se i dati non sono cambiati, quindi il costo è il solo layer tool.
   (`Backup.StreamSelectedTarPartial`), sia verso il filesystem sia verso il
   tar; `--strip-components` continua ad applicarsi.
 
+- **L'estrattore Windows è stato riscritto.** Erano novanta righe che
+  ignoravano del tutto `--include`, `--exclude` e `--strip-components` — un
+  restore selettivo produceva l'intero backup, in silenzio, su ogni host
+  Windows — e che trasformavano ogni entry di tipo sconosciuto in un file
+  regolare vuoto: hardlink, device e fifo arrivavano come zero byte senza
+  errore. Non c'era alcun confinamento. Ora le regole di selezione sono le
+  stesse del percorso Unix, il traversal è ancorato a `os.Root` (che su Windows
+  copre anche le junction), e ciò che Windows non può contenere — device, fifo,
+  nomi con `\ : * ? " < > |` o con spazi e punti finali — viene riportato come
+  saltato invece di essere inventato.
+
 ### Added
 
+- **`restore --extract --json` riporta `skipped` e `skipped_reasons`.** Le
+  entry che l'estrattore non ha potuto scrivere finivano solo in una riga di
+  attenzione su stderr: un'automazione non poteva accorgersi che il restore era
+  incompleto.
+- **Job CI su `windows-latest` e `macos-latest`.** I tre job esistenti erano
+  tutti `ubuntu-latest`, e un verde su Linux non dice nulla dell'estrattore
+  Windows: finché non è esistito questo job, il restore selettivo lì era rotto
+  e nessun gate poteva accorgersene.
+- **`make e2e PHASE=A2`.** Roundtrip di nomi ostili attraverso un backup reale,
+  gruppi di hardlink, e una destinazione che tenta di dirottare il restore
+  fuori da sé.
 - **`version` nell'autoestraente.** Stampa versione e commit dell'estrattore
   incorporato senza toccare il backup e senza credenziali.
 - **`make vuln`.** Esegue `govulncheck ./...` da solo.

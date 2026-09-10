@@ -64,6 +64,12 @@ func (e *Entry) Validate() error {
 }
 
 // CleanPath normalises an archive-relative path to slash form.
+//
+// A backslash is left alone. Tar paths are slash-separated, so on Unix a
+// backslash is an ordinary character in a filename: turning `a\b` — the name
+// of one file — into the directory `a` holding `b` corrupted the roundtrip of
+// every name that contained one. Windows cannot hold such a name at all, and
+// deals with it where the name meets the filesystem, not here.
 func CleanPath(p string) string {
-	return path.Clean(strings.ReplaceAll(p, "\\", "/"))
+	return path.Clean(p)
 }

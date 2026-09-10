@@ -11,32 +11,6 @@ import (
 	"testing"
 )
 
-// tarWith builds an archive from a list of headers with optional bodies.
-func tarWith(t *testing.T, entries ...tar.Header) *bytes.Buffer {
-	t.Helper()
-	var buf bytes.Buffer
-	tw := tar.NewWriter(&buf)
-	for i := range entries {
-		h := entries[i]
-		body := make([]byte, h.Size)
-		for j := range body {
-			body[j] = 'x'
-		}
-		if err := tw.WriteHeader(&h); err != nil {
-			t.Fatal(err)
-		}
-		if h.Typeflag == tar.TypeReg && h.Size > 0 {
-			if _, err := tw.Write(body); err != nil {
-				t.Fatal(err)
-			}
-		}
-	}
-	if err := tw.Close(); err != nil {
-		t.Fatal(err)
-	}
-	return &buf
-}
-
 // --overwrite used to mean "replace the destination tree": an existing
 // directory was passed to RemoveAll before the archived one was created, so
 // every child the backup did not contain went with it. Restoring one selected

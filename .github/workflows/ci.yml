@@ -86,6 +86,56 @@ jobs:
             bin/backimage
             internal/embedded/backimage-selfextract-*
 
+  windows:
+    name: windows build and unit tests
+    runs-on: windows-latest
+    timeout-minutes: 30
+    needs: quality
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build
+        run: go build ./cmd/... ./pkg/... ./internal/...
+      - name: Unit tests
+        # The extraction path is a different implementation on Windows, and a
+        # green Linux run says nothing about it: until this job existed, the
+        # selective restore was broken there and no gate could notice.
+        #
+        # internal/embedded is left out on purpose: it asserts that the
+        # embedded Linux extractors were rebuilt from this tree, which is what
+        # `make embed` does on the Linux jobs.
+        shell: bash
+        run: go test $(go list ./pkg/... ./internal/... | grep -v internal/embedded)
+      - name: Extraction tests, verbose
+        run: go test -v -run TestWindows ./pkg/archive/
+
+  macos:
+    name: macos build and unit tests
+    runs-on: macos-latest
+    timeout-minutes: 30
+    needs: quality
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: Build both architectures
+        run: |
+          GOOS=darwin GOARCH=amd64 go build ./cmd/... ./pkg/... ./internal/...
+          GOOS=darwin GOARCH=arm64 go build ./cmd/... ./pkg/... ./internal/...
+      - name: Unit tests
+        # internal/embedded is left out for the same reason as on Windows.
+        shell: bash
+        run: go test $(go list ./pkg/... ./internal/... | grep -v internal/embedded)
+
   e2e:
     name: e2e phase ${{ matrix.phase }}
     runs-on: ubuntu-latest
@@ -94,7 +144,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        phase: ['00', '01', '04', '05', '06', '07', '08', '08_stream', '09', '10', '13', 'A1']
+        phase: ['00', '01', '04', '05', '06', '07', '08', '08_stream', '09', '10', '13', 'A1', 'A2']
     steps:
       - uses: actions/checkout@v4
         with:

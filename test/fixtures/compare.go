@@ -134,8 +134,12 @@ func compareMeta(rel, wantRoot, gotRoot string, wfi, gfi os.FileInfo, opts Compa
 				add("gid", fmt.Sprint(ws.Gid), fmt.Sprint(gs.Gid))
 			}
 		}
-		if opts.CompareAccessTime && (ws.Atim.Sec != gs.Atim.Sec || ws.Atim.Nsec != gs.Atim.Nsec) {
-			add("atime", fmt.Sprint(ws.Atim), fmt.Sprint(gs.Atim))
+		if opts.CompareAccessTime {
+			wsec, wnsec := atimeOf(ws)
+			gsec, gnsec := atimeOf(gs)
+			if wsec != gsec || wnsec != gnsec {
+				add("atime", fmt.Sprintf("%d.%09d", wsec, wnsec), fmt.Sprintf("%d.%09d", gsec, gnsec))
+			}
 		}
 		if wfi.ModTime().UnixNano() != gfi.ModTime().UnixNano() {
 			add("mtime", wfi.ModTime().UTC().String(), gfi.ModTime().UTC().String())

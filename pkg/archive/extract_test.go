@@ -667,21 +667,34 @@ func TestExtractHardlinkFallback(t *testing.T) {
 
 func TestCopyFileFallback(t *testing.T) {
 	dir := t.TempDir()
-	src := filepath.Join(dir, "src")
-	if err := os.WriteFile(src, []byte("bytes"), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(dir, "src"), []byte("bytes"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	dst := filepath.Join(dir, "dst")
-	n, err := copyFile(src, dst, 0o640)
-	if err != nil || n != 5 {
-		t.Fatalf("copyFile = %d, %v", n, err)
+	root, err := os.OpenRoot(dir)
+	if err != nil {
+		t.Fatal(err)
 	}
-	got, err := os.ReadFile(dst)
+	defer root.Close()
+
+	n, err := copyFileIn(root, "src", "dst", 0o640)
+	if err != nil || n != 5 {
+		t.Fatalf("copyFileIn = %d, %v", n, err)
+	}
+	got, err := os.ReadFile(filepath.Join(dir, "dst"))
 	if err != nil || string(got) != "bytes" {
 		t.Fatalf("copy corrupted: %q %v", got, err)
 	}
-	if _, err := copyFile(filepath.Join(dir, "absent"), dst, 0o640); err == nil {
-		t.Fatal("copyFile must fail when the source is missing")
+	if _, err := copyFileIn(root, "absent", "dst", 0o640); err == nil {
+		t.Fatal("copyFileIn must fail when the source is missing")
+	}
+	// The fallback resolves both names through the root: a source outside the
+	// destination is not reachable however it is spelled.
+	outside := filepath.Join(t.TempDir(), "secret")
+	if err := os.WriteFile(outside, []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := copyFileIn(root, "../"+filepath.Base(filepath.Dir(outside))+"/secret", "leak", 0o640); err == nil {
+		t.Fatal("copyFileIn must refuse a source outside the root")
 	}
 }
 
