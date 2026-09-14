@@ -5,7 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.6.0] - 2026-09-15
+
+Release di correzioni. Nasce da una verifica delle due invarianti su cui si
+regge lo strumento — **un backup non modifica la sorgente**, **un restore
+restituisce esattamente ciò che è stato archiviato, permessi e ownership
+compresi** — ed entrambe reggono: nessun percorso di scrittura tocca l'albero
+di origine, e il ripristino è bit per bit. Quel che non reggeva erano i
+*percorsi* che nessuno script e2e aveva mai eseguito, ed è lì che stavano gli
+otto difetti chiusi qui sotto, quattro dei quali avevano test unitari verdi.
+
+**Compatibilità.** Il formato non cambia: envelope `BIMGCHK1` v3, metadati
+schema 2, stessa struttura di immagine. Questa versione legge tutto ciò che le
+precedenti hanno scritto, e un binario 0.5.0 legge tutto ciò che questa
+scrive. Non serve rifare nessun backup.
+
+**Cosa cambia per chi automatizza.** Tre cose, tutte volute:
+
+- `restore --strict` che completa l'estrazione ma perde metadati ora esce **8**
+  (`KindFidelity`) invece di 0. Prima un restore fedele e uno degradato erano
+  indistinguibili per uno script; se il vecchio comportamento serviva, basta
+  togliere `--strict`.
+- il rifiuto di `repo rm` su un manifest condiviso da più tag esce **2**
+  (errore d'uso) invece di 6 (errore di rete): è un rifiuto di agire, e un
+  retry loop sugli errori di rete lo ritentava all'infinito.
+- l'ordine di emissione delle entry è ora alfabetico a ogni livello, quindi a
+  parità di sorgente l'archivio ha un digest diverso da quello che avrebbe
+  prodotto la 0.5.0. Con `--dedup` la prima corsa dopo l'aggiornamento
+  ricarica i blob una volta sola.
+
 
 ### Fixed
 
@@ -85,6 +113,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   è mai stata letta da nulla. Restava un comando pronto da incollare che
   consegnava root dell'host per niente. Il tip su `--remove-local-image` diceva
   di aggiungerlo al comando `docker run`, dove viene rifiutato.
+- **Una sessione remota annullata mentre il rate limiter la teneva ferma usciva
+  senza smontare la propria pipeline**, e lo spool del layer in costruzione
+  restava in `--work-dir`. Chiudere un server con Ctrl-C o SIGTERM durante una
+  ricezione poteva quindi lasciare un `backimage-stream-*.blob.tmp` nella
+  directory che il server successivo riusa.
 
 ### Added
 
@@ -110,7 +143,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   daemon serva davvero il layer con un involucro in più. `phase_A1.sh` include
   ora il daemon fra le sorgenti da cui un backup falsificato deve essere
   rifiutato, e le fasi A8 e A9 sono nella matrice e2e della CI.
-
 - Ogni estrazione chiude con un **verdetto di una riga**, identico per il
   binario e per l'immagine autoestraente: `ESITO: estrazione 1:1, nessun
   errore — N oggetti ripristinati, 0 differenze di metadati, 0 entry saltate;
@@ -122,12 +154,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   snapshot completo dei metadati — `ctime` compreso, il campo che qualunque
   scrittura sposterebbe — prima e dopo una corsa reale; il resto copre i
   difetti qui sopra, fino all'estrazione dall'immagine reale via `docker run`.
-
-- Una sessione remota annullata mentre il rate limiter la teneva ferma usciva
-  senza smontare la propria pipeline, e lo spool del layer in costruzione
-  restava in `--work-dir`. Chiudere un server con Ctrl-C o SIGTERM durante una
-  ricezione poteva quindi lasciare un `backimage-stream-*.blob.tmp` nella
-  directory che il server successivo riusa.
 
 ## [0.5.0] - 2026-09-10
 
