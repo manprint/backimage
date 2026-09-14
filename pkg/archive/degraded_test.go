@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -226,6 +227,12 @@ func TestReadableTreeReportsNoContentSkipped(t *testing.T) {
 // user reads. A tolerated loss that left both silent would be the restore
 // claiming a fidelity it did not deliver.
 func TestToleratedXattrLossIsStillCountedAsADifference(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		// The two tolerated losses are Linux rules: namespaces, and trusted.*
+		// behind CAP_SYS_ADMIN. Darwin has neither, so it accepts both names
+		// and there is no loss here to count.
+		t.Skip("xattr namespaces and CAP_SYS_ADMIN are Linux rules")
+	}
 	if os.Geteuid() == 0 {
 		t.Skip("root holds CAP_SYS_ADMIN: trusted.* is writable")
 	}

@@ -121,14 +121,20 @@ case "$data_line" in
 	*"compressed=1f8b"*) ;;
 	*) echo "FAIL: il daemon non avvolge più il layer in gzip: $data_line"; exit 1;;
 esac
-# The backup was written with zstd: what the daemon kept is our blob, and what
-# it offers as the layer is that blob gzipped once more. Reading the second as
-# if it were the first is exactly the defect.
-case "$data_line" in
-	*"uncompressed=28b52ffd"*) ;;
-	*) echo "FAIL: sotto l'involucro non c'è il blob zstd del backup: $data_line"; exit 1;;
+# Sotto l'involucro il daemon tiene una delle due cose, e quale dipende dallo
+# storage driver: con lo snapshotter containerd tiene il nostro blob così com'è
+# (`zstd`), con il docker load classico tiene il tar, perché disfa da sé una
+# compressione che riconosce. In entrambi i casi quello che il daemon offre
+# come layer non è il blob pubblicato, ed è per questo che il lettore non può
+# limitarsi ad applicare il codec dichiarato dal manifest. Un `uncompressed`
+# che fosse di nuovo il blob pubblicato senza involucro, invece, direbbe che la
+# premessa del fix non vale più.
+kind=${data_line##*uncompressedkind=}
+case "$kind" in
+	zstd) echo "A9.1 il daemon avvolge in gzip il blob zstd del backup (mediatype e magic verificati): OK";;
+	tar)  echo "A9.1 il daemon disfa lo zstd e riavvolge in gzip il tar (mediatype e magic verificati): OK";;
+	*) echo "FAIL: sotto l'involucro non c'è né il blob zstd né il tar del backup: $data_line"; exit 1;;
 esac
-echo "A9.1 il daemon serve il layer con un involucro gzip in più (mediatype e magic verificati): OK"
 
 # ---------------------------------------------------------------------------
 # A9.2 — restore from the daemon: 1:1, and the closing verdict says so

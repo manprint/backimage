@@ -185,6 +185,11 @@ jobs:
         uses: docker/setup-qemu-action@v3
         with:
           platforms: arm64
+      - name: Install filesystem attribute tools
+        # attr and acl are not on the hosted image, and the phases that check
+        # fidelity refuse to run without them rather than silently skip the
+        # attributes they exist to compare (A8, A11, and the xattr part of 01).
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends attr acl
       - name: Build test binary
         run: make embed
       - name: Run E2E phase
