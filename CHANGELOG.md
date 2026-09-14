@@ -37,6 +37,18 @@ scrive. Non serve rifare nessun backup.
 
 ### Fixed
 
+- **`backup --output daemon` annunciava un'immagine che il daemon non aveva
+  caricato.** `docker load` risponde 200 e poi *streama* messaggi JSON, quindi
+  il rifiuto viaggia dentro una risposta riuscita: il corpo veniva letto e
+  buttato via, e un caricamento fallito era indistinguibile da uno riuscito.
+  La corsa diceva `backup completato` e nominava un tag, e la prima rilettura
+  di quel tag rispondeva `No such image`. Ora la risposta viene letta e il
+  backup fallisce riportando le parole del daemon. Il caso reale è un layer
+  compresso con un codec che il daemon non sa disfare: il tarball chiama ogni
+  layer `.tar.gz` qualunque sia il codec e il daemon riconosce gzip, bzip2, xz
+  e zstd — `--compression lz4` quindi si carica su un daemon con lo snapshotter
+  containerd, che tiene il blob com'è, e viene rifiutato da uno con l'image
+  store classico.
 - **`--one-file-system` scartava anche la directory del mount point**, non solo
   ciò che c'è oltre. `tar --one-file-system` e `rsync -x` archiviano la
   directory e non vi scendono dentro; backimage la faceva sparire, quindi un

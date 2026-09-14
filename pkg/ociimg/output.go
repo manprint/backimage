@@ -4,10 +4,12 @@ package ociimg
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"runtime"
 	"sort"
+	"strings"
 	"sync"
 
 	"github.com/google/go-containerregistry/pkg/authn"
@@ -162,10 +164,51 @@ func (w *daemonWriter) Write(ctx context.Context, ref name.Reference, idx v1.Ima
 	if !ok {
 		return fmt.Errorf("daemon target requires a tag reference, got %s", ref.Name())
 	}
-	if _, err := daemonWrite(tag, img); err != nil {
+	response, err := daemonWrite(tag, img)
+	if err != nil {
+		return fmt.Errorf("docker daemon: %w", err)
+	}
+	if err := loadRefusal(response); err != nil {
 		return fmt.Errorf("docker daemon: %w", err)
 	}
 	return nil
+}
+
+// loadRefusal reports what `docker load` said when it refused the image.
+//
+// The daemon answers 200 and streams JSON messages, so a refusal travels
+// inside a successful response and the client hands it back as plain text: a
+// load that failed looked exactly like one that worked, and the backup
+// announced an image the daemon had never stored. A `restore --local-repo`
+// then said "No such image" about a tag the backup had just declared
+// published.
+//
+// One real case is a layer compressed with a codec the daemon cannot undo:
+// the image tarball names every layer .tar.gz whatever the codec, and the
+// daemon's own sniffing knows gzip, bzip2, xz and zstd — so `--compression
+// lz4` loads on a daemon with the containerd snapshotter, which keeps the
+// blob as it is, and is refused by one with the classic image store.
+func loadRefusal(response string) error {
+	dec := json.NewDecoder(strings.NewReader(response))
+	for {
+		var msg struct {
+			Error       string `json:"error"`
+			ErrorDetail struct {
+				Message string `json:"message"`
+			} `json:"errorDetail"`
+		}
+		if err := dec.Decode(&msg); err != nil {
+			// Not a JSON stream, or the end of one: an older daemon answers
+			// in plain text, and there is no refusal to read out of it.
+			return nil
+		}
+		if detail := msg.ErrorDetail.Message; detail != "" {
+			return fmt.Errorf("caricamento rifiutato: %s", detail)
+		}
+		if msg.Error != "" {
+			return fmt.Errorf("caricamento rifiutato: %s", msg.Error)
+		}
+	}
 }
 
 type layoutWriter struct {

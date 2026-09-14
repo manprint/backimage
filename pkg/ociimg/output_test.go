@@ -289,3 +289,79 @@ func TestWriterRuntimeOption(t *testing.T) {
 	}
 	_ = w.Name()
 }
+
+// TestWriteDaemonSurfacesARefusedLoad is the contract behind the exit code of
+// `backup --output daemon`.
+//
+// `docker load` answers 200 and streams JSON messages, so a daemon that
+// refuses the image says so inside a successful response. Reporting that as a
+// published backup is the worst answer available: the run says "backup
+// completato" and names a tag, and the first read of it says "No such image".
+func TestWriteDaemonSurfacesARefusedLoad(t *testing.T) {
+	idx, byArch := testIndex(t)
+	if hostImage(byArch) == nil {
+		t.Skip("host platform not in test set")
+	}
+	for _, tc := range []struct {
+		name     string
+		response string
+		want     string
+	}{
+		{
+			name:     "errorDetail carries the daemon's own words",
+			response: `{"stream":"Loading"}` + "\n" + `{"errorDetail":{"message":"unexpected EOF"},"error":"unexpected EOF"}`,
+			want:     "unexpected EOF",
+		},
+		{
+			name:     "only the short error field is present",
+			response: `{"error":"invalid tar header"}`,
+			want:     "invalid tar header",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			old := daemonWrite
+			defer func() { daemonWrite = old }()
+			daemonWrite = func(name.Tag, v1.Image) (string, error) { return tc.response, nil }
+			ref, _ := name.ParseReference("localhost:5000/test/daemon-refused:v1")
+			w, err := NewWriter(TargetDaemon, "", WriterOptions{Images: byArch})
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = w.Write(t.Context(), ref, idx, nil)
+			if err == nil {
+				t.Fatal("a refused load must not be reported as a published image")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("the error must carry what the daemon said (%q), got %v", tc.want, err)
+			}
+		})
+	}
+}
+
+// TestWriteDaemonAcceptsWhatAWorkingLoadSays is the control: the two shapes a
+// successful load answers with must not be read as refusals.
+func TestWriteDaemonAcceptsWhatAWorkingLoadSays(t *testing.T) {
+	idx, byArch := testIndex(t)
+	if hostImage(byArch) == nil {
+		t.Skip("host platform not in test set")
+	}
+	for _, response := range []string{
+		`{"stream":"Loaded image: test/daemon-ok:v1\n"}`,
+		"Loaded image: test/daemon-ok:v1\n", // an older daemon, plain text
+		"",                                  // the image was already there and only got tagged
+	} {
+		old := daemonWrite
+		daemonWrite = func(name.Tag, v1.Image) (string, error) { return response, nil }
+		ref, _ := name.ParseReference("localhost:5000/test/daemon-ok:v1")
+		w, err := NewWriter(TargetDaemon, "", WriterOptions{Images: byArch})
+		if err != nil {
+			daemonWrite = old
+			t.Fatal(err)
+		}
+		err = w.Write(t.Context(), ref, idx, nil)
+		daemonWrite = old
+		if err != nil {
+			t.Fatalf("response %q must be read as a successful load: %v", response, err)
+		}
+	}
+}

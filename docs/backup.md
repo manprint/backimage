@@ -102,6 +102,14 @@ solo dopo la pubblicazione del manifest finale.
 
 `--local-repo` non può essere combinato con `--output`.
 
+Con `--output daemon` il codec deve essere uno che il daemon sa disfare. Il
+tarball dell'immagine chiama ogni layer `.tar.gz` qualunque sia il codec, e il
+daemon si regola sui magic byte: riconosce gzip, bzip2, xz e zstd. Un daemon
+con lo snapshotter containerd conserva il blob così com'è e accetta tutto,
+compreso `--compression lz4`; uno con l'image store classico rifiuta il
+caricamento, e in quel caso il backup fallisce riportando le parole del daemon
+invece di annunciare un'immagine che non c'è.
+
 ### Quanto costa rileggerlo
 
 Il tempo di restore è lineare nella dimensione del backup, non nel numero di

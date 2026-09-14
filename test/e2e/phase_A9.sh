@@ -151,10 +151,28 @@ echo "A9.2 restore --local-repo: albero identico alla sorgente ($source_paths pa
 # ---------------------------------------------------------------------------
 # A9.3 — every codec a backup can be written with survives the round trip
 # ---------------------------------------------------------------------------
+# Not every codec reaches every daemon: the image tarball names each layer
+# .tar.gz whatever the codec, and the daemon undoes only what its own sniffing
+# knows (gzip, bzip2, xz, zstd). So lz4 loads where the containerd snapshotter
+# keeps the blob as it is and is refused by the classic image store. Refused is
+# an acceptable answer here; announcing a published image that is not there is
+# not, and that is what the run did before the load response was read.
+loaded=()
+refused=()
 for codec in zstd gzip none xz lz4; do
 	runnable=true
 	case "$codec" in xz|lz4|none) runnable=false;; esac
-	ref=$(backup_to_daemon "c-$codec" --no-encrypt --compression "$codec" --runnable=$runnable)
+	if ! ref=$(backup_to_daemon "c-$codec" --no-encrypt --compression "$codec" --runnable=$runnable); then
+		grep -q 'caricamento rifiutato' "$work/last.log" || {
+			echo "FAIL: backup su daemon con codec $codec fallito senza dire che il daemon ha rifiutato"
+			sed -n '1,40p' "$work/last.log"; exit 1; }
+		if docker image inspect "bi-e2e-a9:c-$codec" >/dev/null 2>&1; then
+			echo "FAIL: codec $codec: il backup ha riportato un rifiuto ma l'immagine è nel daemon"; exit 1
+		fi
+		refused+=("$codec")
+		continue
+	fi
+	loaded+=("$codec")
 	rm -rf "$work/out-$codec"
 	bin/backimage restore "$ref" --local-repo -x -C "$work/out-$codec" >"$work/last.log" 2>&1 || {
 		echo "FAIL: restore dal daemon con codec $codec"; sed -n '1,40p' "$work/last.log"; exit 1; }
@@ -164,7 +182,16 @@ for codec in zstd gzip none xz lz4; do
 	bin/backimage verify "$ref" --local-repo >"$work/last.log" 2>&1 || {
 		echo "FAIL: verify dal daemon con codec $codec"; sed -n '1,40p' "$work/last.log"; exit 1; }
 done
-echo "A9.3 round trip dal daemon con zstd, gzip, none, xz, lz4: albero identico e verify ok: OK"
+# Whatever the daemon is, these three are its own formats plus no compression
+# at all: if one of them is refused the premise of the phase is gone, not the
+# codec.
+for must in zstd gzip none; do
+	case " ${loaded[*]} " in
+		*" $must "*) ;;
+		*) echo "FAIL: il daemon ha rifiutato $must, che deve caricare ovunque"; exit 1;;
+	esac
+done
+echo "A9.3 round trip dal daemon con ${loaded[*]}: albero identico e verify ok${refused:+; rifiutati dal daemon con un errore esplicito: ${refused[*]}}: OK"
 
 # ---------------------------------------------------------------------------
 # A9.4 — an encrypted backup, read back from the daemon
