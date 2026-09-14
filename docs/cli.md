@@ -900,7 +900,7 @@ backimage restore [IMAGE] [flags]
       --platform string          platform variant to read from the multi-arch image, OS/ARCH (default "linux/amd64")
       --remove-local-image       delete the pulled Docker image once the restore succeeded
       --repo string              image reference (alias for positional IMAGE)
-      --strict                   abort the extraction when any metadata operation is refused, instead of degrading and reporting it
+      --strict                   abort the extraction when a metadata operation is refused, instead of degrading and reporting it; the few losses that cannot be prevented on the destination (extended attributes the filesystem refuses outright, trusted.* without CAP_SYS_ADMIN) do not stop the run but make it exit 8
       --strip-components int     drop this many leading path components from each restored path (like tar)
 ```
 

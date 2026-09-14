@@ -2,6 +2,7 @@ package registry
 
 import (
 	"context"
+	"errors"
 	"io"
 	"log"
 	"net/http/httptest"
@@ -153,4 +154,89 @@ func mustHost(t *testing.T, raw string) string {
 func nopLogger(t *testing.T) *log.Logger {
 	t.Helper()
 	return log.New(io.Discard, "", 0)
+}
+
+// TestDeleteTagRefusesASharedManifest: deleting a tag deletes the manifest, so
+// every other tag pointing at it goes too. The refusal is a safety gate, not a
+// transport failure — it wrapped no sentinel, so the CLI reported it as a
+// network error and a retrying script would have hammered a condition that
+// never changes.
+func TestDeleteTagRefusesASharedManifest(t *testing.T) {
+	srv := httptest.NewServer(ggcrregistry.New(ggcrregistry.Logger(nopLogger(t))))
+	defer srv.Close()
+	host := mustHost(t, srv.URL)
+
+	img, err := random.Image(64, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tag := range []string{"a", "b"} {
+		ref, err := name.NewTag(host + "/backup:" + tag)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := remote.Write(ref, img); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ref, err := name.NewTag(host + "/backup:a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := &ociAdapter{host: host}
+	err = a.DeleteTag(context.Background(), ref, false)
+	if !errors.Is(err, ErrSharedManifest) {
+		t.Fatalf("DeleteTag on a shared manifest = %v, want ErrSharedManifest", err)
+	}
+	// The refusal must have refused: both tags are still there.
+	tags, err := a.ListTags(context.Background(), ref.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tags) != 2 {
+		t.Fatalf("the refused deletion removed something: %v", tags)
+	}
+
+	// --force is the way through. What the registry then does with the tag
+	// list is the registry's business — the in-memory one here keeps serving
+	// names for a deleted manifest — so the assertion is that the gate no
+	// longer refuses; that the tags really go is asserted end to end against a
+	// real registry in test/e2e/phase_A10.sh.
+	if err := a.DeleteTag(context.Background(), ref, true); err != nil {
+		t.Fatalf("forced delete: %v", err)
+	}
+}
+
+// TestDeleteTagAloneNeedsNoForce: the gate must not fire on the ordinary case,
+// or --force would become something users always pass.
+func TestDeleteTagAloneNeedsNoForce(t *testing.T) {
+	srv := httptest.NewServer(ggcrregistry.New(ggcrregistry.Logger(nopLogger(t))))
+	defer srv.Close()
+	host := mustHost(t, srv.URL)
+
+	for _, tag := range []string{"solo", "other"} {
+		img, err := random.Image(64, 1)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ref, err := name.NewTag(host + "/backup:" + tag)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := remote.Write(ref, img); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ref, err := name.NewTag(host + "/backup:solo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := &ociAdapter{host: host}
+	err = a.DeleteTag(context.Background(), ref, false)
+	if errors.Is(err, ErrSharedManifest) {
+		t.Fatal("the shared-manifest gate fired on a tag that has its own manifest")
+	}
+	if err != nil {
+		t.Fatalf("deleting a tag nothing else points at: %v", err)
+	}
 }

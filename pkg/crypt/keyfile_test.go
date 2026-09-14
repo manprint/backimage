@@ -3,6 +3,7 @@ package crypt
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -68,6 +69,57 @@ func TestWrapUnwrapAgeKey(t *testing.T) {
 	}
 	if !bytes.Equal(got.DEK, km.DEK) {
 		t.Fatal("key material mismatch after age unwrap")
+	}
+}
+
+// TestUnwrapAcceptsAnAgeKeygenFile covers the one shape of identity file every
+// user actually has. `age-keygen -o key.txt` writes two comment lines above
+// the secret key; reading the whole file as a single key rejected it with
+// "malformed secret key: mixed case", so --identity worked only on a file
+// somebody had hand-trimmed.
+func TestUnwrapAcceptsAnAgeKeygenFile(t *testing.T) {
+	km := newTestKM(t)
+	id, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := WrapKeys(&buf, km, Recipients{AgeKeys: []string{id.Recipient().String()}}); err != nil {
+		t.Fatal(err)
+	}
+	// Byte for byte the layout age-keygen produces, trailing newline included.
+	content := fmt.Sprintf("# created: 2026-09-14T00:00:00Z\n# public key: %s\n%s\n", id.Recipient(), id)
+	keyFile := filepath.Join(t.TempDir(), "key.txt")
+	if err := os.WriteFile(keyFile, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got, err := UnwrapKeys(&buf, Identity{AgeKeyFile: keyFile})
+	if err != nil {
+		t.Fatalf("an age-keygen identity file must open the backup: %v", err)
+	}
+	if !bytes.Equal(got.DEK, km.DEK) {
+		t.Fatal("key material mismatch after age unwrap")
+	}
+}
+
+// TestUnwrapRejectsAnIdentityFileWithoutAKey: tolerating comments must not
+// turn a file that carries no key into a silent failure somewhere later.
+func TestUnwrapRejectsAnIdentityFileWithoutAKey(t *testing.T) {
+	km := newTestKM(t)
+	id, err := age.GenerateX25519Identity()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var buf bytes.Buffer
+	if err := WrapKeys(&buf, km, Recipients{AgeKeys: []string{id.Recipient().String()}}); err != nil {
+		t.Fatal(err)
+	}
+	keyFile := filepath.Join(t.TempDir(), "empty.txt")
+	if err := os.WriteFile(keyFile, []byte("# public key: age1nothing\n\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := UnwrapKeys(&buf, Identity{AgeKeyFile: keyFile}); err == nil {
+		t.Fatal("an identity file with no key must be an error")
 	}
 }
 

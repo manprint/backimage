@@ -166,6 +166,15 @@ skopeo inspect docker://IMG --raw | jq
   docker-save temporaneo** → occupa circa quanto l'immagine; non adatto a
   backup enormi. I digest dei layer nel tarball differiscono (wrap
   docker-save) → i test confrontano contenuti e ConfigName, non digest.
+- **Rilettura dal daemon**: lo stesso wrap vale in lettura. Il daemon
+  rietichetta ogni layer `application/vnd.docker.image.rootfs.diff.tar.gzip` e
+  comprime in gzip ciò che ha conservato, quindi il blob `codec(tar)` del
+  backup torna con un involucro in più: gzip attorno a zstd attorno al tar.
+  `pkg/restore/layerblob.go` toglie l'involucro per quello che è e applica il
+  codec dichiarato una volta sola; `Uncompressed()` è la rappresentazione che
+  il daemon ha davvero conservato, mentre `Compressed()` comprimerebbe in gzip
+  l'intero backup in uscita per poi decomprimerlo subito dopo. Coperto da
+  `test/e2e/phase_A9.sh` (tutti i codec, cifrato e no, uno e più layer).
 - Registry restrittivi (es. ECR con policy severe) possono rifiutare
   `artifactType` o annotazioni non note: sezione compatibilità da
   approfondire in fase 05.

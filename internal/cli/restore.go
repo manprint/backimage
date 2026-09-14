@@ -116,6 +116,13 @@ func openImageSource(ctx context.Context, refText string, flags sourceFlags) (re
 	if err != nil {
 		return nil, usageErrorf("--expect-digest: %v", err)
 	}
+	// Validated before the source is chosen, not inside the registry branch:
+	// a layout and the daemon ignore the value, and a typo in it used to be
+	// accepted in silence there — the flag looked like it had worked.
+	cacheBytes, err := parseSize(flags.cacheSize)
+	if err != nil {
+		return nil, usageErrorf("--cache-size: %v", err)
+	}
 	if flags.localRepo {
 		s, err := fromDaemonCLI(ctx, ref, restorepkg.SourceOptions{ExpectDigest: expect})
 		if err != nil {
@@ -131,10 +138,6 @@ func openImageSource(ctx context.Context, refText string, flags sourceFlags) (re
 			return nil, wrapSourceError("lettura OCI layout fallita", err)
 		}
 		return s, nil
-	}
-	cacheBytes, err := parseSize(flags.cacheSize)
-	if err != nil {
-		return nil, usageErrorf("--cache-size: %v", err)
 	}
 	store, err := registry.NewStore(authFilePath())
 	if err != nil {
@@ -284,7 +287,7 @@ func newRestoreCommand() *cobra.Command {
 	f.Int("cpus", cpu.Default(), "maximum CPUs used for decompression and decryption (default: half the available CPUs)")
 	f.Bool("no-preserve-owner", false, "restore files as the current user instead of the archived owner")
 	f.Bool("no-preserve-xattrs", false, "do not restore extended attributes")
-	f.Bool("strict", false, "abort the extraction when any metadata operation is refused, instead of degrading and reporting it")
+	f.Bool("strict", false, "abort the extraction when a metadata operation is refused, instead of degrading and reporting it; the few losses that cannot be prevented on the destination (extended attributes the filesystem refuses outright, trusted.* without CAP_SYS_ADMIN) do not stop the run but make it exit 8")
 	f.Bool("continue", false, "do not stop at the first damaged chunk: restore every entry that verifies and report the ones lost")
 	f.Bool("remove-local-image", false, "delete the pulled Docker image once the restore succeeded")
 	f.Bool("overwrite", false, "allow writing over an existing tar file or a non-empty destination")
@@ -419,8 +422,15 @@ func runRestore(cmd *cobra.Command, args []string) error {
 				"recupero parziale: %d entry non recuperate dai chunk danneggiati %v", partial.Skipped, partial.BadChunks)}
 		}
 	}
+	// --strict asked for a faithful copy: a tolerated metadata loss is still a
+	// difference, and the exit code has to say so. Computed here so the whole
+	// report is still printed below before the failure is returned.
+	fidelityErr := strictFidelityError(
+		getFlagBool(cmd, "strict") && getFlagBool(cmd, "extract"), extracted)
 	imageRemoved := false
-	if getFlagBool(cmd, "remove-local-image") {
+	if getFlagBool(cmd, "remove-local-image") && fidelityErr == nil {
+		// Never discard the image a restore just failed to reproduce
+		// faithfully: it is the only copy of what is still missing.
 		if err := removeDockerImage(ctx, refText); err != nil {
 			return &Error{Kind: KindNetwork, Msg: "rimozione immagine locale fallita", Err: err}
 		}
@@ -428,24 +438,94 @@ func runRestore(cmd *cobra.Command, args []string) error {
 	}
 	pr := NewPrinter(cmd.OutOrStdout(), cmd.ErrOrStderr(), mustOptions(cmd))
 	if mustOptions(cmd).JSON {
-		result := map[string]any{"ok": true, "reference": refText, "extract": getFlagBool(cmd, "extract"),
+		result := map[string]any{"ok": fidelityErr == nil, "reference": refText, "extract": getFlagBool(cmd, "extract"),
 			"remove_local_image": imageRemoved, "duration": time.Since(started).String()}
 		if getFlagBool(cmd, "extract") {
 			// What the extractor could not write belongs in the machine
 			// readable answer, not only in a warning on stderr.
 			result["skipped"] = extracted.Skipped
 			result["skipped_reasons"] = errorTexts(extracted.Errors)
+			// The metadata the destination refused is the other half of that
+			// answer: without it a degraded restore is indistinguishable from
+			// a faithful one in --json.
+			result["degraded"] = degradedCounts(extracted.Degraded)
+			result["degraded_examples"] = degradedExamples(extracted.DegradedExamples)
+			result["xattrs_skipped"] = extracted.XattrsSkipped
 			if len(extracted.Warnings) > 0 {
 				result["warnings"] = extracted.Warnings
 			}
 		}
-		return printerResult(pr, result)
+		if err := printerResult(pr, result); err != nil {
+			return err
+		}
+		return fidelityErr
 	}
 	if extracted.Skipped > 0 {
 		log(fmt.Sprintf("restore: attenzione: %d entry non ripristinate (vedi --json per l'elenco)", extracted.Skipped))
 	}
+	if getFlagBool(cmd, "extract") {
+		// The closing verdict: the two facts a restore has to leave behind,
+		// on one line, last, whatever the outcome.
+		log("restore: " + extracted.ClosingVerdict(!getFlagBool(cmd, "no-verify")))
+	}
+	if fidelityErr != nil {
+		return fidelityErr
+	}
 	log(fmt.Sprintf("restore completato in %s", time.Since(started).Round(time.Millisecond)))
 	return nil
+}
+
+// degradedCounts renders a nil map as an empty object, so the JSON shape of a
+// faithful restore and of a degraded one are the same document.
+func degradedCounts(m map[string]int64) map[string]int64 {
+	if m == nil {
+		return map[string]int64{}
+	}
+	return m
+}
+
+func degradedExamples(m map[string]string) map[string]string {
+	if m == nil {
+		return map[string]string{}
+	}
+	return m
+}
+
+// strictFidelityError turns a completed but not-1:1 extraction into a failure
+// when --strict was asked for.
+//
+// Some metadata losses can never abort mid-restore: an attribute the
+// destination filesystem refuses outright (EOPNOTSUPP on tmpfs/NFS/vfat,
+// EINVAL for a prefix the kernel does not know) and trusted.* without
+// CAP_SYS_ADMIN. Stopping on those would leave a half-written tree behind a
+// loss nothing could have prevented on that destination, so the extractor
+// tolerates them, counts them and warns — see tolerateXattr and
+// docs/FIDELITY.md.
+//
+// That left --strict promising a fidelity it did not enforce: the run printed
+// "esito NON 1:1" and still exited 0, so no script could tell a faithful
+// restore from a degraded one. The restore still completes and still reports
+// every difference; only the exit code changes.
+func strictFidelityError(strict bool, stats archive.Stats) error {
+	if !strict {
+		return nil
+	}
+	var degraded int64
+	for _, n := range stats.Degraded {
+		degraded += n
+	}
+	if degraded == 0 && stats.Skipped == 0 {
+		return nil
+	}
+	return &Error{
+		Kind: KindFidelity,
+		Msg: fmt.Sprintf(
+			"--strict: ripristino completato ma NON 1:1: %d differenze di metadati, %d entry non create",
+			degraded, stats.Skipped),
+		Hint: "rileggi le righe \"differenza\" qui sopra; esegui senza --strict per accettare quelle " +
+			"differenze, oppure ripristina con i privilegi necessari (sudo, --privileged) e su un " +
+			"filesystem che regge gli attributi estesi dell'archivio",
+	}
 }
 
 // errorTexts renders the per-entry failures for the JSON output.

@@ -22,7 +22,6 @@ import (
 	"github.com/google/go-containerregistry/pkg/v1/layout"
 	"github.com/google/go-containerregistry/pkg/v1/remote"
 
-	"github.com/manprint/backimage/pkg/compress"
 	"github.com/manprint/backimage/pkg/index"
 	"github.com/manprint/backimage/pkg/registry"
 )
@@ -69,6 +68,10 @@ type imageSource struct {
 	platform  string
 	cacheDir  string
 	cacheSize int64
+	// daemon marks an image read from the local container daemon, which is the
+	// one source that does not hand a layer back as it was published: it
+	// re-labels every layer tar+gzip and gzips what it stored. See layerBytes.
+	daemon bool
 
 	metaOnce sync.Once
 	meta     map[string][]byte
@@ -193,7 +196,12 @@ func FromDaemon(ctx context.Context, ref name.Reference, opts SourceOptions) (So
 			return nil, err
 		}
 	}
-	return newImageSource(img, SourceOptions{})
+	s, err := newImageSource(img, SourceOptions{})
+	if err != nil {
+		return nil, err
+	}
+	s.daemon = true
+	return s, nil
 }
 
 func sourcePlatform(value string) (*v1.Platform, error) {
@@ -430,6 +438,41 @@ func (s *imageSource) Blob(ctx context.Context, i int) ([]byte, error) {
 	return out, nil
 }
 
+// layerBytes names the representation of a layer that this source can hand
+// back unchanged, together with the digest that representation must have.
+//
+// For a registry and for an OCI layout that is Compressed(): the blob as it was
+// published, and Digest() is the number the OCI manifest carries for it, so
+// recomputing it proves the bytes are the published ones.
+//
+// The local daemon stores no such blob. It re-labels every layer
+// tar+gzip, so Compressed() would gzip the whole backup on the way out and
+// Digest() would be a number ggcr just derived from that gzip — comparing the
+// two would prove nothing. Uncompressed() is what the daemon actually kept, and
+// its diffID is what Docker computed when it loaded the image, which is a
+// number from elsewhere and therefore worth checking.
+type layerBytes struct {
+	open   func() (io.ReadCloser, error)
+	digest v1.Hash
+	// label says where digest comes from, so a mismatch names its own authority.
+	label string
+}
+
+func (s *imageSource) layerBytes(l v1.Layer) (layerBytes, error) {
+	if s.daemon {
+		h, err := l.DiffID()
+		if err != nil {
+			return layerBytes{}, err
+		}
+		return layerBytes{open: l.Uncompressed, digest: h, label: "diffID dell'immagine caricata nel daemon"}, nil
+	}
+	h, err := l.Digest()
+	if err != nil {
+		return layerBytes{}, err
+	}
+	return layerBytes{open: l.Compressed, digest: h, label: "manifest OCI"}, nil
+}
+
 // ephemeralLayerCap bounds how many uncached layers stay materialised at once.
 //
 // A full restore reads chunks in order and only ever needs the current layer;
@@ -456,14 +499,18 @@ func (s *imageSource) materialize(ctx context.Context, dataLayer int, wanted, co
 	if imageLayer < 2 || imageLayer >= len(layers) {
 		return "", fmt.Errorf("data layer %d missing (image has %d layers)", dataLayer, len(layers))
 	}
-	digest, err := layers[imageLayer].Digest()
+	blob, err := s.layerBytes(layers[imageLayer])
 	if err != nil {
 		return "", err
 	}
 	if err := os.MkdirAll(s.cacheDir, 0o700); err != nil {
 		return "", err
 	}
-	cachePath := filepath.Join(s.cacheDir, digest.Hex)
+	// The cache is keyed by the identity of the representation being read.
+	// Asking the layer for its compressed digest instead would make a daemon
+	// image gzip the whole backup just to name a file, and the cache does not
+	// even keep daemon layers.
+	cachePath := filepath.Join(s.cacheDir, blob.digest.Hex)
 	if st, err := os.Stat(cachePath); err == nil && st.Mode().IsRegular() {
 		if st.Size() == expected {
 			now := time.Now()
@@ -486,16 +533,11 @@ func (s *imageSource) materialize(ctx context.Context, dataLayer int, wanted, co
 		os.Remove(tmpPath)
 		return "", err
 	}
-	raw, err := layers[imageLayer].Compressed()
+	raw, err := blob.open()
 	if err != nil {
 		return fail(err)
 	}
-	defer raw.Close()
-	codec, err := compress.Get(codecName)
-	if err != nil {
-		return fail(err)
-	}
-	decoded, err := codec.NewReader(raw)
+	decoded, err := openLayerTar(raw, codecName)
 	if err != nil {
 		return fail(err)
 	}

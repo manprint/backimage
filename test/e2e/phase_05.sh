@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 # Phase 05 e2e: CLI login, encrypted backup, valid OCI pull, blob reuse,
-# interrupted push/checkpoint resume, secret hygiene and token refresh gates.
+# interrupted push/checkpoint resume, secret hygiene and token refresh gates,
+# plus the two paths through a registry that nothing else exercised: the full
+# read-back after a push, and a backup encrypted to an age recipient instead of
+# a passphrase.
 set -euo pipefail
 cd "$(dirname "$0")/../.."
 
@@ -90,9 +93,49 @@ echo "$resumed" | jq -e '.skippedBlobs > 0' >/dev/null
 grep -q 'resuming from checkpoint' "$work/resumed.log" || { echo "resume marker missing"; exit 1; }
 docker pull --platform linux/amd64 "$REPO:resume" >/dev/null
 
+echo "==> --verify-after-push full re-reads every published layer"
+# The quick level lives inside the push and every phase gets it by default;
+# the full one opens the image again as a reader would and recomputes every
+# stored digest, and no script had ever run it. A small tree keeps it cheap.
+bin/backimage backup "$tree/sub" --repo "$REPO" --tag verified --no-encrypt \
+	--allow-degraded --temp-dir "$work/tmp" --verify-after-push full --json \
+	>"$work/verified.json" 2>"$work/verified.log"
+grep -q 'verifica completa superata' "$work/verified.log" || {
+	echo "the full read-back did not report a verdict"; sed -n '1,40p' "$work/verified.log"; exit 1; }
+# It has to have re-read something: a verdict over zero layers would pass
+# while proving nothing.
+grep -qE 'verifica completa superata: [1-9][0-9]* layer riletti' "$work/verified.log" || {
+	echo "the full read-back reported no layer re-read"; sed -n '1,40p' "$work/verified.log"; exit 1; }
+
+echo "==> a backup encrypted to an age recipient is restored with its identity"
+go build -o "$work/agekeygen" ./test/e2e/tools/agekeygen
+recipient=$("$work/agekeygen" "$work/identity.txt")
+bin/backimage backup "$tree/sub" --repo "$REPO" --tag aged --recipient "$recipient" \
+	--allow-degraded --temp-dir "$work/tmp" --json >"$work/aged.json" 2>"$work/aged.log"
+jq -e '.encrypted == true' "$work/aged.json" >/dev/null || {
+	echo "a backup with --recipient is not marked encrypted"; cat "$work/aged.json"; exit 1; }
+bin/backimage restore "$REPO:aged" --identity "$work/identity.txt" --extract \
+	-C "$work/aged-out" --no-preserve-owner >"$work/aged-restore.log" 2>&1 || {
+	echo "restore with --identity failed"; sed -n '1,40p' "$work/aged-restore.log"; exit 1; }
+cmp "$tree/sub/small.txt" "$work/aged-out/sub/small.txt"
+# The identity is the only thing that opens it: the passphrase path must not.
+set +e
+BACKIMAGE_PASSPHRASE="$secret" bin/backimage restore "$REPO:aged" --extract \
+	-C "$work/aged-wrong" --no-preserve-owner >"$work/aged-wrong.log" 2>&1
+rc=$?
+set -e
+[ "$rc" -ne 0 ] || { echo "a recipient-encrypted backup opened without its identity"; exit 1; }
+
 echo "==> no secrets in output or logs"
 if grep -R -F "$secret" "$work" --exclude=passphrase.txt --exclude=auth.json >/dev/null; then
 	echo "secret leaked into phase 05 output"
+	exit 1
+fi
+# The age secret key is the other credential this phase handles, and it must
+# stay in the one file that holds it.
+age_secret=$(grep -m1 '^AGE-SECRET-KEY-' "$work/identity.txt")
+if grep -R -F "$age_secret" "$work" --exclude=identity.txt >/dev/null; then
+	echo "the age secret key leaked into phase 05 output"
 	exit 1
 fi
 

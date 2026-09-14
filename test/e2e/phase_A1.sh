@@ -27,6 +27,9 @@ LAYOUT_REF="example.test/e2e/a1"
 work=$(mktemp -d)
 cleanup() {
 	docker rm -f "$NAME" >/dev/null 2>&1 || true
+	for img in "${pulled[@]:-}"; do
+		[ -n "$img" ] && docker rmi -f "$img" >/dev/null 2>&1 || true
+	done
 	chmod -R u+rwX "$work" >/dev/null 2>&1 || true
 	rm -rf "$work"
 }
@@ -55,10 +58,17 @@ bin/backimage backup "$tree" --repo "$LAYOUT_REF" --tag honest --passphrase-file
 	--allow-degraded --output oci-layout --output-path "$work/layout" --platform linux/amd64 \
 	--max-layer-size 4MiB --temp-dir "$work/tmp" --json >/dev/null
 
-# The Docker daemon is not among the sources exercised here: `docker save`
-# re-labels every layer as gzip, so `restore --local-repo` cannot read back a
-# backup at all, forged or honest. That defect predates this phase and is
-# tracked separately (plan/astra/bugs.md, B-A001).
+# pull_to_daemon puts one published tag into the local Docker daemon, so the
+# daemon takes its place among the sources a forged backup has to be refused
+# from. It was left out while B-A001 was open — the daemon could not read back
+# any backup at all, honest or forged — and the refusal is only worth asserting
+# now that the honest case works.
+pulled=()
+pull_to_daemon() {
+	local tag="$1"
+	docker pull -q "${REPO}:${tag}" >/dev/null
+	pulled+=("${REPO}:${tag}")
+}
 
 # refuse runs a command that must fail, and reports the exit code so a change
 # of classification is visible instead of silently accepted.
@@ -135,6 +145,11 @@ cmp "$tree/sub/a.txt" "$work/honest-out/tree/sub/a.txt"
 cmp "$tree/random.bin" "$work/honest-out/tree/random.bin"
 accept "extractor verify on the unpacked root" \
 	env BACKIMAGE_PASSPHRASE="$secret" "$SELF" verify --root "$work/root-honest/backup"
+pull_to_daemon honest
+accept "host restore from the local daemon" \
+	bin/backimage restore "${REPO}:honest" --local-repo --extract -C "$work/honest-daemon" \
+	--passphrase-file "$work/pass.txt" --no-preserve-owner
+cmp "$tree/sub/a.txt" "$work/honest-daemon/tree/sub/a.txt"
 accept "extractor list on the unpacked root" \
 	env BACKIMAGE_PASSPHRASE="$secret" "$SELF" list --root "$work/root-honest/backup"
 
@@ -166,6 +181,13 @@ refuse "host extract (registry)" \
 	env BACKIMAGE_PASSPHRASE="$secret" bin/backimage restore "${REPO}:data" \
 	--extract -C "$work/x-data-reg" --no-preserve-owner
 no_plaintext "$work/x-data-reg"
+pull_to_daemon data
+refuse "host extract (local daemon)" \
+	env BACKIMAGE_PASSPHRASE="$secret" bin/backimage restore "${REPO}:data" --local-repo \
+	--extract -C "$work/x-data-daemon" --no-preserve-owner
+no_plaintext "$work/x-data-daemon"
+refuse "host full verify (local daemon)" \
+	env BACKIMAGE_PASSPHRASE="$secret" bin/backimage verify "${REPO}:data" --local-repo
 refuse "extractor tar" \
 	env BACKIMAGE_PASSPHRASE="$secret" "$SELF" tar --root "$work/root-data/backup"
 refuse "extractor extract" \

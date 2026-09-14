@@ -1,11 +1,11 @@
 package crypt
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"io"
 	"os"
-	"strings"
 
 	"filippo.io/age"
 )
@@ -95,11 +95,16 @@ func UnwrapKeys(r io.Reader, id Identity) (*KeyMaterial, error) {
 			return nil, fmt.Errorf("reading identity file: %w", err)
 		}
 		defer zero(data)
-		ident, err := age.ParseX25519Identity(strings.TrimSpace(string(data)))
+		// The file is read the way age reads one, comments and blank lines
+		// included. Parsing the whole file as a single secret key rejected
+		// exactly what `age-keygen -o key.txt` writes — two "# ..." lines above
+		// the key — with "malformed secret key: mixed case", so the standard
+		// identity file was the one shape --identity could not open.
+		parsed, err := age.ParseIdentities(bytes.NewReader(data))
 		if err != nil {
 			return nil, fmt.Errorf("parsing identity file: %w", err)
 		}
-		identities = append(identities, ident)
+		identities = append(identities, parsed...)
 	}
 	if len(identities) == 0 {
 		return nil, ErrWrongPassphrase

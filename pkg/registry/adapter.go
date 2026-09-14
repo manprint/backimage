@@ -2,6 +2,7 @@ package registry
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -19,6 +20,51 @@ const (
 	CapGarbageCollect
 	CapUsageStats
 )
+
+// ErrSharedManifest is returned when a tag cannot be deleted on its own
+// because other tags point at the same manifest. It is a refusal to do
+// something the user did not ask for, not a transport failure: the CLI maps it
+// to the usage exit code, the same one a missing --yes gets, so a script does
+// not retry it the way it would retry a network error.
+var ErrSharedManifest = errors.New("il manifest è condiviso da più tag")
+
+// capabilityNames is the wire spelling of each bit, in declaration order. A
+// capability is something a user is told about, so it has a name and not just
+// a position: `repo caps` used to print the bitmask itself, and "45" says
+// nothing about which operations a registry supports.
+var capabilityNames = []struct {
+	bit  Capability
+	name string
+}{
+	{CapListTags, "list-tags"},
+	{CapListRepos, "list-repos"},
+	{CapDeleteManifest, "delete-manifest"},
+	{CapDeleteTag, "delete-tag"},
+	{CapGarbageCollect, "garbage-collect"},
+	{CapUsageStats, "usage-stats"},
+}
+
+// Names returns the operations c declares, in declaration order. An unknown
+// bit — one a newer adapter set and this build does not know — is reported as
+// "unknown-0xN" rather than dropped: a reader has to see that something is
+// there.
+func (c Capability) Names() []string {
+	out := make([]string, 0, len(capabilityNames))
+	var known Capability
+	for _, entry := range capabilityNames {
+		known |= entry.bit
+		if c&entry.bit != 0 {
+			out = append(out, entry.name)
+		}
+	}
+	if rest := c &^ known; rest != 0 {
+		out = append(out, fmt.Sprintf("unknown-%#x", uint32(rest)))
+	}
+	return out
+}
+
+// Has reports whether c declares every bit of want.
+func (c Capability) Has(want Capability) bool { return c&want == want }
 
 // Adapter is the vendor-neutral lifecycle API used by the repo commands.
 // Destructive methods are deliberately manifest based: OCI has no portable

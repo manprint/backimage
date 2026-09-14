@@ -79,6 +79,11 @@ func (c *counterWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
+// deviceOf reports the filesystem device an entry lives on. It is a variable
+// so a test can place a mount boundary inside a tree without mounting
+// anything; everything else about the walk stays real.
+var deviceOf = fileDevice
+
 func (w *tarWriter) AddRoot(ctx context.Context, root string) error {
 	root = filepath.Clean(root)
 	base := filepath.Base(root)
@@ -92,9 +97,17 @@ func (w *tarWriter) AddRoot(ctx context.Context, root string) error {
 		return fmt.Errorf("lstat root %q: %w", root, err)
 	}
 	if w.opts.OneFileSystem && !w.devSet {
-		if dev, ok := fileDevice(st); ok {
+		if dev, ok := deviceOf(st); ok {
 			w.devSeen = dev
 			w.devSet = true
+		}
+	}
+	// A later root on another filesystem is not archived at all: the option
+	// says one file system, and the first root is the one that names it.
+	if w.opts.OneFileSystem && w.devSet {
+		if dev, ok := deviceOf(st); ok && dev != w.devSeen {
+			w.stats.Skipped++
+			return nil
 		}
 	}
 	if st.IsDir() {
@@ -136,8 +149,14 @@ func (w *tarWriter) walkDir(ctx context.Context, arcRoot, fsRoot string) error {
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
 	stack := make([]item, 0, len(entries))
-	for _, de := range entries {
-		stack = append(stack, item{arcRoot + "/" + de.Name(), filepath.Join(fsRoot, de.Name())})
+	// Pushed in reverse so the pop order below is alphabetical, exactly like
+	// the per-directory push further down. Pushing them in order instead made
+	// the root's own children come out reverse-alphabetically while every
+	// deeper directory came out alphabetically: deterministic either way, but
+	// two different orders in one archive.
+	for i := len(entries) - 1; i >= 0; i-- {
+		name := entries[i].Name()
+		stack = append(stack, item{arcRoot + "/" + name, filepath.Join(fsRoot, name)})
 	}
 	for len(stack) > 0 {
 		if err := ctx.Err(); err != nil {
@@ -152,6 +171,31 @@ func (w *tarWriter) walkDir(ctx context.Context, arcRoot, fsRoot string) error {
 				return err
 			}
 			continue
+		}
+		if w.opts.OneFileSystem && w.devSet {
+			if dev, ok := deviceOf(st); ok && dev != w.devSeen {
+				// Another device means a mount point. The directory itself is
+				// archived and nothing below it is visited — the same as
+				// `tar --one-file-system` and `rsync -x`. Dropping the
+				// directory too, which is what happened before, restored a
+				// tree with nowhere to mount anything back: a /srv/data with
+				// no /srv/data/db to remount into.
+				//
+				// Anything else on another device — a bind-mounted file — is
+				// left out entirely; there is no shape to preserve.
+				//
+				// One Skipped per boundary. The entries below it are never
+				// enumerated, which is the point of the option, so their
+				// number is not knowable without doing the walk it exists to
+				// avoid.
+				if st.IsDir() {
+					if err := w.emitOne(ctx, rel, it.full, st); err != nil {
+						return err
+					}
+				}
+				w.stats.Skipped++
+				continue
+			}
 		}
 		if st.IsDir() {
 			sub, err := os.ReadDir(it.full)
@@ -192,12 +236,6 @@ func (w *tarWriter) walkDir(ctx context.Context, arcRoot, fsRoot string) error {
 }
 
 func (w *tarWriter) emitOne(ctx context.Context, arcPath, fsPath string, st os.FileInfo) error {
-	if w.opts.OneFileSystem && w.devSet {
-		if dev, ok := fileDevice(st); ok && dev != w.devSeen {
-			w.stats.Skipped++
-			return nil
-		}
-	}
 	e := &Entry{Path: arcPath}
 	mode := st.Mode()
 	switch {
@@ -368,6 +406,9 @@ func (w *tarWriter) writeEntry(ctx context.Context, e *Entry, fsPath string, st 
 			// empty regular file (a header without matching size would be a
 			// corrupt tar). Content mismatch is reported to the caller.
 			w.stats.Errors = append(w.stats.Errors, fmt.Errorf("open %q: %w", fsPath, err))
+			w.stats.ContentSkipped++
+			w.warnOnce("contenuto di alcuni file non leggibile: archiviati come file vuoti, " +
+				"con nome, permessi, owner e timestamp conservati (--allow-degraded)")
 			e.Size = 0
 			hdr.Size = 0
 		} else {
@@ -381,16 +422,26 @@ func (w *tarWriter) writeEntry(ctx context.Context, e *Entry, fsPath string, st 
 	if err := w.tw.WriteHeader(hdr); err != nil {
 		return fmt.Errorf("tar header %q: %w", e.Path, err)
 	}
-	if e.Type == TypeRegular && f != nil {
+	if e.Type == TypeRegular {
+		// The digest covers what actually reaches the archive, not what was
+		// on disk: in degraded mode f is nil and the payload is empty, so
+		// this is the digest of no bytes. Computing it only when f != nil
+		// used to leave SHA256 empty on those entries, and the index schema
+		// rejects a regular entry without a digest — an unreadable file made
+		// the whole backup fail at the metadata step, after the archive had
+		// already been built, compressed and encrypted. Stats.ContentSkipped
+		// is what says the bytes are missing; the digest stays truthful about
+		// the archive.
 		h := sha256.New()
-		n, err := io.Copy(io.MultiWriter(w.tw, h), &ctxReader{ctx: ctx, r: f})
-		if err != nil {
-			return fmt.Errorf("copy %q: %w", fsPath, err)
+		var n int64
+		if f != nil {
+			var err error
+			n, err = io.Copy(io.MultiWriter(w.tw, h), &ctxReader{ctx: ctx, r: f})
+			if err != nil {
+				return fmt.Errorf("copy %q: %w", fsPath, err)
+			}
 		}
 		e.SHA256 = hex.EncodeToString(h.Sum(nil))
-		if err != nil {
-			return fmt.Errorf("copy %q: %w", fsPath, err)
-		}
 		if n != e.Size {
 			msg := fmt.Errorf("size changed while archiving %q: stat %d, read %d", fsPath, e.Size, n)
 			if w.opts.Strict {

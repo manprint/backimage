@@ -21,6 +21,8 @@ func TestExitCodeTable(t *testing.T) {
 		{New(KindIntegrity, "", "boom"), 5},
 		{New(KindNetwork, "", "boom"), 6},
 		{New(KindInterrupted, "", "boom"), 7},
+		{New(KindFidelity, "", "boom"), 8},
+		{fmt.Errorf("wrapped: %w", New(KindFidelity, "", "boom")), 8},
 		{fmt.Errorf("wrapped: %w", New(KindUsage, "", "boom")), 2},
 		{fmt.Errorf("wrapped: %w", ErrPassphrase), 4},
 		{errors.New("plain"), 1},

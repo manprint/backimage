@@ -125,6 +125,12 @@ type Result struct {
 	SkippedBlobs    int      `json:"skippedBlobs"`
 	SkippedBytes    int64    `json:"skippedBytes"`
 	UploadedBytes   int64    `json:"uploadedBytes"`
+	// ContentSkipped counts the regular files that --allow-degraded archived
+	// without their content because they could not be opened. Their name,
+	// mode, owner and timestamps are in the backup; their bytes are not, and
+	// a restore materialises them as empty files. Zero on a strict run, which
+	// refuses to start instead.
+	ContentSkipped int64 `json:"contentSkipped"`
 }
 
 // ErrNoData is returned when the archive stream produced no chunks at all.
@@ -422,6 +428,15 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 
 	res.Files = bp.stats.Files
 	res.BytesRaw = bp.stats.BytesRaw
+	res.ContentSkipped = bp.stats.ContentSkipped
+	if res.ContentSkipped > 0 && cfg.Progress != nil {
+		// The count belongs in the run's own output, not only in --json: a
+		// backup that silently holds empty files where data should be is the
+		// one thing --allow-degraded must never hide.
+		cfg.Progress(fmt.Sprintf(
+			"backup: attenzione: %d file archiviati SENZA contenuto perché illeggibili; "+
+				"un restore li ricrea vuoti (elenco completo con --json)", res.ContentSkipped))
+	}
 	res.Chunks = int(bp.chunkIdx)
 	res.Layers = len(bp.layers)
 	res.BytesStored = bp.storedBytes()

@@ -11,7 +11,6 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/manprint/backimage/pkg/compress"
 	"github.com/manprint/backimage/pkg/index"
 )
 
@@ -98,7 +97,7 @@ func (s *imageSource) VerifyStored(ctx context.Context, keepGoing bool, progress
 			}
 			continue
 		}
-		ociDigest, err := layers[imageLayer].Digest()
+		blob, err := s.layerBytes(layers[imageLayer])
 		if err != nil {
 			return report, err
 		}
@@ -106,7 +105,7 @@ func (s *imageSource) VerifyStored(ctx context.Context, keepGoing bool, progress
 			progress(fmt.Sprintf("verifica: layer %d/%d: rilettura in streaming (%d chunk)",
 				n+1, len(ordered), meta.ChunkTo-meta.ChunkFrom+1))
 		}
-		chunks, read, err := s.verifyOneLayer(ctx, layers[imageLayer].Compressed, ociDigest.String(), meta,
+		chunks, read, err := s.verifyOneLayer(ctx, blob, meta,
 			manifest.Archive.Compression, table, &buf, fail)
 		report.Chunks += chunks
 		report.Bytes += read
@@ -126,8 +125,7 @@ func (s *imageSource) VerifyStored(ctx context.Context, keepGoing bool, progress
 // layer tar is consumed chunk by chunk.
 func (s *imageSource) verifyOneLayer(
 	ctx context.Context,
-	open func() (io.ReadCloser, error),
-	ociDigest string,
+	blob layerBytes,
 	meta index.LayerInfo,
 	codecName string,
 	table *index.ChunkTable,
@@ -138,18 +136,16 @@ func (s *imageSource) verifyOneLayer(
 		return 0, 0, fail(fmt.Errorf("data layer %d: intervallo chunk %d-%d fuori dalla tabella (%d chunk)",
 			meta.Index, meta.ChunkFrom, meta.ChunkTo, len(table.Chunks)))
 	}
-	raw, err := open()
+	raw, err := blob.open()
 	if err != nil {
 		return 0, 0, err
 	}
 	defer raw.Close()
-	codec, err := compress.Get(codecName)
-	if err != nil {
-		return 0, 0, err
-	}
 	hash := sha256.New()
 	counted := io.TeeReader(&contextReader{ctx: ctx, r: raw}, hash)
-	decoded, err := codec.NewReader(counted)
+	// The hash above covers the layer exactly as the source serves it, so the
+	// wrappers openLayerTar removes sit inside the TeeReader, not around it.
+	decoded, err := openLayerTar(io.NopCloser(counted), codecName)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -221,9 +217,9 @@ func (s *imageSource) verifyOneLayer(
 			return verified, read, stop
 		}
 	}
-	if got := "sha256:" + hex.EncodeToString(hash.Sum(nil)); got != ociDigest {
-		if stop := fail(fmt.Errorf("data layer %d: digest compresso %s, atteso %s (manifest OCI)",
-			meta.Index, got, ociDigest)); stop != nil {
+	if got := "sha256:" + hex.EncodeToString(hash.Sum(nil)); got != blob.digest.String() {
+		if stop := fail(fmt.Errorf("data layer %d: digest del layer %s, atteso %s (%s)",
+			meta.Index, got, blob.digest.String(), blob.label)); stop != nil {
 			return verified, read, stop
 		}
 	}

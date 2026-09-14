@@ -19,6 +19,9 @@ const (
 	exitIntegrity
 	exitNetwork
 	exitInterrupted
+	// exitFidelity: the data came back whole but the destination refused
+	// metadata the archive carried, and --strict was asked for.
+	exitFidelity
 )
 
 type codedError struct {

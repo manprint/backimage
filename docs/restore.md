@@ -52,6 +52,17 @@ Il default `--platform linux/amd64` sceglie il manifest di bootstrap; i layer
 dati sono identici fra le piattaforme. `--cache-size` limita davvero la cache:
 i file meno recenti vengono eliminati prima che il limite venga superato.
 
+`--cache-size` vale solo per il registry: una layout e il daemon sono già
+locali e non usano la cache. Un valore non valido è comunque un errore d'uso su
+tutte le sorgenti, così un refuso non passa in silenzio.
+
+`--local-repo` legge ciò che il daemon ha conservato, non ciò che era stato
+pubblicato: il daemon rietichetta ogni layer come tar+gzip. Il lettore lo tiene
+in conto (`docs/image-format.md`), quindi il round trip
+`backup --output daemon` → `restore --local-repo` restituisce lo stesso albero
+di un registry. Ciò che cambia è quanto vale l'ancoraggio `--expect-digest`:
+vedi sotto.
+
 ## `--overwrite` sovrappone, non sostituisce (0.5.0)
 
 `--overwrite` significa «scrivi sopra ciò che trovi», non «sostituisci
@@ -80,6 +91,10 @@ identica al backup e non un'unione — deve svuotarla esplicitamente prima del
 restore.
 
 ## Una credenziale dichiara cosa ci si aspetta di leggere (0.5.0)
+
+`--identity` accetta il file identità nel formato che `age-keygen -o key.txt`
+produce, righe di commento comprese; il file deve contenere almeno una chiave
+segreta X25519.
 
 Fornire `--passphrase-file`, `--passphrase-stdin`, `--password`, `--identity`
 oppure `BACKIMAGE_PASSPHRASE` significa dire «questo backup è cifrato». Dalla
@@ -182,12 +197,26 @@ destinazione già popolata senza `--overwrite`, entry di tipo non supportato.
 
 `--strict` ripristina il comportamento intransigente: la prima operazione
 rifiutata ferma l'estrazione e l'errore riporta il rimedio esatto.
+
+Due famiglie fanno eccezione e non fermano mai l'estrazione a metà, perché su
+quella destinazione non si sarebbe potuto preservare nulla comunque: gli
+attributi estesi che il filesystem rifiuta del tutto (`EOPNOTSUPP` su
+tmpfs/NFS/vfat, `EINVAL` per un prefisso che il kernel non conosce) e
+`trusted.*` senza `CAP_SYS_ADMIN`. Vengono tollerati, contati e riportati — e
+con `--strict` il comando **termina con codice 8**: l'estrazione è completa e
+l'albero è sul posto, ma non è 1:1 e l'uscita lo dice. Senza `--strict` lo
+stesso restore esce 0 e le differenze restano nel riepilogo finale e in
+`--json` (campi `degraded`, `degraded_examples`, `xattrs_skipped`).
+
 `--no-preserve-xattrs` non tenta nemmeno gli attributi estesi;
 `--no-preserve-owner` non tenta owner e gruppo.
 
 ## Evidenze prodotte dal restore
 
-Ogni estrazione lascia nel log tre righe verificabili:
+Ogni estrazione lascia nel log righe verificabili, e **chiude con un verdetto
+di una riga sola**, identico per il binario `backimage` e per l'immagine
+autoestraente (`docker run … extract`). È la riga da leggere, e da cercare in
+un log o in una mail di cron:
 
 ```text
 restore: integrità: 520/520 chunk letti e verificati (dimensione e digest plaintext
@@ -195,7 +224,19 @@ restore: integrità: 520/520 chunk letti e verificati (dimensione e digest plain
 restore: esito 1:1 sulle entry ricevute: 13 oggetti ripristinati (4 file, 6 directory,
          1 symlink, 1 hardlink, 0 device, 1 fifo); contenuti, permessi, owner, timestamp
          e attributi estesi applicati integralmente; nessuna differenza
+restore: ESITO: estrazione 1:1, nessun errore — 13 oggetti ripristinati, 0 differenze
+         di metadati, 0 entry saltate; tutti i chunk verificati (digest in chiaro
+         coincidenti con quelli registrati nel backup)
 ```
+
+Il verdetto ha due sole forme. `ESITO: estrazione 1:1, nessun errore` significa
+che tutto è tornato: byte autenticati e albero fedele. Qualunque altra forma
+inizia con `ESITO: estrazione NON 1:1` e dice quante differenze e quante entry
+mancano. Con `--no-verify` il verdetto lo dichiara (`digest dei chunk NON
+verificati`) invece di affermare una verifica che non è stata fatta.
+
+L'autoestraente stampa il verdetto sia su stdout sia nel log su stderr, così
+vale sia se si legge l'output del container sia se si raccoglie solo il log.
 
 Se qualcosa non è stato applicato, la seconda riga diventa un elenco di
 differenze con conteggio e un esempio reale per classe:

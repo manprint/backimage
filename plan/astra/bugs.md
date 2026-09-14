@@ -5,7 +5,7 @@ nessuna fase. Ognuno ha un ID stabile, non riusato.
 
 | ID | Trovato in | Stato | Sintesi |
 | --- | --- | --- | --- |
-| B-A001 | A1 (e2e) | APERTO | `restore --local-repo` non riesce a leggere nessun backup dal daemon Docker |
+| B-A001 | A1 (e2e) | RISOLTO | `restore --local-repo` non riesce a leggere nessun backup dal daemon Docker |
 | B-A002 | A2.3 | APERTO | l'indice sostituisce con U+FFFD i byte non-UTF-8 dei nomi (il tar li conserva) |
 | B-A003 | CI (job windows, aggiunto in A1) | RISOLTO | su Windows `readMeta` falliva se si chiedevano gli xattr: ogni entry veniva scartata e il backup usciva vuoto |
 | B-A004 | CI (job macos, aggiunto in A1) | RISOLTO | fuori da Linux il writer non riconosceva hardlink e device e azzerava atime/ctime |
@@ -52,14 +52,23 @@ gzippa. `pkg/restore/source.go:materialize` legge `Compressed()` e lo passa al
 codec dichiarato in `archive.compression`, quindi ottiene un gzip che avvolge
 un gzip (o un gzip dove si attendeva zstd).
 
-**Perché non è stato corretto qui**: è anteriore al piano, non riguarda A01, e
-la correzione è una scelta di progetto sul lettore daemon (quale accessorio di
-layer usare, o se leggere l'indice OCI dello stream di `docker save` invece del
-`manifest.json` di compatibilità) che merita la propria unità di lavoro.
-
 **Impatto**: `--local-repo` in `restore`, `verify`, `ls`, `find`. Il percorso
-non è coperto da nessuno script e2e, il che è il motivo per cui è rimasto
+non era coperto da nessuno script e2e, il che è il motivo per cui è rimasto
 invisibile.
+
+**Risolto** (2026-09-14). `pkg/restore/layerblob.go` toglie l'involucro che la
+sorgente ha aggiunto e applica il codec dichiarato dal manifest una volta sola;
+il codec non viene mai indovinato e il numero di involucri da togliere è
+limitato. `imageSource.layerBytes` sceglie inoltre la rappresentazione che il
+daemon ha davvero conservato (`Uncompressed()`, con il diffID come digest
+atteso) invece di fargli comprimere in gzip l'intero backup in uscita per poi
+decomprimerlo subito dopo.
+
+La lacuna che l'ha nascosto è chiusa insieme al difetto: `test/e2e/phase_A9.sh`
+esercita il daemon come sorgente (tutti i codec, cifrato e no, uno e più layer,
+`restore`/`verify`/`ls`/`find`/`inspect`, `--remove-local-image`), e A1 include
+ora il daemon fra le sorgenti da cui un backup falsificato deve essere
+rifiutato.
 
 ---
 

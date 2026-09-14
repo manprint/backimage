@@ -180,7 +180,7 @@ func cmdExtract(ctx context.Context, args []string) error {
 	cpus := fs.Int("cpus", cpu.Default(), "maximum CPUs used during extraction (default: half available CPUs)")
 	noOwner := fs.Bool("no-preserve-owner", false, "do not restore owner")
 	noXattrs := fs.Bool("no-preserve-xattrs", false, "do not restore extended attributes")
-	strict := fs.Bool("strict", false, "abort the extraction when a metadata operation is refused instead of degrading it")
+	strict := fs.Bool("strict", false, "abort the extraction when a metadata operation is refused instead of degrading it; losses the destination makes unavoidable do not stop the run but make it exit 8")
 	keepGoing := fs.Bool("continue", false, "do not stop at the first damaged chunk: extract every entry that verifies and report the ones lost")
 	// Kept only so the flag has an answer instead of "flag provided but not
 	// defined": it was removed, and the removal is the point.
@@ -294,8 +294,15 @@ func cmdExtract(ctx context.Context, args []string) error {
 	if producerErr != nil {
 		return withCode(exitIntegrity, producerErr)
 	}
+	// --strict asked for a faithful copy. The extraction is already finished
+	// and fully reported either way; what a tolerated metadata loss must not
+	// do is exit 0. See strictFidelityError in internal/cli/restore.go.
+	fidelityErr := strictFidelityError(*strict, stats)
 	if *asJSON {
-		return json.NewEncoder(stdout).Encode(stats)
+		if err := json.NewEncoder(stdout).Encode(stats); err != nil {
+			return err
+		}
+		return fidelityErr
 	}
 	fmt.Fprintf(stdout, "estratti: %d file, %d directory, %d byte\n", stats.Files, stats.Dirs, stats.BytesRaw)
 	// Audit evidence on stdout as well as in the log: the verdict, and every
@@ -303,6 +310,15 @@ func cmdExtract(ctx context.Context, args []string) error {
 	for _, line := range stats.FidelityLines() {
 		fmt.Fprintln(stdout, line)
 	}
+	// The closing verdict, identical to the host binary's: whoever reads the
+	// output of `docker run … extract` sees the same line, and can grep for
+	// the same string, as whoever reads `backimage restore`.
+	//
+	// The extraction always authenticates every chunk it consumes: unlike the
+	// host CLI, this command has no --no-verify.
+	closing := stats.ClosingVerdict(true)
+	fmt.Fprintln(stdout, closing)
+	progress.WriteLine(stderr, "restore: "+closing)
 	if *keepGoing {
 		for _, line := range partial.Summary() {
 			progress.WriteLine(stderr, "restore: "+line)
@@ -313,7 +329,27 @@ func cmdExtract(ctx context.Context, args []string) error {
 				"recupero parziale: %d entry non recuperate dai chunk danneggiati %v", partial.Skipped, partial.BadChunks))
 		}
 	}
-	return nil
+	return fidelityErr
+}
+
+// strictFidelityError mirrors the host binary: a restore that completed but
+// was not 1:1 exits non-zero when --strict was asked for. The two copies are
+// deliberate — the bootstrap binary does not import the cobra-bearing CLI
+// package — and are covered by the same e2e phase.
+func strictFidelityError(strict bool, stats archive.Stats) error {
+	if !strict {
+		return nil
+	}
+	var degraded int64
+	for _, n := range stats.Degraded {
+		degraded += n
+	}
+	if degraded == 0 && stats.Skipped == 0 {
+		return nil
+	}
+	return withCode(exitFidelity, fmt.Errorf(
+		"--strict: ripristino completato ma NON 1:1: %d differenze di metadati, %d entry non create",
+		degraded, stats.Skipped))
 }
 
 func selectedBytes(entries []index.FileEntry) int64 {

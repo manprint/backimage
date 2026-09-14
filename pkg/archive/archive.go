@@ -23,6 +23,7 @@ type Options struct {
 type Stats struct {
 	Files, Dirs, Symlinks, Hardlinks, Devices, Fifos, Skipped int64
 	BytesRaw                                                  int64
+	ContentSkipped                                            int64             // backup only: regular files archived without their content (unreadable, degraded mode)
 	XattrsSkipped                                             int64             // extended attributes dropped during a restore
 	Degraded                                                  map[string]int64  // restore only: operations dropped, by class ("owner", "mode", "times", "xattr.trusted", "hardlink", "object")
 	DegradedExamples                                          map[string]string // one real failure per degraded class, as evidence
@@ -65,6 +66,34 @@ func (s Stats) FidelityLines() []string {
 			"  %d entry NON estratte: elenco completo in Stats.Errors (--json)", s.Skipped))
 	}
 	return lines
+}
+
+// ClosingVerdict renders the one line a restore ends with, in both binaries:
+// what was produced, whether every chunk was authenticated, and whether the
+// tree is a faithful copy of what the backup holds.
+//
+// FidelityLines explains the differences; this states the outcome. It exists
+// because the two facts a restore has to leave behind — "the bytes are the
+// bytes" and "the tree is the tree" — were reported by two subsystems several
+// lines apart, and the last line of a successful run said only how long it
+// took. This is the line to grep for in a log or a cron mail.
+func (s Stats) ClosingVerdict(chunksVerified bool) string {
+	objects := s.Files + s.Dirs + s.Symlinks + s.Hardlinks + s.Devices + s.Fifos
+	integrity := "tutti i chunk verificati (digest in chiaro coincidenti con quelli registrati nel backup)"
+	if !chunksVerified {
+		integrity = "digest dei chunk NON verificati (--no-verify)"
+	}
+	differences := totalDegraded(s.Degraded)
+	if differences == 0 && s.Skipped == 0 {
+		return fmt.Sprintf(
+			"ESITO: estrazione 1:1, nessun errore — %d oggetti ripristinati, "+
+				"0 differenze di metadati, 0 entry saltate; %s",
+			objects, integrity)
+	}
+	return fmt.Sprintf(
+		"ESITO: estrazione NON 1:1 — %d oggetti ripristinati, %d differenze di metadati, "+
+			"%d entry non create; %s. Il dettaglio è nelle righe \"differenza\" qui sopra",
+		objects, differences, s.Skipped, integrity)
 }
 
 func totalDegraded(degraded map[string]int64) int64 {

@@ -115,8 +115,8 @@ Due note operative:
 - eliminare il manifest non libera subito lo spazio dei blob. Il recupero
   dipende dal garbage collector del registry e va eseguito a parte
   (`registry garbage-collect` su `registry:2`). Nessun adapter di backimage
-  espone oggi quell'operazione: `repo caps` dichiara `CapListTags`,
-  `CapDeleteManifest`, `CapDeleteTag` e `CapUsageStats`, non `CapGarbageCollect`.
+  espone oggi quell'operazione: `repo caps` dichiara `list-tags`,
+  `delete-manifest`, `delete-tag` e `usage-stats`, non `garbage-collect`.
 
 ### Un limite che resta
 

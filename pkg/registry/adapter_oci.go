@@ -152,7 +152,8 @@ func (a *ociAdapter) DeleteTag(ctx context.Context, ref name.Tag, force bool) er
 		}
 	}
 	if len(shared) > 1 && !force {
-		return fmt.Errorf("refusing to delete %s: manifest is also referenced by tags %s (use --force to delete them together)", ref.Name(), strings.Join(shared, ", "))
+		const refuse = "%w: %s non può essere eliminato da solo, lo stesso manifest è puntato dai tag %s; --force li elimina insieme" //nolint:misspell // Messaggio CLI italiano.
+		return fmt.Errorf(refuse, ErrSharedManifest, ref.Name(), strings.Join(shared, ", "))
 	}
 	digest := ref.Context().Digest(desc.Digest.String())
 	return a.DeleteManifest(ctx, digest)

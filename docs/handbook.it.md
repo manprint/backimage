@@ -1186,7 +1186,7 @@ Flag:
 | `--output MODE` | `registry` | `registry`, `daemon`, `oci-layout`, `tar` |
 | `--output-path PATH` | — | Destinazione per layout OCI/tar |
 | `--exclude GLOB` | — | Esclude un glob; ripetibile |
-| `--one-file-system` | `false` | Non attraversa mount point |
+| `--one-file-system` | `false` | Non attraversa mount point: la directory montata resta nell'archivio, il suo contenuto no |
 | `--numeric-owner` | `false` | Non risolve nomi utente/gruppo |
 | `--allow-degraded` | `false` | Disattiva il preflight strict delle capability; non concede privilegi |
 | `--verify-after-push` | `quick` | Rilettura post-push: `quick` (digest di blob e manifest, nessun download), `full` (riscarica ogni layer in streaming e ricalcola i digest memorizzati), `off` |

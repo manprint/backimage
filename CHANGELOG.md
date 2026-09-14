@@ -9,6 +9,120 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- **`--one-file-system` scartava anche la directory del mount point**, non solo
+  ciò che c'è oltre. `tar --one-file-system` e `rsync -x` archiviano la
+  directory e non vi scendono dentro; backimage la faceva sparire, quindi un
+  ripristino restituiva un albero senza il punto in cui rimontare (un
+  `/srv/data` senza `/srv/data/db`). Ora la directory resta, il sottoalbero non
+  viene visitato, e il confine conta come una entry saltata.
+- **`repo caps` non rispondeva alla domanda per cui esiste.** Stampava la
+  bitmask — `map[adapter:oci capabilities:45]` — che non nomina nessuna
+  operazione, e ignorava `--json` perché costruiva `Options{}` vuote invece di
+  quelle passate dall'utente. Ora elenca le operazioni per nome
+  (`list-tags`, `delete-manifest`, …) sia in JSON sia in testo.
+- **`repo rm` confermava una cancellazione irreversibile con una mappa Go**
+  (`map[deleted:repo:tag]`) nella forma testuale. Ora scrive `eliminato REF`.
+- **Il rifiuto di `repo rm` su un manifest condiviso da più tag usciva 6**
+  (errore di rete). È un rifiuto di agire, non un guasto di trasporto: uno
+  script che ritenta sugli errori di rete avrebbe ritentato all'infinito una
+  condizione che non cambia. Ora esce 2, come il rifiuto per `--yes` mancante.
+- **`--cache-size` era validato solo sul percorso registry.** Con
+  `--oci-layout` o `--local-repo` il valore non viene usato e non veniva
+  nemmeno letto, quindi un refuso passava in silenzio e il flag sembrava aver
+  funzionato. Ora un valore non valido è un errore d'uso qualunque sia la
+  sorgente.
+- **`restore --local-repo` non leggeva alcun backup dal daemon Docker**
+  (B-A001). Il daemon rietichetta ogni layer
+  `application/vnd.docker.image.rootfs.diff.tar.gzip` e comprime in gzip ciò che
+  ha conservato, quindi il blob `codec(tar)` del backup tornava con un involucro
+  in più; applicarci sopra il codec dichiarato dava
+  `tar read: chunk 0: data layer 0 tar: invalid input: magic number mismatch`
+  (zstd) o `archive/tar: invalid tar header` (gzip), con qualunque codec e su
+  qualunque backup, anche onesto. Colpiva `restore`, `verify`, `ls`, `find` e
+  `inspect` con `--local-repo`. Ora l'involucro viene tolto per quello che è e
+  il codec dichiarato dal manifest è applicato una volta sola; il lettore usa
+  inoltre la rappresentazione che il daemon ha davvero conservato, invece di
+  fargli comprimere in gzip l'intero backup in uscita per poi decomprimerlo
+  subito dopo.
+- **`--identity` rifiutava un file prodotto da `age-keygen`**, cioè l'unico
+  formato che un utente ha davvero. Il file veniva letto tutto e interpretato
+  come un'unica chiave segreta, quindi le due righe di commento che
+  `age-keygen -o key.txt` scrive sopra la chiave lo facevano fallire con
+  `parsing identity file: malformed secret key: mixed case`: `--identity`
+  funzionava solo su un file ritagliato a mano. Ora il file viene letto come lo
+  legge age, commenti e righe vuote comprese. Vale anche per `--age-identity`
+  di `--dedup` e per l'autoestraente.
+- **`--allow-degraded` falliva sempre su un file illeggibile**, cioè sull'unico
+  caso per cui esiste. L'entry di un file che non si riusciva ad aprire veniva
+  emessa senza `SHA256`, lo schema dell'indice rifiuta un'entry regolare senza
+  digest, e la corsa moriva con `invalid backup metadata: entry[N] bad sha256`
+  *dopo* aver archiviato, compresso e cifrato tutto. Ora il digest copre ciò che
+  finisce davvero nell'archivio — nessun byte, quindi il digest del vuoto — e a
+  dire che il contenuto manca è `Stats.ContentSkipped`, esposto come
+  `contentSkipped` in `backup --json` e come riga di avviso a ogni corsa che ne
+  ha almeno uno. Un backup strict continua a rifiutare quell'albero in
+  preflight, invece di pubblicare un buco.
+- **L'ordine di emissione era incoerente**: i figli diretti delle root uscivano
+  in ordine alfabetico inverso, quelli di ogni directory più in basso in ordine
+  alfabetico. Deterministico in entrambi i casi, ma due ordini in un solo
+  archivio — e "il primo nome di un gruppo di hardlink" è definito da
+  quell'ordine. Ora è alfabetico a ogni livello. Gli archivi prodotti dopo
+  questo cambiamento hanno digest diverso a parità di sorgente: con `--dedup` la
+  prima corsa ricarica i blob una volta sola.
+- **`--strict` prometteva una fedeltà che non imponeva.** Due famiglie di
+  perdite non possono fermare l'estrazione a metà (attributi estesi che il
+  filesystem rifiuta del tutto, `trusted.*` senza `CAP_SYS_ADMIN`): venivano
+  tollerate, contate e riportate, ma il comando usciva comunque 0, quindi
+  nessuna automazione distingueva un restore fedele da uno degradato. Ora
+  l'estrazione si completa e viene riportata come prima, e il comando termina
+  con il nuovo **exit code 8** (`KindFidelity`). `restore --extract --json`
+  riporta anche `degraded`, `degraded_examples` e `xattrs_skipped`.
+- **I comandi di recupero stampati dopo ogni backup non erano quelli a fedeltà
+  massima**, pur essendo intitolati così: mancava `--strict` in entrambe le
+  forme. Il comando `docker run` montava inoltre `/var/run/docker.sock` dentro
+  un container `--privileged` e passava `BACKIMAGE_IMAGE_REF`: servivano solo a
+  `--remove-local-image`, che l'autoestraente non ha più, e quella variabile non
+  è mai stata letta da nulla. Restava un comando pronto da incollare che
+  consegnava root dell'host per niente. Il tip su `--remove-local-image` diceva
+  di aggiungerlo al comando `docker run`, dove viene rifiutato.
+
+### Added
+
+- `test/e2e/phase_A10.sh`: `repo caps`, `repo stats` e `repo rm` contro un
+  registry che implementa davvero la cancellazione, più `logout` e l'effetto
+  reale di `--cache-size` sulla cache dei layer scaricati.
+- `test/e2e/phase_A11.sh`: le opzioni che avevano solo test unitari, ognuna
+  eseguita con e senza il flag — `--no-metadata` (percorso sorgente e hostname
+  assenti dall'immagine pubblicata), `--numeric-owner`, `--one-file-system`
+  (con un tmpfs montato dentro l'albero in un namespace utente),
+  `--no-preserve-xattrs`, `--allow-unencrypted`, `--cpus` — e i due comandi
+  locali che nessuno script eseguiva, `doctor` e `genpass`.
+- `test/e2e/phase_05.sh` copre ora due percorsi verso il registry che nessuno
+  script esercitava: `--verify-after-push full` (la rilettura in streaming di
+  ogni layer pubblicato) e un backup cifrato con `--recipient` age riaperto con
+  `--identity`, con il file identità nel formato che `age-keygen` produce. È da
+  lì che è emerso il difetto di `--identity`.
+- `test/e2e/phase_A9.sh`: il daemon Docker come sorgente da cui rileggere un
+  backup — la sola sorgente che nessuno script esercitava, ed è il motivo per
+  cui B-A001 è rimasto invisibile. Copre tutti i codec, cifrato e no, uno e più
+  layer dati, `restore`/`verify`/`ls`/`find`/`inspect` e
+  `--remove-local-image`, e verifica per prima cosa la premessa del fix: che il
+  daemon serva davvero il layer con un involucro in più. `phase_A1.sh` include
+  ora il daemon fra le sorgenti da cui un backup falsificato deve essere
+  rifiutato, e le fasi A8 e A9 sono nella matrice e2e della CI.
+
+- Ogni estrazione chiude con un **verdetto di una riga**, identico per il
+  binario e per l'immagine autoestraente: `ESITO: estrazione 1:1, nessun
+  errore — N oggetti ripristinati, 0 differenze di metadati, 0 entry saltate;
+  tutti i chunk verificati`, oppure `ESITO: estrazione NON 1:1 — …`. È la riga
+  da cercare in un log o in una mail di cron, e con `--no-verify` lo dichiara
+  invece di affermare una verifica non fatta.
+- `test/e2e/phase_A8.sh`: blocca le due invarianti su cui si regge lo strumento.
+  Che un backup **non modifichi la sorgente** è verificato confrontando uno
+  snapshot completo dei metadati — `ctime` compreso, il campo che qualunque
+  scrittura sposterebbe — prima e dopo una corsa reale; il resto copre i
+  difetti qui sopra, fino all'estrazione dall'immagine reale via `docker run`.
+
 - Una sessione remota annullata mentre il rate limiter la teneva ferma usciva
   senza smontare la propria pipeline, e lo spool del layer in costruzione
   restava in `--work-dir`. Chiudere un server con Ctrl-C o SIGTERM durante una

@@ -179,9 +179,52 @@ On Windows a name containing `\ : * ? " < > |`, or ending in a space or a dot,
 cannot exist at all: those entries are reported as skipped instead of being
 rewritten into a name the backup does not describe.
 
+## Emission order (determinism)
+
+Entries come out of the writer in one order and one only: each directory is
+emitted before its children, and the children of **every** directory, the roots
+included, are emitted in ascending byte order of their names. Two runs over an
+unchanged tree produce byte-identical archives.
+
+This is load-bearing beyond determinism. A hardlink group is stored as one
+payload plus `TypeLink` entries pointing at the first name the writer saw, and
+the extractor accepts only a name this same restore has already written, so
+"first" has to mean the same thing on both sides.
+
+## A file whose content cannot be read
+
+Only `--allow-degraded` reaches this case; a strict backup refuses to start
+when the preflight finds unreadable files.
+
+The entry keeps its name, type, mode, owner, timestamps and extended
+attributes, and carries an **empty payload**: a tar header whose size does not
+match the bytes that follow is a corrupt tar, and dropping the entry would turn
+an unreadable file into a missing one. `Entry.SHA256` is therefore the digest
+of what the archive holds — the digest of no bytes — never a digest of content
+that was never read.
+
+What says the bytes are missing is `Stats.ContentSkipped`, surfaced as
+`contentSkipped` in `backup --json` and as a warning line on every run that has
+one. A restore materialises those entries as empty files.
+
+Until this was fixed the digest was simply left empty, which the index schema
+rejects (`entry[N] bad sha256`): a single unreadable file made the whole backup
+fail at the metadata step, after the archive had already been built, compressed
+and encrypted — so `--allow-degraded` never worked for the one case it exists
+for.
+
 ## Other documented behaviours
 
 - Sparse files are archived **densely** in this phase (holes become zeroes);
   hole-aware writing is out of scope.
 - Directories created on the fly for manipulated archives get `0700` and are
   re-fixed by the final pass.
+- A backup **never writes to the source tree**. The walk uses `lstat`,
+  `readdir`, `readlink`, `open(O_RDONLY)`, `llistxattr` and `lgetxattr`, and
+  nothing else; every byte the run produces goes to `--temp-dir` (default
+  `$TMPDIR`), to the checkpoint store under `$XDG_CACHE_HOME`, or to
+  `--output-path`. The only observable change to the source is the `atime` the
+  kernel updates on read, exactly as `cp`, `tar` or `sha256sum` would.
+  `test/e2e/phase_A8.sh` locks this by comparing a full metadata snapshot —
+  `ctime` included, the field any metadata write would move — taken before and
+  after a real backup.

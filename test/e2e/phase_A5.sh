@@ -189,7 +189,11 @@ set -e
 }
 
 echo "==> no e2e script mounts the Docker socket"
-if grep -rn 'docker\.sock' test/e2e/*.sh; then
+# Match a mount, not a mention. A bare grep for the name also fires on a
+# script that asserts the socket is *absent* — phase_A8 checks exactly that on
+# the recovery commands the backup prints — and a guard that forbids naming
+# the thing it forbids cannot be satisfied.
+if grep -rnE '(-v|--volume)[[:space:]=]*[^[:space:]]*docker\.sock:' test/e2e/*.sh; then
 	echo "FAIL: an e2e script mounts the daemon socket"
 	exit 1
 fi

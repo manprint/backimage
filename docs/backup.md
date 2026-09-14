@@ -141,7 +141,7 @@ decompressione in più, non memoria in più.
 | `--output-path` | — | path per layout/tar |
 | `--local-repo` | false | alias per output daemon |
 | `--exclude` | — | glob escluso, ripetibile |
-| `--one-file-system` | false | non attraversa mount point |
+| `--one-file-system` | false | non attraversa mount point: la directory su cui qualcosa è montato viene archiviata, ciò che sta oltre no (come `tar --one-file-system` e `rsync -x`) |
 | `--numeric-owner` | false | non risolve nomi utente/gruppo |
 | `--allow-degraded` | false | continua sulle feature non disponibili |
 | `--verify-after-push` | quick | rilettura post-push: `quick` (digest di blob e manifest, nessun download), `full` (riscarica ogni layer e ricalcola i digest memorizzati, in streaming), `off` |

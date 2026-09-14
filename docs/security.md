@@ -489,6 +489,7 @@ La mappatura completa è in `internal/cli/errors.go` (`Kind` → codice):
 | 5 | integrità fallita (`KindIntegrity`, `ErrIntegrity`) — dati manomessi |
 | 6 | errore di rete o del registry (`KindNetwork`) |
 | 7 | interrotto (`KindInterrupted`) |
+| 8 | restore completato ma non 1:1 con `--strict` (`KindFidelity`) — i dati ci sono, i metadati no |
 
 ## Recoverability
 

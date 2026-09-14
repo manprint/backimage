@@ -32,7 +32,8 @@
 - Messaggi di errore: minuscoli, senza punto finale, con contesto.
 - Ogni pacchetto ha un `doc.go` di 5–15 righe.
 - Nessun output su `stdout` che non sia il dato richiesto: log e progresso su `stderr`.
-- Codici di uscita: 0 ok, 1 generico, 2 uso, 3 privilegi, 4 passphrase, 5 integrità, 6 rete, 7 interrotto.
+- Codici di uscita: 0 ok, 1 generico, 2 uso, 3 privilegi, 4 passphrase, 5 integrità, 6 rete, 7 interrotto,
+  8 restore non 1:1 con `--strict`.
 
 ## Fixture dei formati rilasciati
 

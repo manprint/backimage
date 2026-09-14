@@ -559,8 +559,12 @@ func (x *extractor) applyXattrs(root *os.Root, name, shown string, hdr *tar.Head
 	if hdr.Typeflag != tar.TypeReg && hdr.Typeflag != tar.TypeDir && hdr.Typeflag != tar.TypeLink {
 		x.warn("xattr-unopenable", "xattr non applicabili su symlink, device e fifo: ignorati "+
 			"(non esiste una forma *at di setxattr e questi oggetti non si possono aprire senza effetti)")
-		for range pairs {
-			x.note("xattr.unopenable", nil)
+		for _, kv := range pairs {
+			// Name the object and the attribute: with --strict this class
+			// decides the exit code, and "1 difference" with no evidence
+			// leaves nothing to act on.
+			x.note("xattr.unopenable", fmt.Errorf(
+				"setxattr %q %s: l'oggetto non è apribile (symlink, device o fifo)", shown, kv[0]))
 			stats.XattrsSkipped++
 		}
 		return nil

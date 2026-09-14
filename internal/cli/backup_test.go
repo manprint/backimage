@@ -157,28 +157,32 @@ func TestBackupOCILayoutSuccessHumanAndJSON(t *testing.T) {
 		if !asJSON {
 			for _, want := range []string{
 				// The printed commands must be the maximum-fidelity ones:
-				// sudo for the CLI, --privileged plus the socket and the image
-				// reference for the container.
-				"sudo backimage restore example.test/team/success:t1",
+				// sudo for the CLI, --privileged for the container, --strict
+				// on both, and nothing mounted but the destination.
+				"sudo backimage restore example.test/team/success:t1 --extract --destination ./restore --strict",
 				"docker run --rm --privileged",
-				"-e BACKIMAGE_IMAGE_REF=\"example.test/team/success:t1\"",
-				"-v /var/run/docker.sock:/var/run/docker.sock",
 				"-v \"$PWD/restore:/restore\"",
-				"example.test/team/success:t1 extract --out /restore",
-				"--strict",
+				"example.test/team/success:t1 extract --out /restore --strict",
+				"ESITO: estrazione 1:1",
 				"Tips:",
 			} {
 				if !strings.Contains(out, want) {
 					t.Fatalf("backup output missing %q: %q", want, out)
 				}
 			}
-			commands := strings.SplitN(out, "Tips:", 2)[0]
-			// Tip-only options must stay out of the ready-to-paste commands.
-			// The Docker socket and BACKIMAGE_IMAGE_REF are deliberately in
-			// them, so they are not on this list.
-			for _, unwanted := range []string{"--no-preserve-owner", "--remove-local-image", "BACKUP_PASSPHRASE"} {
+			commands := strings.SplitN(out, "Verifiche del ripristino:", 2)[0]
+			// Tip-only options stay out of the ready-to-paste commands — and
+			// so do the Docker socket and BACKIMAGE_IMAGE_REF. They were there
+			// only for --remove-local-image, which the self-extractor no
+			// longer has, and nothing in it ever read that variable: what was
+			// left was a paste-ready command handing the Docker socket to a
+			// --privileged container, which is host root, for nothing.
+			for _, unwanted := range []string{
+				"--no-preserve-owner", "--remove-local-image", "BACKUP_PASSPHRASE",
+				"/var/run/docker.sock", "BACKIMAGE_IMAGE_REF",
+			} {
 				if strings.Contains(commands, unwanted) {
-					t.Fatalf("recovery command contains tip-only option %q: %q", unwanted, commands)
+					t.Fatalf("recovery command contains %q: %q", unwanted, commands)
 				}
 			}
 		}

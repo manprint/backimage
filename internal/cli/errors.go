@@ -19,6 +19,11 @@ const (
 	KindIntegrity   Kind = 5
 	KindNetwork     Kind = 6
 	KindInterrupted Kind = 7
+	// KindFidelity: the data came back whole but the destination refused
+	// metadata the archive carried, and --strict was asked for. Distinct from
+	// KindIntegrity on purpose: the backup is exactly what it claims to be,
+	// it is the restored tree that is not a faithful copy.
+	KindFidelity Kind = 8
 )
 
 // Error is a user-facing error carrying a Kind and an optional remediation hint.
@@ -50,7 +55,7 @@ func ExitCodeFor(err error) int {
 	}
 	var ce *Error
 	if errors.As(err, &ce) {
-		if ce.Kind >= KindGeneric && ce.Kind <= KindInterrupted {
+		if ce.Kind >= KindGeneric && ce.Kind <= KindFidelity {
 			return int(ce.Kind)
 		}
 	}

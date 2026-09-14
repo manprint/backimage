@@ -382,6 +382,19 @@ func TestOpenImageSourceValidation(t *testing.T) {
 	if _, err := openImageSource(ctx, "example.test/repo:tag", sourceFlags{ociLayout: filepath.Join(t.TempDir(), "missing")}); err == nil {
 		t.Fatal("missing layout accepted")
 	}
+	// A bad --cache-size used to be caught only on the registry path, because
+	// that is where it was parsed. A layout and the daemon ignore the value,
+	// so a typo in it was accepted in silence and the flag looked like it had
+	// worked. It is a usage error wherever the image comes from.
+	for _, flags := range []sourceFlags{
+		{cacheSize: "wat", ociLayout: filepath.Join(t.TempDir(), "missing")},
+		{cacheSize: "512", localRepo: true},
+	} {
+		flags.cacheSize = "wat"
+		if _, err := openImageSource(ctx, "example.test/repo:tag", flags); ExitCodeFor(err) != int(KindUsage) {
+			t.Fatalf("bad cache with %+v = %v, want a usage error", flags, err)
+		}
+	}
 }
 
 func TestOpenImageSourceFactories(t *testing.T) {

@@ -87,21 +87,29 @@ func recoveryInstructions(ref string, encrypted, runnable bool) string {
 	// Both commands are printed in their maximum-fidelity form: ownership,
 	// device nodes, ACLs and the trusted.* extended attributes (overlayfs
 	// metadata) are only writable as root with CAP_SYS_ADMIN, so the CLI form
-	// carries sudo and the container form carries --privileged. The Docker
-	// socket and the image reference are always included so that adding
-	// --remove-local-image needs no extra plumbing.
+	// carries sudo and the container form carries --privileged. Both carry
+	// --strict, without which a restore that dropped metadata still exits 0.
+	//
+	// The container form mounts nothing but the destination. It used to also
+	// bind /var/run/docker.sock and pass BACKIMAGE_IMAGE_REF, for the sake of
+	// --remove-local-image — a flag the self-extractor no longer has, and
+	// nothing in it ever read that variable. What was left was a ready-to-paste
+	// command handing the Docker socket to a --privileged container, which is
+	// host root, to no end at all.
 	var out strings.Builder
 	fmt.Fprint(&out, "\n\ncomandi per recuperare i dati (fedeltà massima):\n")
-	fmt.Fprintf(&out, "  backimage:\n    %ssudo backimage restore %s --extract --destination ./restore%s\n", appPrefix, ref, appPassphrase)
+	// Both forms carry --strict: the heading promises maximum fidelity, and
+	// without it a restore that could not apply owner, mode or extended
+	// attributes still exits 0. With it the run reports every difference and
+	// exits 8 rather than succeeding on a tree that is not a faithful copy.
+	fmt.Fprintf(&out, "  backimage:\n    %ssudo backimage restore %s --extract --destination ./restore --strict%s\n", appPrefix, ref, appPassphrase)
 	if runnable {
 		fmt.Fprint(&out, "  docker run:\n    docker run --rm --privileged \\\n")
 		if dockerPassphrase != "" {
 			fmt.Fprint(&out, "      -e BACKIMAGE_PASSPHRASE=\"$BACKUP_PASSPHRASE\" \\\n") //nolint:gosec // Command suggestion, not a credential.
 		}
-		fmt.Fprintf(&out, "      -e BACKIMAGE_IMAGE_REF=\"%s\" \\\n", ref)
-		fmt.Fprint(&out, "      -v /var/run/docker.sock:/var/run/docker.sock \\\n")
 		fmt.Fprint(&out, "      -v \"$PWD/restore:/restore\" \\\n")
-		fmt.Fprintf(&out, "      %s extract --out /restore\n", ref)
+		fmt.Fprintf(&out, "      %s extract --out /restore --strict\n", ref)
 	} else {
 		fmt.Fprint(&out, "  docker run: non disponibile (backup creato con --runnable=false)\n")
 	}
@@ -111,18 +119,25 @@ func recoveryInstructions(ref string, encrypted, runnable bool) string {
 	fmt.Fprint(&out, "finale del restore lo dichiara per classe.\n")
 	fmt.Fprint(&out, "\nVerifiche del ripristino:\n")
 	fmt.Fprintf(&out, "  - Prima di estrarre, rileggi e ricontrolla l'immagine pubblicata:\n    %sbackimage verify %s --continue%s\n", appPrefix, ref, appPassphrase)
-	fmt.Fprint(&out, "    Ricalcola il digest di ogni chunk (traffico pari al backup); --quick controlla solo i metadati.\n")  //nolint:misspell // Messaggio CLI italiano.
-	fmt.Fprint(&out, "  - L'estrazione verifica da sé il digest in chiaro di ogni chunk e dichiara l'esito: cerca le righe\n") //nolint:misspell // Messaggio CLI italiano.
-	fmt.Fprint(&out, "    \"integrità: N/N chunk letti e verificati\" e \"esito 1:1\". Non aggiungere --no-verify.\n")         //nolint:misspell // Messaggio CLI italiano.
-	fmt.Fprint(&out, "  - Aggiungi --strict per pretendere la fedeltà totale: la prima operazione di metadati rifiutata\n")    //nolint:misspell // Messaggio CLI italiano.
-	fmt.Fprint(&out, "    ferma l'estrazione invece di essere degradata, conteggiata e riportata fra le differenze.\n")        //nolint:misspell // Messaggio CLI italiano.
+	fmt.Fprint(&out, "    Ricalcola il digest di ogni chunk (traffico pari al backup); --quick controlla solo i metadati.\n") //nolint:misspell // Messaggio CLI italiano.
+	fmt.Fprint(&out, "  - L'estrazione verifica da sé il digest in chiaro di ogni chunk e chiude dichiarando l'esito.\n")     //nolint:misspell // Messaggio CLI italiano.
+	fmt.Fprint(&out, "    L'ultima riga è quella da leggere, identica per backimage e per docker run:\n")                     //nolint:misspell // Messaggio CLI italiano.
+	fmt.Fprint(&out, "      ESITO: estrazione 1:1, nessun errore — N oggetti ripristinati, 0 differenze di\n")                //nolint:misspell // Messaggio CLI italiano.
+	fmt.Fprint(&out, "      metadati, 0 entry saltate; tutti i chunk verificati\n")                                           //nolint:misspell // Messaggio CLI italiano.
+	fmt.Fprint(&out, "    Qualunque altra forma significa che qualcosa non è tornato. Non aggiungere --no-verify.\n")         //nolint:misspell // Messaggio CLI italiano.
+	fmt.Fprint(&out, "  - --strict è già nei due comandi qui sopra, ed è ciò che rende quell'esito vincolante:\n")            //nolint:misspell // Messaggio CLI italiano.
+	fmt.Fprint(&out, "    la prima operazione di metadati rifiutata ferma l'estrazione invece di essere degradata.\n")        //nolint:misspell // Messaggio CLI italiano.
+	fmt.Fprint(&out, "    Le poche perdite che la destinazione rende inevitabili (attributi estesi che il filesystem\n")      //nolint:misspell // Messaggio CLI italiano.
+	fmt.Fprint(&out, "    rifiuta del tutto, trusted.* senza CAP_SYS_ADMIN) non fermano la corsa a metà, ma la fanno\n")      //nolint:misspell // Messaggio CLI italiano.
+	fmt.Fprint(&out, "    terminare con codice 8: con --strict un restore non 1:1 non esce mai con successo.\n")              //nolint:misspell // Messaggio CLI italiano.
 	fmt.Fprint(&out, "\nTips:\n")
 	fmt.Fprint(&out, "  - Se non vuoi ripristinare ownership e gruppi, aggiungi --no-preserve-owner al comando backimage o a extract.\n") //nolint:misspell // Messaggio CLI italiano.
 	fmt.Fprint(&out, "  - Per limitare la CPU, aggiungi --cpus N al comando backimage o a extract.\n")                                    //nolint:misspell // Messaggio CLI italiano.
 	fmt.Fprint(&out, "  - Per estrarre solo una parte, aggiungi --include GLOB e/o --exclude GLOB.\n")
-	fmt.Fprint(&out, "  - Per rimuovere l'immagine Docker dopo un'estrazione riuscita, aggiungi --remove-local-image:\n") //nolint:misspell // Messaggio CLI italiano.
-	fmt.Fprint(&out, "    il socket Docker e BACKIMAGE_IMAGE_REF sono già nel comando docker run qui sopra.\n")           //nolint:misspell // Messaggio CLI italiano.
-	fmt.Fprint(&out, "  - Se la directory di destinazione non è vuota, aggiungi --overwrite.\n")                          //nolint:misspell // Messaggio CLI italiano.
+	fmt.Fprint(&out, "  - Per rimuovere l'immagine Docker dopo un'estrazione riuscita, aggiungi --remove-local-image\n") //nolint:misspell // Messaggio CLI italiano.
+	fmt.Fprint(&out, "    al comando backimage: è un'operazione dell'host e l'autoestraente non la esegue, così\n")      //nolint:misspell // Messaggio CLI italiano.
+	fmt.Fprint(&out, "    il container non ha mai bisogno del socket Docker.\n")                                         //nolint:misspell // Messaggio CLI italiano.
+	fmt.Fprint(&out, "  - Se la directory di destinazione non è vuota, aggiungi --overwrite.\n")                         //nolint:misspell // Messaggio CLI italiano.
 	return out.String()
 }
 

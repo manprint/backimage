@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"regexp"
 	"slices"
@@ -302,10 +303,19 @@ func runRepoRemove(cmd *cobra.Command, args []string) error {
 	} else {
 		err = fmt.Errorf("unsupported reference")
 	}
+	if errors.Is(err, registry.ErrSharedManifest) {
+		return New(KindUsage, "rileggi i tag con `backimage repo tags` prima di usare --force", "%v", err)
+	}
 	if err != nil {
 		return New(KindNetwork, "", "%v", err)
 	}
-	return printerResult(NewPrinter(cmd.OutOrStdout(), cmd.ErrOrStderr(), opts), map[string]any{"deleted": ref.Name()})
+	pr := NewPrinter(cmd.OutOrStdout(), cmd.ErrOrStderr(), opts)
+	if opts.JSON {
+		return printerResult(pr, map[string]any{"deleted": ref.Name()})
+	}
+	// Without this branch the map itself was printed — `map[deleted:repo:tag]`
+	// — as the confirmation of an irreversible deletion.
+	return printerResult(pr, fmt.Sprintf("eliminato %s", ref.Name())) //nolint:misspell // Messaggio CLI italiano.
 }
 
 func runRepoPrune(cmd *cobra.Command, args []string) error {
@@ -572,6 +582,10 @@ func tagCreatedColumn(tag registry.TagInfo) string {
 }
 
 func runRepoCaps(cmd *cobra.Command, args []string) error {
+	opts, err := parseOptions(cmd.Root())
+	if err != nil {
+		return New(KindGeneric, "", "%v", err)
+	}
 	a, err := registry.AdapterFor(args[0], nil)
 	if err != nil {
 		return New(KindUsage, "", "%v", err)
@@ -580,7 +594,20 @@ func runRepoCaps(cmd *cobra.Command, args []string) error {
 	if err != nil {
 		return New(KindNetwork, "", "%v", err)
 	}
-	return printerResult(NewPrinter(cmd.OutOrStdout(), cmd.ErrOrStderr(), Options{}), map[string]any{"adapter": a.Name(), "capabilities": caps})
+	// The command exists to answer "which operations does this registry
+	// support". It used to print the bitmask — `map[adapter:oci
+	// capabilities:45]` — and to ignore --json entirely, because it built its
+	// own empty Options instead of the ones the user passed.
+	names := caps.Names()
+	pr := NewPrinter(cmd.OutOrStdout(), cmd.ErrOrStderr(), opts)
+	if opts.JSON {
+		return printerResult(pr, map[string]any{"adapter": a.Name(), "capabilities": names})
+	}
+	listed := "nessuna"
+	if len(names) > 0 {
+		listed = strings.Join(names, ", ")
+	}
+	return printerResult(pr, fmt.Sprintf("adapter %s\n  operazioni  %s", a.Name(), listed))
 }
 
 func runRepoStats(cmd *cobra.Command, args []string) error {
