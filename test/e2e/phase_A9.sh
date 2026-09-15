@@ -96,9 +96,15 @@ backup_to_daemon() {
 	local ref="bi-e2e-a9:$tag"
 	images+=("$ref")
 	docker rmi -f "$ref" >/dev/null 2>&1 || true
-	bin/backimage backup "$tree" --repo bi-e2e-a9 --tag "$tag" \
+	# The status is returned explicitly: a caller that tests it (A9.3 does,
+	# because a daemon may refuse a codec) suspends set -e for the whole
+	# function, and then a failed backup would reach the echo below and be
+	# reported as a success.
+	if ! bin/backimage backup "$tree" --repo bi-e2e-a9 --tag "$tag" \
 		--output daemon --platform linux/amd64 --temp-dir "$work/tmp" \
-		--allow-degraded "$@" >"$work/last.log" 2>&1
+		--allow-degraded "$@" >"$work/last.log" 2>&1; then
+		return 1
+	fi
 	echo "$ref"
 }
 
@@ -173,6 +179,12 @@ for codec in zstd gzip none xz lz4; do
 		continue
 	fi
 	loaded+=("$codec")
+	# A backup that reported success must have left the image behind: the
+	# daemon answers a refused load inside a 200, so "completato" used to be
+	# printed over a tag that was never stored.
+	docker image inspect "$ref" >/dev/null 2>&1 || {
+		echo "FAIL: codec $codec: backup completato ma l'immagine non è nel daemon"
+		sed -n '1,40p' "$work/last.log"; exit 1; }
 	rm -rf "$work/out-$codec"
 	bin/backimage restore "$ref" --local-repo -x -C "$work/out-$codec" >"$work/last.log" 2>&1 || {
 		echo "FAIL: restore dal daemon con codec $codec"; sed -n '1,40p' "$work/last.log"; exit 1; }
