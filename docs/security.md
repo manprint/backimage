@@ -5,7 +5,7 @@
 > vettori golden e domande aperte — c'è il
 > [dossier per una review crittografica indipendente](crypto-review.md).
 
-Versione: 3 · Aggiornato: 0.6.0 · Applicabile a: envelope `BIMGCHK1` v3, keyfile age (schema 2, attestato), CLI (`--dedup`, `--rotate-key`, `genpass`).
+Versione: 3 · Aggiornato: 0.6.1 · Applicabile a: envelope `BIMGCHK1` v3, keyfile age (schema 2, attestato), CLI (`--dedup`, `--rotate-key`, `genpass`).
 
 ## Catena di elaborazione (ordine invariabile)
 
