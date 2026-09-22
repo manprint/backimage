@@ -331,21 +331,11 @@ func TestExcludedEntriesAreNeverOpened(t *testing.T) {
 // directory above the entry it is archiving, and nothing else. A tree deeper
 // than the descriptors a leak of two per level would allow still archives.
 func TestADeepTreeHoldsOneDescriptorPerLevel(t *testing.T) {
-	var lim syscall.Rlimit
-	if err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &lim); err != nil {
-		t.Skip(err)
-	}
 	const depth = 200
-	restore := lim
-	lim.Cur = depth + 150 // one per level plus the test binary's own
-	if lim.Cur > lim.Max {
-		t.Skip("hard descriptor limit too low for the test")
-	}
-	if err := syscall.Setrlimit(syscall.RLIMIT_NOFILE, &lim); err != nil {
-		t.Skip(err)
-	}
-	t.Cleanup(func() { _ = syscall.Setrlimit(syscall.RLIMIT_NOFILE, &restore) })
-
+	// The tree is built, and removed, under the normal limit: t.TempDir's
+	// RemoveAll holds a descriptor per level too, and cleanups run in reverse
+	// order, so a TempDir created after lowering the limit is removed before
+	// the limit is restored (macOS then fails the cleanup with EMFILE).
 	root := filepath.Join(t.TempDir(), "deep")
 	p := root
 	for i := 0; i < depth; i++ {
@@ -357,7 +347,23 @@ func TestADeepTreeHoldsOneDescriptorPerLevel(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(p, "leaf"), []byte("leaf"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+
+	var lim syscall.Rlimit
+	if err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &lim); err != nil {
+		t.Skip(err)
+	}
+	restore := lim
+	lim.Cur = depth + 150 // one per level plus the test binary's own
+	if lim.Cur > lim.Max {
+		t.Skip("hard descriptor limit too low for the test")
+	}
+	if err := syscall.Setrlimit(syscall.RLIMIT_NOFILE, &lim); err != nil {
+		t.Skip(err)
+	}
+	restoreLimit := func() { _ = syscall.Setrlimit(syscall.RLIMIT_NOFILE, &restore) }
+	t.Cleanup(restoreLimit)
 	paths, _ := archivePaths(t, root, Options{Strict: true})
+	restoreLimit()
 	if len(paths) != depth+2 {
 		t.Fatalf("archived %d entries, want %d", len(paths), depth+2)
 	}
