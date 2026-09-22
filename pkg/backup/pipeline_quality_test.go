@@ -113,22 +113,52 @@ func TestDedupLayerFallbackAndHardLimit(t *testing.T) {
 	}
 }
 
-func TestWalkEstimateFileCancellationAndDegradedError(t *testing.T) {
+func TestEstimateFileCancellationAndDegradedError(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "one")
 	if err := os.WriteFile(file, []byte("12345"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	n, size, err := walkEstimate(context.Background(), file, false)
-	if err != nil || n != 1 || size != 5 {
-		t.Fatalf("file estimate = %d, %d, %v", n, size, err)
+	est, err := estimate(context.Background(), Config{RootPaths: []string{file}})
+	if err != nil || est.Files != 1 || est.Bytes != 5 {
+		t.Fatalf("file estimate = %+v, %v", est, err)
 	}
-	if _, _, err := walkEstimate(context.Background(), file+"-missing", false); err == nil {
+	if _, err := estimate(context.Background(), Config{RootPaths: []string{file + "-missing"}}); err == nil {
 		t.Fatal("missing root accepted")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, _, err := walkEstimate(ctx, filepath.Dir(file), false); !errors.Is(err, context.Canceled) {
+	if _, err := estimate(ctx, Config{RootPaths: []string{filepath.Dir(file)}}); !errors.Is(err, context.Canceled) {
 		t.Fatalf("cancel error = %v", err)
+	}
+}
+
+// TestEstimateCountsWhatTheArchiveHolds: the estimate plans chunks, layers
+// and the temp-space check. Counting excluded files, or files past a mount
+// point --one-file-system stops at, planned for data that is never written —
+// and walked /proc or a stale NFS mount the archive never enters.
+func TestEstimateCountsWhatTheArchiveHolds(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "tree")
+	if err := os.MkdirAll(filepath.Join(root, "cache"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for rel, body := range map[string]string{"kept": "12345", "cache/big": "0123456789"} {
+		if err := os.WriteFile(filepath.Join(root, rel), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	est, err := estimate(context.Background(), Config{RootPaths: []string{root}, Exclude: []string{"tree/cache"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if est.Files != 1 || est.Bytes != 5 {
+		t.Fatalf("estimate with an exclude = %+v, want the one kept file", est)
+	}
+	est, err = estimate(context.Background(), Config{RootPaths: []string{root}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if est.Files != 2 || est.Bytes != 15 {
+		t.Fatalf("estimate without excludes = %+v, want both files", est)
 	}
 }
 

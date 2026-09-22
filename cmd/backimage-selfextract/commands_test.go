@@ -266,6 +266,11 @@ func TestExtractPartialStripAndValidation(t *testing.T) {
 	if !strings.Contains(stderr, "estrazione:") {
 		t.Fatalf("extract progress = %q", stderr)
 	}
+	// The verdict is part of the report on stdout, and appears exactly once
+	// in what `docker run` shows, which merges both streams.
+	if n := strings.Count(out+stderr, "ESITO:"); n != 1 || !strings.Contains(out, "ESITO: estrazione 1:1") {
+		t.Fatalf("closing verdict printed %d times (stdout %q, stderr %q)", n, out, stderr)
+	}
 	if !strings.Contains(stderr, "estrazione: 100%") || !strings.Contains(stderr, "finalizzazione filesystem completate") {
 		t.Fatalf("extract did not report final progress/finalization: %q", stderr)
 	}

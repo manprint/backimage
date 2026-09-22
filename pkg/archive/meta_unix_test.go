@@ -22,7 +22,7 @@ func TestReadMetaBasic(t *testing.T) {
 		t.Fatal(err)
 	}
 	e := &Entry{}
-	if err := readMeta(p, fi, Options{}, e); err != nil {
+	if err := readMeta(p, nil, fi, Options{}, e); err != nil {
 		t.Fatal(err)
 	}
 	if e.UID != os.Getuid() || e.GID != os.Getgid() {
@@ -42,7 +42,7 @@ func TestReadMetaNumericOwner(t *testing.T) {
 	os.WriteFile(p, []byte("x"), 0o644)
 	fi, _ := os.Lstat(p)
 	e := &Entry{}
-	if err := readMeta(p, fi, Options{NumericOwner: true}, e); err != nil {
+	if err := readMeta(p, nil, fi, Options{NumericOwner: true}, e); err != nil {
 		t.Fatal(err)
 	}
 	if e.Uname != "" || e.Gname != "" {
@@ -70,7 +70,7 @@ func TestReadMetaTimesEpochAndFuture(t *testing.T) {
 				t.Skipf("filesystem cannot represent %v (got %v)", tt.t, fi.ModTime())
 			}
 			e := &Entry{}
-			if err := readMeta(p, fi, Options{}, e); err != nil {
+			if err := readMeta(p, nil, fi, Options{}, e); err != nil {
 				t.Fatal(err)
 			}
 			if e.ModTime.UnixNano() != tt.t.UnixNano() {
@@ -106,7 +106,7 @@ func TestReadXattrsVariants(t *testing.T) {
 	}
 	fi, _ := os.Lstat(p)
 	e := &Entry{}
-	if err := readMeta(p, fi, Options{PreserveXattrs: true}, e); err != nil {
+	if err := readMeta(p, nil, fi, Options{PreserveXattrs: true}, e); err != nil {
 		t.Fatal(err)
 	}
 	if len(e.Xattrs) != 3 {
@@ -174,7 +174,7 @@ func TestReadXattrsSymlinkDoesNotInherit(t *testing.T) {
 	}
 	fi, _ := os.Lstat(link)
 	e := &Entry{}
-	if err := readMeta(link, fi, Options{PreserveXattrs: true}, e); err != nil {
+	if err := readMeta(link, nil, fi, Options{PreserveXattrs: true}, e); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := e.Xattrs["user.mark"]; ok {
@@ -184,7 +184,7 @@ func TestReadXattrsSymlinkDoesNotInherit(t *testing.T) {
 
 func TestReadOneXattrMissingName(t *testing.T) {
 	dir := t.TempDir()
-	_, err := readOneXattr(filepath.Join(dir, "nonexistent-file"), "user.absent")
+	_, err := readOneXattr(xattrSource{path: filepath.Join(dir, "nonexistent-file"), fd: -1}, "user.absent")
 	if err == nil {
 		t.Fatal("Lgetxattr on missing file must error")
 	}
@@ -192,7 +192,7 @@ func TestReadOneXattrMissingName(t *testing.T) {
 	if err := os.WriteFile(f, []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	val, err := readOneXattr(f, "user.absent")
+	val, err := readOneXattr(xattrSource{path: f, fd: -1}, "user.absent")
 	if err != nil {
 		t.Fatalf("ENODATA must return nil, nil: %v", err)
 	}
@@ -201,7 +201,7 @@ func TestReadOneXattrMissingName(t *testing.T) {
 	}
 	e := &Entry{}
 	fake := fakeFileInfo{}
-	if err := readMeta(dir, fake, Options{}, e); err == nil {
+	if err := readMeta(dir, nil, fake, Options{}, e); err == nil {
 		t.Fatal("readMeta with non-Stat_t fi must error")
 	}
 }

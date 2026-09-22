@@ -314,14 +314,16 @@ func cmdExtract(ctx context.Context, args []string) error {
 	// output of `docker run … extract` sees the same line, and can grep for
 	// the same string, as whoever reads `backimage restore`.
 	//
+	// Printed once, with the rest of the report on stdout. It used to be
+	// logged to stderr as well, and `docker run` — which merges both streams
+	// on a terminal and in `docker logs` — showed every verdict twice, so a
+	// script counting verdicts in a log counted two restores.
+	//
 	// The extraction always authenticates every chunk it consumes: unlike the
 	// host CLI, this command has no --no-verify.
-	closing := stats.ClosingVerdict(true)
-	fmt.Fprintln(stdout, closing)
-	progress.WriteLine(stderr, "restore: "+closing)
+	fmt.Fprintln(stdout, stats.ClosingVerdict(true))
 	if *keepGoing {
 		for _, line := range partial.Summary() {
-			progress.WriteLine(stderr, "restore: "+line)
 			fmt.Fprintln(stdout, line)
 		}
 		if partial.Skipped > 0 {

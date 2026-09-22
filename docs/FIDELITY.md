@@ -162,6 +162,53 @@ without `mknodat`/`mkfifoat` (macOS, and partly the BSDs) the final component
 of a device or fifo is created by pathname; its directory was still resolved
 through the root.
 
+## Confinement of the backup walk
+
+The backup reads a tree that other users may be writing to while it runs —
+the typical case is root archiving `/home`. A walk that resolves every entry
+by its pathname reads whatever that pathname names *at the moment of the
+read*, and a user who owns a directory in the tree decides that: rename the
+directory away after the walk has listed it, put a symlink to `/etc` in its
+place, and the names already queued (`shadow`, created in advance as decoys)
+resolve to `/etc/shadow`, archived under the user's own path and returned to
+them by the next restore. The same user could swap one of their files for a
+FIFO and stall the backup forever on `open`.
+
+The walk therefore never resolves a path twice:
+
+- every directory is opened once and every child is looked up in *that*
+  handle (`os.Root`, i.e. `openat`/`fstatat` relative to the listed
+  directory); a directory swapped after it was listed does not change what
+  its handle names;
+- every open is `O_NOFOLLOW | O_NONBLOCK`, so a FIFO or device put in place
+  of a regular file opens without blocking and without waiting for a writer;
+- every descriptor is compared with the `lstat` that classified the entry —
+  same type, same device, same inode — before a byte or an attribute is read
+  from it. `os.Root` follows a symlink that stays inside the root, so this
+  check, not the open flags, is what refuses an in-tree swap;
+- an entry that fails the check is *replaced while archiving*: an error in
+  strict mode, a regular file archived without content in degraded mode
+  (counted in `ContentSkipped`, listed in `Errors`), exactly like a file that
+  cannot be opened;
+- extended attributes and ACLs of regular files and directories are read from
+  the checked descriptor (`flistxattr`/`fgetxattr`), so they belong to the
+  same object as the content.
+
+The preflight scan and the estimate walk over the same sources use the same
+primitives, and the estimate honours `--exclude` and `--one-file-system`
+exactly as the archive does: it no longer walks into a mount point the archive
+stops at.
+
+What is still read by pathname: the extended attributes of symlinks, devices
+and FIFOs, which cannot be opened without either following the link or acting
+on the device. Their type, owner, mode and times come from the handle-relative
+lstat, but `llistxattr`/`lgetxattr` resolve the full path again, so a
+concurrent swap of an ancestor directory can make those attributes — and only
+those, never file content — come from another object.
+
+On Windows the walk uses the same handles, but `os.FileInfo` exposes no file
+identity, so only the type of the entry is compared.
+
 ## Names the archive can hold and the filesystem cannot
 
 A tar path is slash-separated, so on Unix a backslash is an ordinary character
@@ -219,12 +266,20 @@ for.
   hole-aware writing is out of scope.
 - Directories created on the fly for manipulated archives get `0700` and are
   re-fixed by the final pass.
-- A backup **never writes to the source tree**. The walk uses `lstat`,
-  `readdir`, `readlink`, `open(O_RDONLY)`, `llistxattr` and `lgetxattr`, and
-  nothing else; every byte the run produces goes to `--temp-dir` (default
-  `$TMPDIR`), to the checkpoint store under `$XDG_CACHE_HOME`, or to
-  `--output-path`. The only observable change to the source is the `atime` the
-  kernel updates on read, exactly as `cp`, `tar` or `sha256sum` would.
+- A backup **never writes to the source tree**. The walk uses `fstatat`,
+  `openat(O_RDONLY|O_NOFOLLOW|O_NONBLOCK|O_NOATIME)`, `getdents`, `fstat`,
+  `readlinkat`, `flistxattr`/`fgetxattr` and, for symlinks, devices and FIFOs,
+  `llistxattr`/`lgetxattr` — nothing else; every byte the run produces goes to
+  `--temp-dir` (default `$TMPDIR`), to the checkpoint store under
+  `$XDG_CACHE_HOME`, or to `--output-path`. On Linux files and directories are
+  read with `O_NOATIME`, so their access times do not move either. The kernel
+  grants `O_NOATIME` only to the file's owner or to a process holding
+  `CAP_FOWNER` (root has it): for a file the backup neither owns nor is
+  privileged over it falls back to a plain read, and the kernel updates the
+  `atime` as `cp`, `tar` or `sha256sum` would. `readlink` always updates the
+  `atime` of the symlink itself; no flag avoids it. FIFOs and devices are
+  never opened. `pkg/archive` `TestBackupLeavesSourceAccessTimesAlone` locks
+  the access times of the preflight, estimate and archive walks.
   `test/e2e/phase_A8.sh` locks this by comparing a full metadata snapshot —
   `ctime` included, the field any metadata write would move — taken before and
   after a real backup.

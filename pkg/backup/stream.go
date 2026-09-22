@@ -54,14 +54,7 @@ func (b *builder) runStream(ctx context.Context, est Estimate, res Result) (Resu
 		// buffer is double: the walk fills one frame while the previous one is
 		// on the wire, instead of stopping for every send.
 		buffered := backremote.NewFrameBuffer(w, backremote.StreamFrameSize)
-		writer := archive.NewWriter(buffered, archive.Options{
-			Strict:         !cfg.AllowDegraded,
-			OneFileSystem:  cfg.OneFileSystem,
-			Excludes:       cfg.Exclude,
-			NumericOwner:   cfg.NumericOwner,
-			PreserveACLs:   true,
-			PreserveXattrs: true,
-		})
+		writer := archive.NewWriter(buffered, archiveOptions(cfg))
 		for _, root := range cfg.RootPaths {
 			if err := writer.AddRoot(sourceCtx, root); err != nil {
 				return err

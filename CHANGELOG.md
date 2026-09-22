@@ -5,6 +5,60 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Release di sicurezza sulla lettura della sorgente. Il formato non cambia: questa
+versione legge tutto ciò che le precedenti hanno scritto, e la 0.6.0 legge tutto
+ciò che questa scrive.
+
+**Cosa cambia per chi automatizza.** Con `--exclude` o `--one-file-system` la
+stima iniziale non conta più ciò che l'archivio non contiene, quindi il piano
+di layer può differire da quello della 0.6.0 a parità di sorgente: il primo
+backup `--dedup` dopo l'aggiornamento può ricaricare alcuni blob. Il verdetto
+finale del self-extract (`ESITO: …`) e il riepilogo di `--keep-going` escono
+ora solo su stdout.
+
+### Security
+
+- **Il backup poteva leggere file fuori dalla root.** Il walk risolveva ogni
+  entry per pathname, in un momento successivo a quello in cui l'aveva
+  elencata. Un utente proprietario di una directory dell'albero poteva
+  rinominarla dopo la lettura e sostituirla con un symlink verso una directory
+  riservata: i nomi già accodati venivano letti dal bersaglio, e un backup
+  eseguito da root su `/home` archiviava `/etc/shadow` sotto il path
+  dell'utente, che lo riceveva con il restore. Lo stesso valeva per un file
+  sostituito da un symlink fra `lstat` e `open`, perché `os.Open` segue i
+  symlink. Ora ogni figlio è risolto nell'handle della directory che lo ha
+  elencato, ogni apertura è `O_NOFOLLOW`, e ogni descrittore è confrontato con
+  l'`lstat` dell'entry (tipo, device, inode) prima di leggerne un byte: una
+  entry sostituita è un errore in modalità strict e un file senza contenuto
+  (`ContentSkipped`) con `--allow-degraded`. Vale per il backup locale e per
+  il client remoto v2, che usano lo stesso archiver.
+- **Un file sostituito da una FIFO bloccava il backup per sempre**: `open`
+  aspettava uno scrittore che non arrivava. Le aperture sono ora
+  `O_NONBLOCK`, e la FIFO viene rifiutata dal controllo d'identità.
+
+### Fixed
+
+- **La lettura aggiornava l'access time della sorgente.** Su Linux file e
+  directory sono ora letti con `O_NOATIME` quando il kernel lo concede
+  (proprietario del file o `CAP_FOWNER`, quindi sempre per root); gli attributi
+  estesi di file e directory sono letti dallo stesso descrittore del
+  contenuto. Una entry esclusa con `--exclude` non viene più aperta né letta.
+- **Il preflight apriva i file come il vecchio walk**: stessa corsa verso i
+  symlink, stesso blocco sulle FIFO, stesso aggiornamento dell'atime. Usa ora
+  le stesse primitive dell'archiver. Una directory che non si può elencare è
+  riportata come illeggibile, con il rimedio, invece di far fallire il
+  preflight con un `permission denied` grezzo.
+- **La stima ignorava `--exclude` e `--one-file-system`**: contava file che
+  l'archivio non avrebbe contenuto e attraversava mount point (`/proc`, un
+  mount NFS irraggiungibile) dove l'archivio si ferma, dimensionando layer e
+  controllo dello spazio temporaneo su dati mai scritti. Ora percorre
+  esattamente ciò che l'archiver percorre (`archive.Estimate`).
+- **Il self-extract stampava il verdetto finale due volte**, su stdout e su
+  stderr: `docker run` e `docker logs` uniscono i due flussi, e uno script che
+  contava i verdetti ne contava due per restore.
+
 ## [0.6.0] - 2026-09-15
 
 Release di correzioni. Nasce da una verifica delle due invarianti su cui si

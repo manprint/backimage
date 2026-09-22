@@ -8,7 +8,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"testing"
+	"time"
 )
 
 func TestParseProcCapEff(t *testing.T) {
@@ -67,6 +69,81 @@ func TestPreflightBackupUnreadableFile(t *testing.T) {
 	}
 	if !readAll.Available && readAll.Remedy == "" {
 		t.Fatal("Remedy must never be empty when Available is false")
+	}
+}
+
+// TestCountUnreadableReportsAnUnlistableDirectory: a directory nobody can
+// list hides its whole content from the backup. The scan used to abort the
+// preflight on it with a bare "permission denied"; it is an unreadable entry
+// like any other, reported with an example so the remedy is shown.
+func TestCountUnreadableReportsAnUnlistableDirectory(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root lists a 0000 directory regardless of its mode")
+	}
+	root := t.TempDir()
+	locked := filepath.Join(root, "locked")
+	if err := os.Mkdir(locked, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(locked, "inside"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(locked, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+	if err := os.WriteFile(filepath.Join(root, "readable"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	n, example, err := countUnreadable(context.Background(), []string{root}, preflightSampleMax)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 || example != locked {
+		t.Fatalf("countUnreadable = %d, %q; want 1, %q", n, example, locked)
+	}
+}
+
+// TestCountUnreadableNeverOpensAFifo: the scan opens regular files only, and
+// never blocks. A FIFO with no writer would hold an open(O_RDONLY) forever.
+func TestCountUnreadableNeverOpensAFifo(t *testing.T) {
+	root := t.TempDir()
+	if err := syscall.Mkfifo(filepath.Join(root, "pipe"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := countUnreadable(context.Background(), []string{root}, preflightSampleMax)
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("preflight scan blocked on a FIFO")
+	}
+}
+
+// TestCountUnreadableStopsAtTheSample: at most max regular files are opened.
+func TestCountUnreadableStopsAtTheSample(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root reads a 0000 file regardless of its mode")
+	}
+	root := t.TempDir()
+	for _, name := range []string{"a", "b", "c"} {
+		p := filepath.Join(root, name)
+		if err := os.WriteFile(p, []byte("x"), 0); err != nil {
+			t.Fatal(err)
+		}
+	}
+	n, example, err := countUnreadable(context.Background(), []string{root, root}, 2)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 || example != filepath.Join(root, "a") {
+		t.Fatalf("countUnreadable = %d, %q; want 2 files inspected, first example a", n, example)
 	}
 }
 

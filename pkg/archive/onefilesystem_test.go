@@ -150,3 +150,84 @@ func TestOneFileSystemLeavesOutANonDirectoryOnAnotherDevice(t *testing.T) {
 		t.Errorf("Skipped = %d, want 1", stats.Skipped)
 	}
 }
+
+// TestEstimateStopsWhereTheArchiveStops: the estimate walks what the archive
+// walks. With --one-file-system nothing past a mount point is counted — the
+// estimate used to walk straight into it — and without it everything is.
+func TestEstimateStopsWhereTheArchiveStops(t *testing.T) {
+	mountBoundary(t)
+	root := oneFileSystemTree(t)
+	for _, onefs := range []bool{true, false} {
+		opts := Options{Strict: true, OneFileSystem: onefs}
+		got, err := Estimate(context.Background(), []string{root}, opts)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var files int64
+		var buf bytes.Buffer
+		w := NewWriter(&buf, opts)
+		if err := w.AddRoot(context.Background(), root); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := w.Close(); err != nil {
+			t.Fatal(err)
+		}
+		var bytesRaw int64
+		for _, e := range w.Entries() {
+			if e.Type == TypeRegular {
+				files++
+				bytesRaw += e.Size
+			}
+		}
+		if got.Files != files || got.Bytes != bytesRaw {
+			t.Fatalf("onefs=%v: estimate %+v, archive holds %d files / %d bytes", onefs, got, files, bytesRaw)
+		}
+	}
+}
+
+// TestALaterRootOnAnotherDeviceIsLeftOut: the first root names the file
+// system. A later root on another one is neither archived nor estimated, and
+// the skip is counted once.
+func TestALaterRootOnAnotherDeviceIsLeftOut(t *testing.T) {
+	mountBoundary(t)
+	first := oneFileSystemTree(t)
+	other := filepath.Join(t.TempDir(), mountMarker+"other")
+	if err := os.MkdirAll(other, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(other, mountMarker+"file"), []byte("altro device"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	opts := Options{Strict: true, OneFileSystem: true}
+	var buf bytes.Buffer
+	w := NewWriter(&buf, opts)
+	for _, root := range []string{first, other} {
+		if err := w.AddRoot(context.Background(), root); err != nil {
+			t.Fatal(err)
+		}
+	}
+	stats, err := w.Close()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range entryPaths(w.Entries()) {
+		if strings.HasPrefix(p, mountMarker+"other") {
+			t.Fatalf("%s archived from a root on another device", p)
+		}
+	}
+	// One boundary inside the first tree, one for the whole second root.
+	if stats.Skipped != 2 {
+		t.Fatalf("Skipped = %d, want 2", stats.Skipped)
+	}
+	est, err := Estimate(context.Background(), []string{first, other}, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstOnly, err := Estimate(context.Background(), []string{first}, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if est != firstOnly {
+		t.Fatalf("estimate counted the root on another device: %+v, want %+v", est, firstOnly)
+	}
+}

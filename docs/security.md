@@ -424,6 +424,30 @@ $ backimage restore ghcr.io/me/dumps:daily --expect-digest sha256:9f2c… \
     -x -C ./out --passphrase-file ./pass
 ```
 
+## Lettura della sorgente: nessun path risolto due volte
+
+Un backup eseguito da root su un albero scrivibile da altri utenti (`/home`,
+una directory condivisa) legge file che quegli utenti possono sostituire
+mentre il backup gira. Fino alla 0.6.0 il walk risolveva ogni entry per
+pathname, e questo apriva due attacchi a un utente senza privilegi:
+
+- **lettura fuori dalla root.** Dopo che il walk aveva letto una sua
+  directory, l'utente la rinominava e metteva al suo posto un symlink verso
+  `/etc`: i nomi già accodati (creati prima come esche, per esempio `shadow`)
+  venivano risolti attraverso il symlink, e `/etc/shadow` finiva nel backup
+  sotto il path dell'utente, che lo riceveva al restore successivo. Lo stesso
+  valeva per un singolo file sostituito da un symlink fra `lstat` e `open`;
+- **blocco del backup.** Un file sostituito da una FIFO bloccava `open` per
+  sempre, in attesa di uno scrittore.
+
+Dalla 0.6.1 ogni figlio è risolto nell'handle della
+directory che lo ha elencato, ogni apertura è `O_NOFOLLOW|O_NONBLOCK`, e ogni
+descrittore è confrontato con l'`lstat` che ha classificato l'entry (tipo,
+device, inode) prima di leggerne un byte. I dettagli, e il rischio residuo sugli
+attributi estesi di symlink, device e FIFO, sono in
+[`FIDELITY.md`](FIDELITY.md#confinement-of-the-backup-walk). Test di
+riferimento: `pkg/archive/swap_test.go`.
+
 ## Trattamento dei segreti nel runtime
 
 - `KeyMaterial` zera (wipe) DEK e KeyNonce in `Wipe()` (chiamato da

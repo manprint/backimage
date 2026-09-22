@@ -12,7 +12,6 @@ import (
 	"io"
 	"os"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -110,20 +109,29 @@ func (w *tarWriter) AddRoot(ctx context.Context, root string) error {
 			return nil
 		}
 	}
+	src := source{name: base, path: root}
 	if st.IsDir() {
-		// Strict mode: fail before emitting anything if the root cannot be
-		// read at all, so an unreadable tree never produces a partial tar.
-		if w.opts.Strict {
-			if _, err := os.ReadDir(root); err != nil {
+		l, err := src.list(st)
+		if err != nil {
+			// Strict mode: fail before emitting anything if the root cannot
+			// be read at all, so an unreadable tree never produces a partial
+			// tar.
+			if w.opts.Strict {
 				return w.handleWalkError(fmt.Errorf("readdir root %q: %w", root, err), root)
 			}
+			if err := w.emitOne(ctx, base, src, st, nil); err != nil {
+				return err
+			}
+			return w.handleWalkError(fmt.Errorf("readdir %q: %w", root, err), root)
 		}
-		if err := w.emitOne(ctx, base, root, st); err != nil {
+		defer l.close()
+		if err := w.emitOne(ctx, base, src, st, l.file); err != nil {
 			return err
 		}
-		return w.walkDir(ctx, base, root)
+		l.releaseFile()
+		return w.walkChildren(ctx, base, root, root, l)
 	}
-	return w.emitOne(ctx, base, root, st)
+	return w.emitOne(ctx, base, src, st, nil)
 }
 
 // RootCollisionError reports two roots with the same basename.
@@ -141,107 +149,106 @@ func (e *RootCollisionError) Error() string {
 	return fmt.Sprintf("roots %q and %q share the basename %q", e.A, e.B, e.Base)
 }
 
-func (w *tarWriter) walkDir(ctx context.Context, arcRoot, fsRoot string) error {
-	type item struct{ rel, full string }
-	entries, err := os.ReadDir(fsRoot)
-	if err != nil {
-		return w.handleWalkError(fmt.Errorf("readdir %q: %w", fsRoot, err), fsRoot)
-	}
-	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() < entries[j].Name() })
-	stack := make([]item, 0, len(entries))
-	// Pushed in reverse so the pop order below is alphabetical, exactly like
-	// the per-directory push further down. Pushing them in order instead made
-	// the root's own children come out reverse-alphabetically while every
-	// deeper directory came out alphabetically: deterministic either way, but
-	// two different orders in one archive.
-	for i := len(entries) - 1; i >= 0; i-- {
-		name := entries[i].Name()
-		stack = append(stack, item{arcRoot + "/" + name, filepath.Join(fsRoot, name)})
-	}
-	for len(stack) > 0 {
+// walkChildren archives the entries of the directory l, in name order, each
+// subtree complete before the next sibling: the order is deterministic and a
+// directory always precedes its content. fsRoot is the root being archived,
+// dirPath the filesystem path of l.
+//
+// The walk holds one open directory per level of depth and resolves every
+// child against its parent's handle, never by path (see source).
+func (w *tarWriter) walkChildren(ctx context.Context, arcDir, fsRoot, dirPath string, l *listing) error {
+	for _, name := range l.names {
 		if err := ctx.Err(); err != nil {
 			return fmt.Errorf("archiving %q: %w", fsRoot, err)
 		}
-		it := stack[len(stack)-1]
-		stack = stack[:len(stack)-1]
-		rel := it.rel
-		st, err := os.Lstat(it.full)
-		if err != nil {
-			if err := w.handleWalkError(fmt.Errorf("lstat %q: %w", it.full, err), it.full); err != nil {
-				return err
-			}
-			continue
-		}
-		if w.opts.OneFileSystem && w.devSet {
-			if dev, ok := deviceOf(st); ok && dev != w.devSeen {
-				// Another device means a mount point. The directory itself is
-				// archived and nothing below it is visited — the same as
-				// `tar --one-file-system` and `rsync -x`. Dropping the
-				// directory too, which is what happened before, restored a
-				// tree with nowhere to mount anything back: a /srv/data with
-				// no /srv/data/db to remount into.
-				//
-				// Anything else on another device — a bind-mounted file — is
-				// left out entirely; there is no shape to preserve.
-				//
-				// One Skipped per boundary. The entries below it are never
-				// enumerated, which is the point of the option, so their
-				// number is not knowable without doing the walk it exists to
-				// avoid.
-				if st.IsDir() {
-					if err := w.emitOne(ctx, rel, it.full, st); err != nil {
-						return err
-					}
-				}
-				w.stats.Skipped++
-				continue
-			}
-		}
-		if st.IsDir() {
-			sub, err := os.ReadDir(it.full)
-			if err != nil {
-				if errors.Is(err, os.ErrPermission) {
-					// Unreadable directory (e.g. 0500): archive the dir itself
-					// and skip its contents; not an abort-worthy error.
-					if err2 := w.emitOne(ctx, rel, it.full, st); err2 != nil {
-						return err2
-					}
-					w.stats.Skipped++
-					continue
-				}
-				if err2 := w.handleWalkError(fmt.Errorf("readdir %q: %w", it.full, err), it.full); err2 != nil {
-					return err2
-				}
-				continue
-			}
-			// Emit the dir first, then children (deterministic order: dir before content).
-			if err := w.emitOne(ctx, rel, it.full, st); err != nil {
-				return err
-			}
-			names := make([]string, 0, len(sub))
-			for _, de := range sub {
-				names = append(names, de.Name())
-			}
-			sort.Strings(names)
-			for i := len(names) - 1; i >= 0; i-- {
-				stack = append(stack, item{rel + "/" + names[i], filepath.Join(it.full, names[i])})
-			}
-			continue
-		}
-		if err := w.emitOne(ctx, rel, it.full, st); err != nil {
+		src := source{dir: l.dir, name: name, path: filepath.Join(dirPath, name)}
+		if err := w.walkEntry(ctx, arcDir+"/"+name, fsRoot, src); err != nil {
 			return err
 		}
 	}
 	return nil
 }
 
-func (w *tarWriter) emitOne(ctx context.Context, arcPath, fsPath string, st os.FileInfo) error {
+func (w *tarWriter) walkEntry(ctx context.Context, rel, fsRoot string, src source) error {
+	st, err := src.lstat()
+	if err != nil {
+		return w.handleWalkError(fmt.Errorf("lstat %q: %w", src.path, err), src.path)
+	}
+	if w.opts.OneFileSystem && w.devSet {
+		if dev, ok := deviceOf(st); ok && dev != w.devSeen {
+			// Another device means a mount point. The directory itself is
+			// archived and nothing below it is visited — the same as
+			// `tar --one-file-system` and `rsync -x`. Dropping the
+			// directory too, which is what happened before, restored a
+			// tree with nowhere to mount anything back: a /srv/data with
+			// no /srv/data/db to remount into.
+			//
+			// Anything else on another device — a bind-mounted file — is
+			// left out entirely; there is no shape to preserve.
+			//
+			// One Skipped per boundary. The entries below it are never
+			// enumerated, which is the point of the option, so their
+			// number is not knowable without doing the walk it exists to
+			// avoid.
+			if st.IsDir() {
+				// The mount point's own attributes are read through a
+				// checked descriptor when one can be had; its content is
+				// never listed.
+				dirFile, err := src.openVerified(st)
+				if err != nil {
+					dirFile = nil
+				} else {
+					defer dirFile.Close()
+				}
+				if err := w.emitOne(ctx, rel, src, st, dirFile); err != nil {
+					return err
+				}
+			}
+			w.stats.Skipped++
+			return nil
+		}
+	}
+	if !st.IsDir() {
+		return w.emitOne(ctx, rel, src, st, nil)
+	}
+	l, err := src.list(st)
+	if err != nil {
+		if errors.Is(err, os.ErrPermission) {
+			// Unreadable directory (e.g. 0500): archive the dir itself
+			// and skip its contents; not an abort-worthy error.
+			if err2 := w.emitOne(ctx, rel, src, st, nil); err2 != nil {
+				return err2
+			}
+			w.stats.Skipped++
+			return nil
+		}
+		return w.handleWalkError(fmt.Errorf("readdir %q: %w", src.path, err), src.path)
+	}
+	defer l.close()
+	// Emit the dir first, then children (deterministic order: dir before content).
+	if err := w.emitOne(ctx, rel, src, st, l.file); err != nil {
+		return err
+	}
+	l.releaseFile()
+	return w.walkChildren(ctx, rel, fsRoot, src.path, l)
+}
+
+// emitOne archives the entry src, which st describes. dirFile is the checked
+// descriptor of a directory entry, or nil.
+func (w *tarWriter) emitOne(ctx context.Context, arcPath string, src source, st os.FileInfo, dirFile *os.File) error {
+	fsPath := src.path
+	// Excluded entries are not opened or read at all: an exclude is also how
+	// a user keeps the backup away from a file it must not touch.
+	if w.excluded(arcPath) {
+		w.stats.Skipped++
+		return nil
+	}
 	e := &Entry{Path: arcPath}
 	mode := st.Mode()
 	switch {
 	case mode&os.ModeSymlink != 0:
 		e.Type = TypeSymlink
-		tgt, err := os.Readlink(fsPath)
+		tgt, err := src.readlink()
 		if err != nil {
 			return w.handleWalkError(fmt.Errorf("readlink %q: %w", fsPath, err), fsPath)
 		}
@@ -273,7 +280,22 @@ func (w *tarWriter) emitOne(ctx context.Context, arcPath, fsPath string, st os.F
 	if mode&os.ModeSticky != 0 {
 		e.Mode |= os.ModeSticky
 	}
-	if err := readMeta(fsPath, st, w.opts, e); err != nil {
+	// A regular file is opened, and checked to be the file st describes,
+	// before anything else is read from it: its attributes then come from
+	// the same descriptor as its content.
+	var f *os.File
+	var openErr error
+	if e.Type == TypeRegular {
+		f, openErr = src.openVerified(st)
+		if openErr == nil {
+			defer f.Close()
+		}
+	}
+	metaFile := f
+	if e.Type == TypeDir {
+		metaFile = dirFile
+	}
+	if err := readMeta(fsPath, metaFile, st, w.opts, e); err != nil {
 		var lost *xattrLossError
 		if !errors.As(err, &lost) || w.opts.Strict {
 			return w.handleWalkError(fmt.Errorf("metadata %q: %w", fsPath, err), fsPath)
@@ -284,15 +306,16 @@ func (w *tarWriter) emitOne(ctx context.Context, arcPath, fsPath string, st os.F
 		w.stats.Errors = append(w.stats.Errors, err)
 		w.warnOnce("attributi estesi non leggibili su alcune entry: sono stati esclusi dall'archivio")
 	}
-	if w.excluded(e.Path) {
-		w.stats.Skipped++
-		return nil
-	}
-	return w.writeEntry(ctx, e, fsPath, st)
+	return w.writeEntry(ctx, e, fsPath, st, f, openErr)
 }
 
-func (w *tarWriter) excluded(arcPath string) bool {
-	for _, pat := range w.opts.Excludes {
+func (w *tarWriter) excluded(arcPath string) bool { return excludedBy(w.opts.Excludes, arcPath) }
+
+// excludedBy reports whether an archive path matches one of the exclude
+// patterns. The estimate walk uses it too, so both walks agree on what the
+// backup contains.
+func excludedBy(patterns []string, arcPath string) bool {
+	for _, pat := range patterns {
 		// pathglob, not filepath.Match: the latter treats "**" as a
 		// single-segment wildcard, so "alice/.cache/**" used to leave
 		// alice/.cache/chromium/Default/Cookies in the archive.
@@ -316,7 +339,9 @@ func (w *tarWriter) handleWalkError(err error, _ string) error {
 	return nil
 }
 
-func (w *tarWriter) writeEntry(ctx context.Context, e *Entry, fsPath string, st os.FileInfo) error {
+// writeEntry emits the header of e and, for a regular file, its content from
+// f. openErr is why a regular file has no f.
+func (w *tarWriter) writeEntry(ctx context.Context, e *Entry, fsPath string, st os.FileInfo, f *os.File, openErr error) error {
 	hdr := &tar.Header{
 		Name:       e.Path,
 		Mode:       int64(e.Mode.Perm()),
@@ -394,26 +419,23 @@ func (w *tarWriter) writeEntry(ctx context.Context, e *Entry, fsPath string, st 
 	// Strict mode: open regular files BEFORE emitting the header, so an
 	// unreadable file produces an error before any part of its entry lands
 	// in the tar (no partial archive with dangling headers).
-	var f *os.File
-	if e.Type == TypeRegular {
-		var err error
-		f, err = os.Open(fsPath)
-		if err != nil {
-			if w.opts.Strict {
-				return w.handleWalkError(fmt.Errorf("open %q: %w", fsPath, err), fsPath)
-			}
-			// Degraded mode: skip the payload, keep the metadata entry as an
-			// empty regular file (a header without matching size would be a
-			// corrupt tar). Content mismatch is reported to the caller.
-			w.stats.Errors = append(w.stats.Errors, fmt.Errorf("open %q: %w", fsPath, err))
-			w.stats.ContentSkipped++
-			w.warnOnce("contenuto di alcuni file non leggibile: archiviati come file vuoti, " +
-				"con nome, permessi, owner e timestamp conservati (--allow-degraded)")
-			e.Size = 0
-			hdr.Size = 0
-		} else {
-			defer f.Close()
+	if e.Type == TypeRegular && f == nil {
+		err := openErr
+		if err == nil {
+			err = errors.New("no descriptor")
 		}
+		if w.opts.Strict {
+			return w.handleWalkError(fmt.Errorf("open %q: %w", fsPath, err), fsPath)
+		}
+		// Degraded mode: skip the payload, keep the metadata entry as an
+		// empty regular file (a header without matching size would be a
+		// corrupt tar). Content mismatch is reported to the caller.
+		w.stats.Errors = append(w.stats.Errors, fmt.Errorf("open %q: %w", fsPath, err))
+		w.stats.ContentSkipped++
+		w.warnOnce("contenuto di alcuni file non leggibile: archiviati come file vuoti, " +
+			"con nome, permessi, owner e timestamp conservati (--allow-degraded)")
+		e.Size = 0
+		hdr.Size = 0
 	}
 	// archive/tar may defer the padding of the previous regular file until
 	// WriteHeader. Record the logical start of the next header, not the number

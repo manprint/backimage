@@ -236,6 +236,27 @@ Chown cancella setuid/setgid e capability, quindi non riordinare questi passi.
 Atime è opzionale e ctime non è ripristinabile; sono le sole rilassazioni
 previste dai test di fedeltà.
 
+### Lettura della sorgente
+
+Il backup non modifica la sorgente e non legge nulla fuori dalle root, anche
+se altri utenti la stanno modificando mentre gira. Per questo i walk su di
+essa (archiver, preflight, `archive.Estimate`) passano da `pkg/archive/source.go`:
+
+- ogni figlio è risolto nell'handle `os.Root` della directory che lo ha
+  elencato, mai ricostruendo e riaprendo un pathname;
+- ogni apertura è `O_NOFOLLOW|O_NONBLOCK` (più `O_NOATIME` su Linux, con
+  fallback su `EPERM`), e il descrittore va confrontato con l'`lstat`
+  dell'entry (`verifySource`) prima di leggerne byte o attributi: `os.Root`
+  segue i symlink interni alla root, quindi il controllo non è opzionale;
+- FIFO e device non vengono mai aperti; le entry escluse non vengono lette;
+- stima e archivio usano le stesse opzioni (`archiveOptions` in
+  `pkg/backup`): non devono mai divergere su cosa contiene il backup.
+
+Non reintrodurre `os.Open`, `os.ReadDir` o `filepath.Walk` sulla sorgente.
+Test di riferimento: `pkg/archive/swap_test.go`,
+`pkg/archive/noatime_linux_test.go` e la sezione A8.1b di
+`test/e2e/phase_A8.sh`.
+
 ### Credenziali registry e account multipli
 
 - Lo store è `BACKIMAGE_AUTH_FILE`, poi XDG, poi

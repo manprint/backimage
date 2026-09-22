@@ -112,6 +112,31 @@ fi
 [ "$(wc -l <"$work/after.txt")" = "$before_count" ] || { echo "FAIL: il backup ha creato oggetti nella sorgente"; exit 1; }
 echo "A8.1 sorgente invariata dopo il backup ($before_count path, ctime compreso): OK"
 
+# The access times too. A separate tree, because the snapshot above reads every
+# file to hash it and so moves the atimes itself. The atimes are set older than
+# the mtimes, which is when relatime — the default mount option — updates them
+# on a read without O_NOATIME. Symlinks are left out: readlink updates the
+# link's own atime and no flag avoids it (docs/FIDELITY.md).
+atree="$work/atime-tree"
+mkdir -p "$atree/sub"
+printf 'letto dal backup\n' >"$atree/sub/file.txt"
+head -c 70000 /dev/urandom >"$atree/big.bin"
+touch -m -d '2020-01-01 00:00:00' "$atree/sub/file.txt" "$atree/big.bin" "$atree/sub" "$atree"
+touch -a -d '2001-01-01 00:00:00' "$atree/sub/file.txt" "$atree/big.bin" "$atree/sub" "$atree"
+# An explicit list, not find: listing a directory is a read that moves its
+# atime, so find would update the directory atimes before measuring them.
+atimes() { stat -c '%n|%.9X' -- "$atree" "$atree/sub" "$atree/sub/file.txt" "$atree/big.bin"; }
+atimes >"$work/atime-before.txt"
+bin/backimage backup "$atree" --repo example.com/e2e/a8 --tag atime \
+	--passphrase-file "$work/pass.txt" --output oci-layout --output-path "$work/atime-layout" \
+	--runnable=false --temp-dir "$work/tmp" --allow-degraded >"$work/backup.log" 2>&1
+atimes >"$work/atime-after.txt"
+if ! diff -u "$work/atime-before.txt" "$work/atime-after.txt"; then
+	echo "FAIL: il backup ha aggiornato l'atime della sorgente"
+	exit 1
+fi
+echo "A8.1b atime della sorgente invariati dopo il backup: OK"
+
 # ---------------------------------------------------------------------------
 # 2. emission order: alphabetical inside every directory, root included
 # ---------------------------------------------------------------------------

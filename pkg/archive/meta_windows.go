@@ -8,7 +8,7 @@ import "os"
 // to preserve them has nothing to fail on: the writer reports the gap once,
 // from xattrsSupported, and every entry keeps the metadata the platform does
 // have. Returning an error here dropped every entry of a Windows backup.
-func readMeta(_ string, fi os.FileInfo, _ Options, e *Entry) error {
+func readMeta(_ string, _ *os.File, fi os.FileInfo, _ Options, e *Entry) error {
 	e.ModTime = fi.ModTime()
 	return nil
 }

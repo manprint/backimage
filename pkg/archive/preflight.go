@@ -145,42 +145,78 @@ func PreflightRestore(ctx context.Context, dest string) ([]Capability, error) {
 	return PreflightBackup(ctx, []string{dest})
 }
 
-// countUnreadable inspects at most max entries (Lstat + Open attempt) and
-// reports how many cannot be read, with one example path.
+// countUnreadable inspects at most max regular files and reports how many
+// cannot be opened, with one example. It walks the way the archiver does —
+// every entry resolved against its parent's handle, every open checked and
+// taken without following a symlink, blocking on a FIFO or touching an access
+// time — because it reads the same source the backup must leave untouched.
+// A directory that cannot be listed counts as unreadable: its content would
+// be missing from the backup just the same.
 func countUnreadable(ctx context.Context, roots []string, max int) (int, string, error) {
-	var (
-		unreadable int
-		example    string
-		inspected  int
-	)
+	c := unreadableCounter{ctx: ctx, max: max}
 	for _, root := range roots {
-		if err := filepath.Walk(root, func(p string, fi fs.FileInfo, err error) error {
-			if err != nil {
-				return err
+		root = filepath.Clean(root)
+		if err := c.visit(source{name: filepath.Base(root), path: root}); err != nil {
+			if errors.Is(err, fs.SkipAll) {
+				break
 			}
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			if inspected >= max {
-				return filepath.SkipAll
-			}
-			if !fi.Mode().IsRegular() {
-				return nil
-			}
-			inspected++
-			f, err := os.Open(p)
-			if err != nil {
-				unreadable++
-				if example == "" {
-					example = p
-				}
-				return nil
-			}
-			f.Close()
-			return nil
-		}); err != nil && !errors.Is(err, fs.SkipAll) {
 			return 0, "", err
 		}
 	}
-	return unreadable, example, nil
+	return c.unreadable, c.example, nil
+}
+
+type unreadableCounter struct {
+	ctx        context.Context
+	max        int
+	inspected  int
+	unreadable int
+	example    string
+}
+
+func (c *unreadableCounter) note(path string) {
+	c.unreadable++
+	if c.example == "" {
+		c.example = path
+	}
+}
+
+func (c *unreadableCounter) visit(src source) error {
+	if err := c.ctx.Err(); err != nil {
+		return err
+	}
+	if c.inspected >= c.max {
+		return fs.SkipAll
+	}
+	st, err := src.lstat()
+	if err != nil {
+		return err
+	}
+	switch {
+	case st.Mode().IsRegular():
+		c.inspected++
+		f, err := src.openVerified(st)
+		if err != nil {
+			c.note(src.path)
+			return nil
+		}
+		return f.Close()
+	case st.IsDir():
+		l, err := src.list(st)
+		if err != nil {
+			if errors.Is(err, os.ErrPermission) {
+				c.note(src.path)
+				return nil
+			}
+			return err
+		}
+		defer l.close()
+		l.releaseFile()
+		for _, name := range l.names {
+			if err := c.visit(source{dir: l.dir, name: name, path: filepath.Join(src.path, name)}); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }

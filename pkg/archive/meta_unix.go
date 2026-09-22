@@ -3,6 +3,7 @@
 package archive
 
 import (
+	"errors"
 	"fmt"
 	"os"
 	"os/user"
@@ -13,8 +14,11 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// readMeta fills the platform-specific fields of e from fi and path.
-func readMeta(path string, fi os.FileInfo, opts Options, e *Entry) error {
+// readMeta fills the platform-specific fields of e from fi and path. f, when
+// not nil, is the checked descriptor of the entry: its extended attributes
+// are then read from it rather than by path, so they belong to the same
+// object as the content.
+func readMeta(path string, f *os.File, fi os.FileInfo, opts Options, e *Entry) error {
 	st, ok := fi.Sys().(*syscall.Stat_t)
 	if !ok {
 		return fmt.Errorf("stat %q: no platform metadata", path)
@@ -29,7 +33,13 @@ func readMeta(path string, fi os.FileInfo, opts Options, e *Entry) error {
 		e.Uname, e.Gname = resolveOwner(e.UID, e.GID)
 	}
 	if opts.PreserveXattrs {
-		xs, err := readXattrs(path)
+		var xs map[string][]byte
+		var err error
+		if f != nil {
+			xs, err = readXattrsFile(path, f)
+		} else {
+			xs, err = readXattrs(path)
+		}
 		if err != nil {
 			// Only the attributes are lost, and only for this path: the
 			// caller decides whether that is fatal. Dropping the entry
@@ -44,12 +54,57 @@ func readMeta(path string, fi os.FileInfo, opts Options, e *Entry) error {
 	return nil
 }
 
+// xattrSource reads the attributes of one entry, either through an open
+// descriptor or by path without following a final symlink.
+type xattrSource struct {
+	path string
+	fd   int // -1: by path
+}
+
+func (s xattrSource) list(buf []byte) (int, error) {
+	if s.fd >= 0 {
+		return unix.Flistxattr(s.fd, buf)
+	}
+	return unix.Llistxattr(s.path, buf)
+}
+
+func (s xattrSource) get(name string, buf []byte) (int, error) {
+	if s.fd >= 0 {
+		return unix.Fgetxattr(s.fd, name, buf)
+	}
+	return unix.Lgetxattr(s.path, name, buf)
+}
+
 // readXattrs returns all extended attributes of path, following no symlinks.
 func readXattrs(path string) (map[string][]byte, error) {
-	// List, growing the buffer on ERANGE (max 3 attempts).
-	size, err := unix.Llistxattr(path, nil)
+	return readXattrsFrom(xattrSource{path: path, fd: -1})
+}
+
+// readXattrsFile returns all extended attributes of the open file f; path is
+// only named in errors.
+func readXattrsFile(path string, f *os.File) (map[string][]byte, error) {
+	rc, err := f.SyscallConn()
 	if err != nil {
-		if err == unix.ENOTSUP {
+		return nil, fmt.Errorf("xattrs %s: %w", path, err)
+	}
+	var (
+		xs      map[string][]byte
+		readErr error
+	)
+	if err := rc.Control(func(fd uintptr) {
+		xs, readErr = readXattrsFrom(xattrSource{path: path, fd: int(fd)})
+	}); err != nil {
+		return nil, fmt.Errorf("xattrs %s: %w", path, err)
+	}
+	return xs, readErr
+}
+
+func readXattrsFrom(src xattrSource) (map[string][]byte, error) {
+	path := src.path
+	// List, growing the buffer on ERANGE (max 3 attempts).
+	size, err := src.list(nil)
+	if err != nil {
+		if errors.Is(err, unix.ENOTSUP) {
 			return nil, nil // filesystem without xattr support
 		}
 		return nil, fmt.Errorf("Llistxattr %s: %w", path, err)
@@ -60,14 +115,14 @@ func readXattrs(path string) (map[string][]byte, error) {
 	buf := make([]byte, size)
 	attempts := 0
 	for {
-		n, err := unix.Llistxattr(path, buf)
-		if err == unix.ERANGE && attempts < 3 {
+		n, err := src.list(buf)
+		if errors.Is(err, unix.ERANGE) && attempts < 3 {
 			attempts++
 			buf = make([]byte, len(buf)*2)
 			continue
 		}
 		if err != nil {
-			if err == unix.ENOTSUP {
+			if errors.Is(err, unix.ENOTSUP) {
 				return nil, nil
 			}
 			return nil, fmt.Errorf("Llistxattr %s: %w", path, err)
@@ -80,7 +135,7 @@ func readXattrs(path string) (map[string][]byte, error) {
 		if name == "" {
 			continue
 		}
-		val, err := readOneXattr(path, name)
+		val, err := readOneXattr(src, name)
 		if err != nil {
 			return nil, err
 		}
@@ -89,8 +144,9 @@ func readXattrs(path string) (map[string][]byte, error) {
 	return out, nil
 }
 
-func readOneXattr(path, name string) ([]byte, error) {
-	size, err := unix.Lgetxattr(path, name, nil)
+func readOneXattr(src xattrSource, name string) ([]byte, error) {
+	path := src.path
+	size, err := src.get(name, nil)
 	if err != nil {
 		if isMissingXattr(err) {
 			return nil, nil
@@ -103,8 +159,8 @@ func readOneXattr(path, name string) ([]byte, error) {
 	val := make([]byte, size)
 	attempts := 0
 	for {
-		n, err := unix.Lgetxattr(path, name, val)
-		if err == unix.ERANGE && attempts < 3 {
+		n, err := src.get(name, val)
+		if errors.Is(err, unix.ERANGE) && attempts < 3 {
 			attempts++
 			val = make([]byte, len(val)*2)
 			continue

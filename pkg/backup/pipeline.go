@@ -528,46 +528,25 @@ type Estimate struct {
 }
 
 // estimate walks every root counting regular files and raw bytes. It never
-// writes and does not follow symlinks (matching the archiver).
+// writes, reads no content and does not follow symlinks; it visits exactly
+// what build archives, because it takes the same excludes and file system
+// boundary (archiveOptions).
 func estimate(ctx context.Context, cfg Config) (Estimate, error) {
-	var est Estimate
-	for _, root := range cfg.RootPaths {
-		n, sz, err := walkEstimate(ctx, root, cfg.AllowDegraded)
-		if err != nil {
-			return est, err
-		}
-		est.Files += n
-		est.Bytes += sz
-	}
-	return est, nil
+	t, err := archive.Estimate(ctx, cfg.RootPaths, archiveOptions(cfg))
+	return Estimate{Files: t.Files, Bytes: t.Bytes}, err
 }
 
-func walkEstimate(ctx context.Context, root string, degraded bool) (int64, int64, error) {
-	fi, err := os.Lstat(root)
-	if err != nil {
-		return 0, 0, err
+// archiveOptions is how every walk of the sources is configured: the
+// estimate and the archive must never disagree on what the backup holds.
+func archiveOptions(cfg Config) archive.Options {
+	return archive.Options{
+		Strict:         !cfg.AllowDegraded,
+		OneFileSystem:  cfg.OneFileSystem,
+		Excludes:       cfg.Exclude,
+		NumericOwner:   cfg.NumericOwner,
+		PreserveACLs:   true,
+		PreserveXattrs: true,
 	}
-	if !fi.IsDir() {
-		return 1, fi.Size(), nil
-	}
-	var n, sz int64
-	err = filepath.Walk(root, func(_ string, info os.FileInfo, err error) error {
-		if err != nil {
-			if degraded {
-				return nil
-			}
-			return err
-		}
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		if info.Mode().IsRegular() {
-			n++
-			sz += info.Size()
-		}
-		return nil
-	})
-	return n, sz, err
 }
 
 func ceilDiv(a, b int64) int {
@@ -899,14 +878,7 @@ func (b *builder) build(ctx context.Context) error {
 	awErr := make(chan error, 1)
 	go func() {
 		defer pw.Close()
-		aw := archive.NewWriter(pw, archive.Options{
-			Strict:         !b.cfg.AllowDegraded,
-			OneFileSystem:  b.cfg.OneFileSystem,
-			Excludes:       b.cfg.Exclude,
-			NumericOwner:   b.cfg.NumericOwner,
-			PreserveACLs:   true,
-			PreserveXattrs: true,
-		})
+		aw := archive.NewWriter(pw, archiveOptions(b.cfg))
 		for _, r := range b.cfg.RootPaths {
 			if err := aw.AddRoot(ctx, r); err != nil {
 				_ = pw.CloseWithError(err)
