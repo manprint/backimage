@@ -65,12 +65,15 @@ per la base image `scratch` dei container).
 
 ## Requisiti CI
 
-- Go 1.26+, `golangci-lint` fissato a **v2.1.6** (non `latest`): cambia
+- Go 1.27+, `golangci-lint` fissato a **v2.15.0** (non `latest`): cambia
   comportamento fra versioni. La versione vive in un solo posto,
   `GOLANGCI_VERSION` nel `Makefile`; `make lint` confronta il binario trovato
   con quel valore e si ferma prima di eseguire il linter se non corrisponde.
   Il percorso del modulo della serie 2 contiene `/v2`:
-  `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.1.6`.
+  `go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0`.
+  Il binario va compilato con un Go non più vecchio di quello del modulo
+  (1.27): uno compilato con la 1.26 non sa leggere la standard library
+  della 1.27 e riempie il rapporto di falsi `typecheck`.
 - Docker e/o `qemu-user-static` solo per i job `e2e` e `cross-arch`.
 - Job CI: lint, build, test (matrice 3 OS), race, test-root, e2e con
   `registry:2`, cross-arch con QEMU.

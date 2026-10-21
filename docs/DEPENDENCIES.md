@@ -5,6 +5,7 @@ l'approvazione dell'architetto e l'aggiornamento di questo file.
 Verificato da `make deps-check` (G9).
 
 - github.com/spf13/cobra — CLI principale — fase 00
+- github.com/spf13/pflag — tipi dei flag Cobra, letti per i default da ambiente — fase 00
 - github.com/google/go-containerregistry — OCI, registry, daemon — fase 04
 - github.com/klauspost/compress — zstd, gzip — fase 02
 - github.com/ulikunitz/xz — xz — fase 02
@@ -18,7 +19,6 @@ Verificato da `make deps-check` (G9).
 - github.com/restic/chunker — CDC (dedup) — fase 10
 - github.com/moby/moby/client — rimozione esplicita delle immagini Docker locali — fase 07
 - github.com/stretchr/testify — asserzioni nei test — fase 00
-- github.com/dustin/go-humanize — formattazione dimensioni — fase 00
 
 ## Vincolo di dimensione del self-extract
 
@@ -27,4 +27,6 @@ Il binario embedded (`cmd/backimage-selfextract`) può importare **solo**:
 `filippo.io/age`, `golang.org/x/term`, `golang.org/x/sys`, `pkg/docker` e le
 librerie di compressione. Vietati: cobra, go-containerregistry, quic-go,
 protobuf.
-Budget: ≤ 8 MB non compresso. Verificato da `make deps-check`.
+Budget: ≤ 8 MB non compresso. Verificato da `make deps-check` sui binari in
+`internal/embedded`, quindi dopo `make selfextract` (che `make check` e la CI
+eseguono prima).

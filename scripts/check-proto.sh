@@ -36,7 +36,7 @@ if [ -n "$missing" ]; then
 		exit 1
 	fi
 	echo "SKIP: $missing not found, protobuf drift check not executed" >&2
-	echo "      (install protoc 27.3 and protoc-gen-go v1.34.2, or set PROTOC/PROTOC_GEN_GO;" >&2
+	echo "      (install protoc 36.2 and protoc-gen-go v1.36.12, or set PROTOC/PROTOC_GEN_GO;" >&2
 	echo "       set BACKIMAGE_REQUIRE_PROTOC=1 to turn this skip into a failure)" >&2
 	exit 0
 fi

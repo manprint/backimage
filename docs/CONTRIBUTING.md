@@ -27,7 +27,7 @@
 
 ## Convenzioni
 
-- Go 1.26, `CGO_ENABLED=0` sempre.
+- Go 1.27, `CGO_ENABLED=0` sempre.
 - Nomi identificatori, commenti e messaggi di errore **in inglese**. Documentazione utente in italiano.
 - Messaggi di errore: minuscoli, senza punto finale, con contesto.
 - Ogni pacchetto ha un `doc.go` di 5–15 righe.
@@ -78,7 +78,7 @@ saputo prima di interpretarne l'esito.
 | --- | --- | --- |
 | `race` | `CGO_ENABLED=1`, **socket locali** e una **cache Go scrivibile** | fallisce, e non per una race |
 | `vuln` | `govulncheck` in `$HOME/go/bin` e accesso a <https://vuln.go.dev> | fallisce |
-| `proto-check` | `protoc` 27.3 e `protoc-gen-go` v1.34.2 | **SKIP con exit 0**, salvo `BACKIMAGE_REQUIRE_PROTOC=1` |
+| `proto-check` | `protoc` 36.2 e `protoc-gen-go` v1.36.12 | **SKIP con exit 0**, salvo `BACKIMAGE_REQUIRE_PROTOC=1` |
 
 `race` è il caso che si presta al malinteso. I test di trasporto aprono socket su
 `localhost` e il compilatore del race detector scrive nella cache Go: dentro una

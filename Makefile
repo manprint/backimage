@@ -3,7 +3,7 @@ MODULE         := github.com/manprint/backimage
 # Pinned so the local gate and CI run the same linter: the v1 series is EOL and
 # .golangci.yml is on the v2 schema, which a v1 binary cannot parse.
 GOLANGCI       := $(HOME)/go/bin/golangci-lint
-GOLANGCI_VERSION := v2.1.6
+GOLANGCI_VERSION := v2.15.0
 GOVULNCHECK    := $(HOME)/go/bin/govulncheck
 VERSION        ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 COMMIT         ?= $(shell git rev-parse --short HEAD 2>/dev/null || echo none)
@@ -37,7 +37,7 @@ vet:            # G2
 
 lint:           # G3
 	@have="$$($(GOLANGCI) version --short 2>/dev/null || echo missing)"; \
-	 case "$$have" in $(GOLANGCI_VERSION)*) ;; *) \
+	 case "v$${have#v}" in $(GOLANGCI_VERSION)*) ;; *) \
 	   echo "golangci-lint $(GOLANGCI_VERSION) expected, found $$have"; exit 1;; esac
 	$(GOLANGCI) run
 

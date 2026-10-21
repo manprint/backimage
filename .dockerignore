@@ -1,0 +1,16 @@
+# The build stage needs the module sources, the Makefile and nothing else:
+# everything below is history, local tool state or build output, and would
+# otherwise be sent to the daemon with `COPY . .` (and with it any local file
+# that happens to sit in the checkout).
+.git
+.github
+.claude
+.serena
+.tokensave
+.backimage-cache
+tmp
+bin
+dist
+coverage.out
+*.test
+*.md

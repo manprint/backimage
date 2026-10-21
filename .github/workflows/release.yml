@@ -42,18 +42,18 @@ jobs:
         # Same pin as ci.yml and as GOLANGCI_VERSION in the Makefile: the lint
         # gate refuses a different one, and .golangci.yml is on the v2 schema,
         # which a v1 binary cannot parse.
-        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.1.6
+        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0
       - name: Install govulncheck
         # make check ends in the vuln gate, which fails outright when the tool
         # is missing.
-        run: go install golang.org/x/vuln/cmd/govulncheck@v1.6.0
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
       - run: go mod download
       - name: Install protobuf toolchain
         run: |
-          curl -fsSL -o /tmp/protoc.zip https://github.com/protocolbuffers/protobuf/releases/download/v27.3/protoc-27.3-linux-x86_64.zip
+          curl -fsSL -o /tmp/protoc.zip https://github.com/protocolbuffers/protobuf/releases/download/v36.2/protoc-36.2-linux-x86_64.zip
           rm -rf /tmp/backimage-protoc
           unzip -q /tmp/protoc.zip -d /tmp/backimage-protoc
-          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.34.2
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@v1.36.12
           echo "/tmp/backimage-protoc/bin" >> "$GITHUB_PATH"
           echo "$HOME/go/bin" >> "$GITHUB_PATH"
       - name: Build embedded self-extract assets

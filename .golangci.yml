@@ -46,6 +46,7 @@ linters:
     gosec:
       excludes:
         - G304 # file path from user input is this program's job
+        - G703 # the taint-analysis form of G304: paths from flags, env and arguments are this program's input
         - G306 # WriteFile perms: fixtures mirror real-world 0644 trees; program writes are covered
     revive:
       rules:
