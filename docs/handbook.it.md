@@ -26,7 +26,7 @@ backimage version
 
 ### Da sorgente
 
-Richiede Go 1.26 o superiore:
+Richiede Go 1.27 o superiore:
 
 ```console
 go install github.com/manprint/backimage/cmd/backimage@latest
@@ -1189,7 +1189,7 @@ Flag:
 | `--one-file-system` | `false` | Non attraversa mount point: la directory montata resta nell'archivio, il suo contenuto no |
 | `--numeric-owner` | `false` | Non risolve nomi utente/gruppo |
 | `--allow-degraded` | `false` | Disattiva il preflight strict delle capability; non concede privilegi |
-| `--verify-after-push` | `quick` | Rilettura post-push: `quick` (digest di blob e manifest, nessun download), `full` (riscarica ogni layer in streaming e ricalcola i digest memorizzati), `off` |
+| `--verify-after-push` | `quick` | Rilettura post-push: `quick` (digest di blob e manifest, nessun download), `full` (riscarica ogni layer in streaming e ricalcola i digest memorizzati), `off`; con `--remote` solo `quick`, perché pubblica il ricevente |
 | `--jobs N` | `3` | Upload paralleli |
 | `--upload-chunk-size N` | `0` | Spezza ogni upload in chunk HTTP; `0` invia un blob per richiesta (più veloce) |
 | `--platform OS/ARCH` | `linux/amd64,linux/arm64` | Piattaforme auto-estraenti; ripetibile |
@@ -1340,6 +1340,13 @@ da backimage) non viene rimosso per errore.
 `--keep-within` e `--delete-older-than` sono la stessa regola detta al
 contrario: `--keep-within 3d` ≡ `--delete-older-than 3d`. Indicarle entrambe è
 un errore d'uso, per non lasciare dubbi su quale prevalga.
+
+Un glob `--keep-tag` malformato (`'release-['`) o vuoto (`',release-*'`) è un
+errore d'uso, segnalato prima di contattare il registry: un glob che non può
+corrispondere a nulla non proteggerebbe nessun tag, e con `--yes` ogni tag datato
+verrebbe eliminato. Allo stesso modo una durata oltre il limite rappresentabile
+(circa 292 anni, `106751d`) è un errore d'uso invece di ricadere su un valore
+negativo o di poche ore.
 
 #### Retention per famiglia: `--tag-regex` e `--group-by-regex`
 
@@ -1825,6 +1832,14 @@ docker run --rm -e BACKIMAGE_PASSPHRASE="$PASSPHRASE" \
   saltati dal controllo `HEAD`;
 - nessuna parità di digest tra backup locale e remoto in streaming, perché i
   metadati li costruisce il server (usare `--remote-mode layers` se serve);
+- in `--remote-mode layers` conviene la stessa versione su client e server:
+  con versioni diverse il server mette nel layer 0 il proprio self-extract e il
+  client, verificato che piattaforme, metadati e dati siano i suoi, ripubblica
+  l'immagine con il proprio estrattore (exit 0, con un avviso e
+  `"selfExtractRepublished": true` in `--json`); se differisce altro o la
+  ripubblicazione fallisce esce con 5. La riparazione la fa il client: un
+  client fino alla 0.6.1 esce ancora sempre con 5 contro un ricevente di
+  un'altra build;
 - `--server-side-compress` è un alias di questa modalità; con
   `--remote-mode layers` è un errore d'uso;
 - campagna di validazione eseguita fino a 4 GiB: i 50 GiB dichiarati come
@@ -1921,7 +1936,7 @@ Flag server:
 | `--tls-self-signed` | `false` | Genera il certificato e stampa il pin; persistente in `--tls-cert/--tls-key` o in `WORKDIR/tls/`, effimero se manca entrambi |
 | `--auth-token`, `--auth-token-file` | — | Token condiviso |
 | `--insecure-no-auth` | `false` | Disabilita auth (fortemente sconsigliato) |
-| `--allow-repo PREFIX` | — | Prefix repository consentiti; ripetibile |
+| `--allow-repo PREFIX` | — | Prefix repository consentiti, letterali e per componenti di path intere (`ghcr.io/team/a` non ammette `ghcr.io/team/abc`); glob e voci vuote sono rifiutati all'avvio; ripetibile |
 | `--max-sessions` | `4` | Sessioni concorrenti |
 | `--max-bytes SIZE` | `0` | Limite per sessione; 0 illimitato |
 | `--rate-limit SIZE` | `0` | Byte/s per sessione; 0 illimitato |

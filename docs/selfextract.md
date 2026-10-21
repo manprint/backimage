@@ -36,10 +36,16 @@ Invocarlo ora produce un errore d'uso (exit 2) che indica l'equivalente
 dell'host, prima che venga estratto qualcosa:
 
 ```sh
-backimage restore registry.example/team/backup:tag -x -C ./restore --remove-local-image
+backimage restore registry.example/team/backup:tag --local-repo -x -C ./restore --remove-local-image
 ```
 
 La pulizia è un'operazione di chi ha già il socket, non dell'estrattore.
+
+`--remove-local-image` richiede `--local-repo`: rimuove l'immagine dal daemon
+da cui il restore l'ha letta, mai un'immagine locale omonima quando la sorgente
+è un registry o un OCI layout. E la rimuove solo dopo un ripristino 1:1: con
+anche una sola differenza di metadati o entry non creata, con o senza
+`--strict`, l'immagine resta ed è l'unica copia di ciò che manca.
 
 ## Comandi
 

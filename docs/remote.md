@@ -14,7 +14,7 @@ Two protocols exist. `--remote-mode` selects one; the default is `stream`.
 | Server disk | one layer at a time in `--work-dir` | none |
 | Server sees plaintext | **yes** | no |
 | Resume after a connection loss | restarts the stream, keeps published layers | restarts the interrupted layer |
-| Local/remote digest parity | no (the server builds the metadata) | yes |
+| Local/remote digest parity | no (the server builds the metadata) | yes; across versions the client republishes its own self-extract |
 
 In both modes registry credentials stay on the client: the client obtains
 short-lived bearer tokens and sends them to the server over the already
@@ -248,7 +248,12 @@ account.
 ## Policy and resource limits
 
 - `--allow-repo` is repeatable. A repository outside every allowed prefix is
-  rejected before a layer byte is received.
+  rejected before a layer byte is received. Prefixes are literal and cover
+  whole path components: `ghcr.io/team/a` admits `ghcr.io/team/a`, its tags
+  and `ghcr.io/team/a/sub`, never `ghcr.io/team/abc`; a prefix without a slash
+  names a registry, so `localhost` does not admit `localhost:5000`. A glob
+  (`ghcr.io/team/*`) or an empty entry is refused at start-up, before the
+  server binds: compared literally, it would have refused every backup.
 - `--max-sessions` bounds concurrent sessions and therefore total buffering.
 - `--max-bytes` sets the per-session byte quota.
 - `--rate-limit` throttles received bytes per second per session.
@@ -270,6 +275,17 @@ account.
   running push over on its own. The maximum accepted value is 64 MiB.
 - `--spool` is deprecated: streaming always spools one layer at a time and the
   flag only prints a warning.
+- `--push-jobs` and `--upload-chunk-size` are validated at start-up, with the
+  other flags, before the server binds: an out-of-range value is a usage error
+  (exit 2), not a failure of the first session.
+- `--log-format json` writes every diagnostic line, the TLS fingerprint
+  included, as one JSON object per line: `{"time":…,"level":"info"|"warning",
+  "msg":…}`. The default `text` keeps the plain lines.
+- The archive a `stream` session receives is held as an index in memory, so the
+  server bounds it while it reads: more entries than an index can hold, a name
+  or link target longer than an index path, or an owner or group name longer
+  than 256 bytes ends the session as soon as it is read, instead of after the
+  whole stream was received and held.
 
 The layer stream of a `layers` (v1) session cannot be rewound, so it is
 uploaded through a 32 MiB double buffer regardless of `--upload-chunk-size`.
@@ -303,6 +319,18 @@ complete the TLS handshake (and, for QUIC, wait for the session stream) off the
 accept path, with at most 64 peers mid-handshake at a time. One silent
 connection used to block every other client for as long as it cared to hold the
 socket.
+
+An error from `accept` itself is retried with a pause that doubles from 5 ms to
+one second: descriptor exhaustion (`EMFILE`), a peer that reset before it was
+accepted, and the network errors Linux reports through `accept(2)` all clear
+with time. Only an error saying the listening socket is unusable (`EBADF`,
+`EINVAL`, `ENOTSOCK`, a closed listener) is final, and it stops the server with
+that error instead of leaving the process running and deaf.
+
+While a streaming session publishes — the final push and the index can take
+longer than the idle window on a slow registry — the server keeps its progress
+timer running and re-arms the read deadline only when it reads again, so a
+long publication does not expire a session that is still working.
 
 ## Progress
 
@@ -344,6 +372,23 @@ Streaming does not reproduce the local index digest: the server builds the
 manifest, chunk table and file index from the bytes it receives, so
 `--remote-mode stream` has no local/remote digest parity check. Use
 `--remote-mode layers` when that parity is a requirement.
+
+The parity of `layers` holds as such only when client and server are the same
+build: the client never sends its self-extract binaries, so the receiver puts
+the one of its own build in layer 0. Across versions the client reads the
+published index back by digest with its own registry credentials, and only if
+the platforms and every layer but layer 0 (metadata and data) are its own does
+it republish its own image, with its own extractor: data and metadata are
+already on the registry, so only layer 0, configs and manifests travel. The tag
+ends at the client's digest and the backup exits 0 with a warning. Any other
+difference, or a failed republish, exits 5, and `--json` reports
+`"selfExtractRepublished": true` when the repair ran. The repair is the
+client's: a client up to 0.6.1 still exits 5 against a receiver of another
+build, so upgrading the server first does not help it. The client needs direct
+access to the registry, which it already has to mint the delegated tokens. The
+same version on both sides stays recommended: it avoids the extra upload and the
+window in which the tag resolves to the receiver's image (see
+`docs/security.md` and `docs/protocol.md`).
 
 ## Metrics
 

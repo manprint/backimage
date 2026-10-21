@@ -50,7 +50,13 @@ livelli.
 Resta un fattore fuori dal controllo del tool: un aggiornamento del compressore
 può cambiare l'output a parità di livello, perché le librerie di compressione non
 garantiscono stabilità dei byte fra versioni. In quel caso il primo backup dopo
-l'aggiornamento ricarica i blob una volta, poi la dedup riprende.
+l'aggiornamento ricarica i blob una volta, poi la dedup riprende. Il cambiamento
+non passa inosservato: `TestCodecOutputMatchesThePinnedDigests` (`pkg/compress`)
+fissa il digest dell'output di ogni codec, al livello minimo, predefinito e
+massimo, su vettori di 4 KiB e 1 MiB, e fallisce stampando il valore nuovo. Un aggiornamento che lo fa fallire
+va annunciato nel changelog insieme al ricaricamento che comporta: è successo con
+`klauspost/compress` v1.20.3, il cui zstd produce altri byte dalla v1.19.2 sui
+vettori da 1 MiB.
 
 I parametri CDC sono nell'`manifest.json` (`chunking.minChunkBytes`,
 `targetChunkBytes`, `maxChunkBytes`, `polynomial`). Un nuovo `--dedup` li

@@ -5,6 +5,303 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+Correzioni da una revisione del codice file per file (rapporto del
+2026-10-21, rilievi B01–B38). Il formato non cambia: questa versione legge
+tutto ciò che le precedenti hanno scritto, e la 0.6.1 legge tutto ciò che
+questa scrive.
+
+**Cosa cambia per chi automatizza.**
+
+- **Exit code.** Un backup strict senza i privilegi che il preflight chiede
+  esce **3** (era 1), come ogni `permission denied` che arriva fino alla CLI.
+  Un registry che dopo il push non conserva ciò che ha accettato fa uscire
+  **5** (era 6), anche quando il push l'ha fatto un server
+  `listen-remote`. SIGINT e SIGTERM fanno uscire **7** ogni comando, restore
+  compreso, e l'auto-estraente (prima 130/143 fuori da `backup` e
+  `listen-remote`). `tar` dell'auto-estraente che non riesce a scrivere su
+  stdout esce 1 (era 5). `--keep-tag` con un glob malformato e una durata che
+  va in overflow escono 2.
+- **Flag che venivano ignorati ora sono errori d'uso (exit 2):** `restore -x`
+  con `-o`; `--strip-components`, `--strict` e `--no-preserve-*` senza `-x`;
+  `--dedup-chunk-*` e `--dedup-polynomial` senza `--dedup`;
+  `--remove-local-image` senza `--local-repo`; `--verify-after-push full` o
+  `off` con `--remote`, dove pubblica il ricevente e rilegge sempre in modo
+  quick; una selezione dell'auto-estraente
+  che non corrisponde a nulla; `--allow-repo` con un glob o vuoto, e
+  `--push-jobs`/`--upload-chunk-size` fuori intervallo, all'avvio di
+  `listen-remote` invece che alla prima sessione.
+- **Passphrase.** Da file e da stdin vale la prima riga, senza `\n` o `\r\n`
+  finale, con la stessa regola per le due sorgenti; un file con più righe
+  produce un avviso. I backup cifrati con le letture precedenti si aprono
+  ancora: la vecchia lettura è provata dopo, e solo su passphrase errata.
+  `BACKIMAGE_PASSPHRASE` vuota equivale a non impostata.
+- **Gli avvisi di `backup` passano anche con `--quiet`**, su stderr con il
+  prefisso `warning:`: i file archiviati senza contenuto da `--allow-degraded` e
+  la ripubblicazione del self-extract in `--remote-mode layers`. Prima erano
+  righe di progress, e `--quiet` le scartava.
+- `backup --json` riporta `"selfExtractRepublished": true` quando il client ha
+  ripubblicato il proprio self-extract su un ricevente `layers` di un'altra
+  versione; il campo manca negli altri casi.
+- `--compression none` e `store` sono accettati con il default `--runnable`.
+- `--max-layer-size` sotto 16 MiB viene alzato come prima, ma ora con un avviso.
+- `--remove-local-image` conserva l'immagine dopo un restore con differenze,
+  anche senza `--strict`.
+- `listen-remote --log-format json` produce davvero JSON, una riga per evento.
+- Il primo `login`/`logout` crea accanto ad `auth.json` un file vuoto
+  `auth.json.lock`.
+- **Go 1.27.** Compilare da sorgente richiede Go 1.27 (toolchain minima
+  `go1.27.3`, scaricata da sola da un Go più vecchio).
+- **`--dedup` con zstd**: il primo backup dopo l'aggiornamento ricarica i chunk
+  comprimibili invece di ritrovarli nel riferimento, perché il codificatore
+  zstd aggiornato produce altri byte (vedi «Changed»). Una volta sola, se
+  client e server `listen-remote` si aggiornano insieme.
+
+### Changed
+
+- **Go 1.27 e dipendenze aggiornate.** Il modulo dichiara `go 1.27` con
+  toolchain minima `go1.27.3` (era `go 1.26` / `go1.26.10`): una build con un
+  Go più vecchio scarica da sola la toolchain. Moduli diretti: `filippo.io/age`
+  v1.3.2, `go-containerregistry` v0.22.1, `klauspost/compress` v1.20.3,
+  `moby/moby/client` v0.6.2, `pierrec/lz4/v4` v4.1.33, `quic-go` v0.64.1,
+  `ulikunitz/xz` v0.5.17, `golang.org/x/sys` v0.49.0, `golang.org/x/term`
+  v0.47.0, `google.golang.org/protobuf` v1.36.12; fra gli indiretti
+  `golang.org/x/net` v0.61.0 e `golang.org/x/crypto` v0.58.0.
+  `github.com/spf13/pflag`, importato da sempre da `internal/cli`, ora è
+  dichiarato come dipendenza diretta e documentato in `docs/DEPENDENCIES.md`.
+- **`--dedup` con zstd: un ricaricamento una tantum.** Il codificatore zstd
+  di `klauspost/compress` v1.20.3 produce, a ogni livello, byte diversi dalla
+  v1.19.2 per lo stesso input comprimibile della taglia dei chunk di dedup
+  (1 MiB nei vettori del test; 4 KiB restano uguali). La dedup confronta i
+  digest dei blob compressi, quindi il primo backup `--dedup` con zstd fatto
+  con questa versione sopra un riferimento scritto dalle precedenti non
+  ritrova i chunk comprimibili già presenti e li ricarica; dal backup
+  successivo la dedup torna normale. Vale se si aggiorna ogni produttore:
+  comprime il client nei backup locali e con `--remote-mode layers`, il
+  server `listen-remote` con `--remote-mode stream`. Un repository alimentato a turno da versioni
+  vecchie e nuove ricarica a ogni cambio, quindi client e server vanno
+  aggiornati insieme. I backup esistenti si leggono come prima (il formato
+  zstd non cambia, cambia solo la scelta del codificatore), e gzip, lz4, xz e
+  `store` producono gli stessi byte di prima. Le versioni precedenti leggono
+  i backup scritti da questa: provato con HEAD e con il worktree prima
+  dell'aggiornamento su zstd ai livelli 1, predefinito e 4, in chiaro,
+  cifrato e `--dedup`. Il nuovo
+  `TestCodecOutputMatchesThePinnedDigests` (`pkg/compress`) fissa i digest
+  dell'output compresso di ogni codec ai livelli minimo, predefinito e
+  massimo: un aggiornamento futuro che cambi i byte fallisce lì invece di
+  degradare la dedup in silenzio.
+- **Codice protobuf rigenerato** con `protoc` 36.2 e `protoc-gen-go` v1.36.12
+  (erano 27.3 e v1.34.2), la versione del runtime ora richiesto. Il formato
+  sul filo non cambia: la sorgente `backimage.proto` è la stessa. Va fatto
+  insieme al passaggio a Go 1.27: `protoc-gen-go` v1.34.2 compilato con la
+  1.27 formatta un commento in modo diverso dal file committato, e il
+  `proto-check` della CI, che installa il plugin con la toolchain del modulo,
+  sarebbe fallito. La v1.36.12 produce gli stessi byte con la 1.26 e la 1.27.
+- **Strumenti dei gate.** `golangci-lint` v2.15.0 (era v2.1.6) e `govulncheck`
+  v1.9.0 (era v1.6.0), in `Makefile` e nei due workflow. `make lint` accetta
+  la versione con o senza la `v` iniziale, che i binari di release omettono.
+  Il nuovo linter ha trovato 28 rilievi, tutti corretti o motivati:
+  `errcheck` su ricezioni da canali di errori scartate (le goroutine ora
+  segnalano la fine con un canale `struct{}`), `noctx` su ascolti, dial,
+  richieste e processi di test senza contesto, un `prealloc`, e `gosec` G703,
+  la forma per taint-analysis di G304, escluso con la stessa motivazione.
+  Il server delle metriche di `listen-remote` apre il proprio socket con il
+  contesto del comando.
+
+### Security
+
+- **Toolchain minima `go1.27.3`** (era `go1.26.6`). Con la 1.26.6
+  `govulncheck` segnala 11 advisory della standard library raggiungibili da
+  questo codice, e quindi il gate `make vuln` fallisce. Sono GO-2026-6809
+  (`crypto/x509`, raggiunto dalla verifica dei certificati TLS), GO-2026-6607
+  (`crypto/tls`), sette su `net/http`, GO-2026-6608 (`net/textproto`) e
+  GO-2026-6604 (`os`). La 1.27.3 le chiude tutte, GO-2026-6809 compresa, che
+  la 1.27.2 ha ancora: 0 raggiungibili. Una build con un Go più vecchio
+  scarica da sola la toolchain minima. Con le dipendenze aggiornate (vedi
+  «Changed») spariscono anche le cinque advisory non raggiungibili che
+  `golang.org/x/net` v0.56.0 aveva accumulato (GO-2026-6603, -6610, -6611,
+  -6612, -6617) e quelle di modulo elencate nella 0.5.0, tranne GO-2026-5932
+  (`golang.org/x/crypto/openpgp`, senza correzione): resta nel grafo dei
+  moduli, ma nessun percorso di chiamata la raggiunge.
+- **Spool a nome fisso in `$TMPDIR`** (B01). Due backup concorrenti scrivevano
+  lo stesso file e si corrompevano a vicenda senza errore; un symlink
+  pre-creato con quel nome veniva seguito, e il backup sovrascriveva il file
+  di un altro utente. Gli spool sono ora file unici `0600` creati in esclusiva.
+- **`--exclude` con un glob su una directory archiviava comunque il suo
+  contenuto** (B02): veniva escluso il nome, non il sottoalbero, e le
+  directory escluse erano aperte e visitate. Un pattern esclude ora la
+  directory e tutto ciò che contiene, con lo stesso matcher per archivio,
+  stima e preflight, e nulla di escluso viene aperto.
+- **Restore: il chmod finale delle directory seguiva un symlink sostitutivo**
+  (B03) e cambiava il modo di un file preesistente fuori dall'albero; un
+  hardlink poteva puntare a un file rimosso e mai scritto da questo restore
+  (B04). Entrambi sono rifiutati.
+- **Xattr di symlink, device e FIFO letti per pathname** (B10): una corsa
+  poteva farli leggere fuori dalla root. Ora sono ancorati al descrittore della
+  directory e l'identità dell'entry è verificata prima e dopo.
+- **Server remoto.** Una lunghezza di frame oltre l'intervallo di `int`
+  mandava in panic un server a 32 bit prima dell'autenticazione (B07);
+  `--allow-repo team/a` ammetteva `team/abc` (B18); un client autenticato
+  poteva far tenere in memoria al server un numero illimitato di entry tar e
+  nomi lunghi fino a un megabyte (B19).
+- **Restore di un'immagine ostile: un chunk `xz` da 72 byte faceva allocare
+  4 GiB** (B31), il dizionario dichiarato nell'header. I flussi xz sono ora
+  validati prima della decodifica, e un dizionario oltre 64 MiB è rifiutato.
+- **Client registry** (B23): un registry `https` poteva mandare lo scambio del
+  token su un `realm` in chiaro; la challenge `WWW-Authenticate` era spezzata
+  sulle virgole anche dentro le virgolette; risposta del token, rilettura del
+  manifest e pagine dei tag non avevano limiti di dimensione. Il `realm` `http`
+  da un registry `https` è rifiutato, la challenge è letta come da RFC 7235,
+  ogni corpo ha un limite.
+
+### Fixed
+
+- **`--remote-mode layers` fra client e `listen-remote` di versioni diverse
+  usciva sempre con 5**, dopo che il tag era già stato pubblicato con il
+  self-extract del ricevente: il client non invia il proprio estrattore, e il
+  ricevente mette nel layer 0 quello della sua build. Ora il client rilegge per
+  digest l'indice pubblicato, con le proprie credenziali, e se piattaforme,
+  metadati e dati sono i suoi avvisa e ripubblica l'immagine con il proprio
+  estrattore (viaggiano solo layer 0, config e manifest; verifica quick, nessun
+  checkpoint): il tag finisce sul digest del client e il backup esce con 0. Il
+  layer 0 del ricevente, il programma che `docker run` esegue e che legge la
+  passphrase, non viene mai accettato. Ogni altra differenza resta exit 5 senza
+  ripubblicazione; una ripubblicazione fallita esce con 5 e avverte di non
+  eseguire quell'immagine. La riparazione la fa il client: serve il client
+  aggiornato, mentre un client fino alla 0.6.1 esce ancora con 5 contro un
+  ricevente di un'altra build, anche se il ricevente è aggiornato. Test:
+  `TestRemoteLayersRepublishesOwnSelfExtract`,
+  `TestRemoteLayersOtherDataIsNotRepaired`,
+  `TestRemoteLayersFailedRepairNamesTheTag`,
+  `TestRemoteLayersInvalidDigestIsAnIntegrityFailure`,
+  `TestOnlySelfExtractDiffers`.
+- **`--quiet` nascondeva gli avvisi di `backup`.** Il conteggio dei file
+  archiviati senza contenuto da `--allow-degraded` era una riga di progress:
+  un backup non presidiato con `--quiet` produceva file vuoti senza dirlo (lo
+  riportava solo `--json`). Gli avvisi della pipeline passano ora da un canale
+  proprio, stampato anche con `--quiet`. Test: `TestBackupQuietKeepsWarnings`
+  (`internal/cli`), `TestContentSkippedIsAWarning` (`pkg/backup`).
+- **`--verify-after-push` con `--remote` era ignorato in silenzio**: pubblica il
+  ricevente, sempre con la rilettura quick, e il protocollo non trasporta un
+  livello. `full` e `off` con `--remote` sono ora un errore d'uso, segnalato
+  prima di qualsiasi connessione. Test:
+  `TestBackupRefusesVerifyAfterPushWithRemote`.
+- **Con `--allow-degraded` un file che cambiava dimensione durante la lettura
+  abortiva il backup** (B08). Ora viene archiviato alla dimensione dichiarata
+  nell'header (troncato o completato con zeri) e segnalato una volta.
+- **Un errore di `build`/`finalize` lasciava spool e layer temporanei su disco**
+  e una goroutine bloccata (B12); un errore di scrittura lasciava un OCI layout
+  parziale, o un tar a metà (B34). Ora entrambi vengono rimossi, e solo se li
+  aveva creati questo backup.
+- **Auto-estraente:** `extract --continue` ignorava `--include`/`--exclude`
+  (B05) e con `--json` usciva 0 pur avendo perso entry (B06): ora rispetta i
+  filtri, riporta le perdite in `partial` ed esce 5.
+- **Segnali** (B13): fuori da `backup` e `listen-remote` un Ctrl-C lasciava
+  output parziali ed usciva 130/143. Ora ogni comando, e l'auto-estraente,
+  annulla il contesto, pulisce ed esce 7. Se il comando non si ferma entro
+  5 secondi, perché aspetta qualcosa che il contesto non interrompe, il
+  processo esce comunque con 7, e un secondo segnale lo fa uscire subito. Per
+  esempio una FIFO della passphrase senza scrittore o un prompt da terminale.
+  Prima un backup fermo su una FIFO non si poteva terminare né con il primo
+  SIGTERM né con i successivi, perché il gestore di `backup` li assorbiva
+  tutti.
+- **`--remove-local-image`** cancellava l'immagine anche dopo un restore
+  degradato, e anche quando la sorgente non era il daemon (B14).
+- **Passphrase normalizzata in tre modi diversi** fra file, stdin e
+  documentazione (B15): un backup cifrato leggendo il file in un modo poteva
+  non aprirsi leggendolo nell'altro. Vedi sopra per la regola unica.
+- **Retention:** `--keep-tag` con un glob malformato non proteggeva niente e
+  poteva far cancellare tutti i tag (B16); una `--keep-within` enorme andava in
+  overflow e diventava circa 24 ore (B17). Entrambi sono ora errori d'uso,
+  prima di ogni chiamata di rete.
+- **Il loop di accept TCP/QUIC terminava al primo errore non temporaneo** e il
+  server restava vivo ma sordo (B09). Gli errori transitori sono ritentati con
+  backoff; quelli fatali fermano il server con l'errore.
+- **Sessioni remote lunghe** (B20): la deadline non veniva rinnovata mentre il
+  server pubblicava, e la pubblicazione non leggeva il client, quindi il token
+  registry rinnovato in quel momento restava nel flusso e la pubblicazione
+  falliva dopo 30 secondi a dati già caricati. Ora il server legge keepalive,
+  token e `Cancel` durante la pubblicazione; un `Cancel` la ferma. Resta un
+  limite nella fase dati, descritto in `docs/protocol.md`.
+- **Client remoto** (B25): accettava un `HelloAck` con una versione superiore
+  alla propria, ignorava i messaggi inattesi restando in attesa di un
+  `BackupEnd` che non sarebbe arrivato, e in v1 contava nella quota anche i
+  layer che il server salta. Lato server un commit rifiutato chiude la
+  sessione di upload sul registry.
+- **macOS/BSD: il restore dei tempi falliva con `EINVAL`** (B21): il valore
+  `UTIME_OMIT` era quello di Linux.
+- **Il restore si bloccava se il tar aveva byte dopo il marcatore di fine**
+  (B22). Ora li legge, li scarta e lo segnala.
+- **Exit code decisi per sottostringa** (B26): un errore di rete il cui
+  messaggio non conteneva «registry» usciva 1, un errore d'uso della pipeline
+  perdeva la sua classe, e un preflight senza privilegi usciva 1. Ora la classe
+  viene dai sentinel (`errors.Is`) e un errore già classificato resta tale.
+  Un errore del sistema locale, come un file mancante o un disco pieno, non
+  è un errore di rete ed esce 1.
+- **`restore` senza `-x`/`-o` scriveva `<repo>_<tag>.tar` su disco** mentre
+  README e help dicevano stdout (B32): la documentazione ora descrive il
+  comportamento reale; solo `-o -` scrive su stdout.
+- **Paginazione dei tag senza guardia di ciclo** (B38): un `Link` che puntava
+  alla stessa pagina bloccava `repo tags/stats/prune` e la base di `--dedup`.
+  `repo stats` perdeva inoltre l'errore di un indice figlio illeggibile.
+- **`auth.json`: aggiornamenti persi con scritture concorrenti** (B24), ora
+  serializzati da un lock.
+- **Varie** (B27): flag ignorati (vedi sopra), una variabile d'ambiente che
+  riempiva l'alternativa di un flag esplicito (`--auth-token-file` dato,
+  `BACKIMAGE_AUTH_TOKEN` applicata lo stesso), overflow aritmetici nella
+  validazione dell'indice (un `Size` negativo era accettato), l'estrazione
+  Windows che non contava gli skip, un file parziale lasciato da una copia
+  interrotta, `StreamSelectedTar` che non guardava il contesto,
+  un argomento vuoto che mandava in panic l'auto-estraente.
+- **Pubblicazione remota: un `ETIMEDOUT` del kernel scambiato per la scadenza
+  della sessione.** Durante la pubblicazione il lettore riarmava l'attesa su
+  qualunque errore con `Timeout()` vero, compreso un peer TCP che il kernel
+  aveva dato per morto. Ora la riarma solo sulla deadline impostata dalla
+  sessione (`os.ErrDeadlineExceeded`).
+- **Avviso `--insecure-no-auth` con prefisso doppio**: il testo diceva
+  `warning: WARNING: remote server authentication is disabled`, e il record
+  JSON ripeteva `WARNING:` sotto `"level":"warning"`. Ora il prefisso è uno.
+
+### Tests and gates
+
+Diversi controlli non potevano fallire, e alcuni non potevano passare:
+
+- `phase_08.sh` e `phase_08_stream.sh` verificavano «segreto assente dal log»
+  con `! grep` sotto `set -e`, che non interrompe mai lo script (B28).
+- A9.5 non verificava più layer: il backup di prova stava sempre in un layer
+  (B29). Ora usa 40 MB e controlla il numero di layer.
+- `check-deps.sh` non poteva fallire sul controllo «ogni modulo documentato è
+  usato», e oggi avrebbe dovuto: `go-humanize` era documentato e non più usato
+  (B33).
+- `docs/DEPENDENCIES.md` dichiarava il budget di 8 MB del self-extract
+  «verificato da `make deps-check`», ma lo script non misurava nulla: un
+  estrattore da 9 MB passava il gate. Ora `check-deps.sh` misura i due binari
+  in `internal/embedded` (oggi 5,0 MB amd64 e 4,7 MB arm64).
+- Lo smoke test del comparatore delle fixture superava la soglia con le sole
+  mtime di due build, anche con un comparatore cieco al contenuto; le feature
+  `FeatOwnership` e `FeatBigFile` erano dichiarate e mai implementate, e
+  `FeatSparse` mancava dal manifest (B30).
+- Il blob ACL della fixture era invalido (`EINVAL`): `TestRoundTripRoot` non
+  poteva passare, nemmeno da root.
+- `phase_01.sh` da root non poteva passare: `diff -r` dichiara diversi due
+  device o FIFO identici, `chattr +i` impediva il `chown` (l'ownership non era
+  mai provata) e la pulizia, e gli xattr erano confrontati anche quando
+  `setfattr` era fallito (B37). Owner, modo, tipo e device number sono ora
+  confrontati esplicitamente.
+- `phase_04.sh` riusava un container `bi-registry` già avviato senza guardarne
+  la porta: con `PHASE04_PORT` diverso dal run precedente il push falliva.
+  Inoltre non attendeva che il registry rispondesse e lasciava container e
+  immagine dopo l'uscita. Ora avvia un registry suo, lo attende e lo rimuove.
+- Le fasi 05, 06, 07, 08, 08_stream, 09, 10 e A9 lasciavano nel daemon locale
+  le immagini scaricate o caricate: A9 ne teneva una lista, ma la riempiva da
+  dentro `$(...)` e la pulizia la trovava vuota. Ora ogni fase rimuove i tag
+  del proprio repository all'uscita.
+- `pkg/backup` non compilava i test su 32 bit (B36); `test/fixtures` e
+  `test/bench/transport` non compilavano su Windows e FreeBSD.
+- Aggiunto `.dockerignore`: il contesto di build passa da ~160 MB a ~12 MB e
+  non include più `.git`, cache locali e file non tracciati.
+
 ## [0.6.1] - 2026-09-22
 
 Release di sicurezza sulla lettura della sorgente. Il formato non cambia: questa

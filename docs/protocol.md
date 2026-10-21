@@ -4,7 +4,11 @@ This build speaks protocol version 2 and still accepts version 1. Version is
 negotiated in `Hello`/`HelloAck`: the server echoes the version the client
 asked for, and `HelloAck.streaming` reports whether it can run the v2 pipeline.
 A v2 client talking to a v1-only server receives a usage error naming
-`--remote-mode layers`.
+`--remote-mode layers`. A server may only echo or lower the version: a
+`HelloAck` naming a version above the client's is refused as invalid. A
+message the session does not expect is an error on both sides, never skipped:
+a client that dropped one would wait for a `BackupEnd` the peer is not going to
+send.
 
 The remote protocol is defined by
 [`pkg/protocol/backimage.proto`](../pkg/protocol/backimage.proto). Generated Go
@@ -23,7 +27,9 @@ TCP is wrapped in TLS 1.3. Every application frame is:
 
 Types are control (protobuf), data (raw compressed OCI layer bytes), and empty
 keepalive. Payloads are limited to 4 MiB. The reader checks the declared length
-before growing its reusable buffer.
+before growing its reusable buffer, and compares it as the 32-bit value it is
+before converting it: on a 32-bit build a length above the `int` range would
+otherwise turn negative and panic the reader before authentication.
 
 Streams time out after 120 seconds of being **idle**: the deadline moves
 forward with every byte transferred, so a long transfer never expires while it
@@ -99,6 +105,31 @@ it forwards them, checks size and digest, then commits the registry upload.
 The diff ID lets the receiver construct OCI configs without downloading the
 layer it just uploaded.
 
+The client never fills `BackupStart.selfextract_amd64` and `selfextract_arm64`:
+each extractor is larger than `MaxFrameSize` (4 MiB). The receiver therefore
+builds layer 0 (the self-extract binary) from the extractor embedded in its own
+build. When the client detects a published index digest that differs, it reads
+the index back from the registry by digest (using its own credentials) and
+checks whether all layers except layer 0 — metadata layer 1 and all data layers —
+match the client's in digest, size and media type, and whether the platform set
+is identical. If so, the client republishes its own image: only its layer 0,
+configs and platform manifests travel (about 5 MB per platform), because data
+and metadata layers are already on the registry. The tag moves to the client's
+index digest and the backup exits 0. If any other layer differs, a platform is
+missing or extra, the layer count differs, or the published index cannot be read
+or is invalid, the mismatch remains an integrity error (exit 5, no republish)
+— this can mean the receiver published unexpected content or a network error
+occurred. A failed republish also exits 5 and names the tag still holding the
+receiver's extractor in the error message. The repair is the client's: a
+client up to 0.6.1 still exits 5 against a receiver of another build. Same
+client and server version is
+recommended (avoids the extra upload and a window where the tag holds an
+unverified image), but no longer required. Security note: between the receiver's
+original publish and a successful republish, the tag points to the receiver's
+self-extract binary; a malicious v1 receiver holds a delegated push token and
+could re-tag after the session until the token expires. Before this fix a
+substituted extractor remained on the registry; now it is overwritten.
+
 ## Authentication and delegated registry tokens
 
 The `Hello` contains the optional pre-shared receiver authentication token.
@@ -115,6 +146,29 @@ The receiver keeps delegated tokens only in memory. Waiting for a missing or
 expired token is bounded to 30 seconds. Anonymous registries are represented
 explicitly without inventing a credential value.
 
+A token only reaches the receiver when the session reads it, and the stream is
+ordered: a `Token` sent behind data frames is read after them. Two consequences:
+
+- **Publication.** After `StreamEnd` (v2) or the last `LayerEnd` (v1) the
+  receiver publishes — last upload, image, index, read-back — while it keeps
+  reading the client, so the refresh the client sends in that window is
+  delivered to the publication waiting for it. The client is waiting for
+  `BackupEnd` there: keepalives and tokens are accepted, a `Cancel` stops the
+  publication, anything else ends the session with a usage error. A client may
+  stay silent through a long publication: the session's own deadline expiring
+  with nothing read only re-arms the wait. Any other read error, a kernel
+  `ETIMEDOUT` on a dead peer included, ends the session.
+- **Data phase (residual).** While receiving, a token behind data frames is
+  read as soon as the pipeline accepts the frames in front of it. A registry
+  request that needs a fresh token while the receive path is held — a chunk of
+  the v1 double buffer (32 MiB) or of `--upload-chunk-size`, after the token in
+  use expired — waits for a token that is queued behind data. The client
+  refreshes when 40% of the lifetime is left, so this needs one such step to
+  outlast 40% of the registry's token lifetime (two minutes for a five-minute
+  token); the step then fails after the 30-second budget and the client
+  retries the session. The default v2 upload, one request per layer, does not
+  hold the receive path on a token.
+
 ## Resume and safety properties
 
 - A layer digest already present in the target repository is skipped after a
@@ -124,7 +178,14 @@ explicitly without inventing a credential value.
 - Repository ACL and estimated-size quota checks occur at `BackupStart`, before
   data frames.
 - Actual bytes are checked again while receiving, so a dishonest estimate
-  cannot bypass the quota.
+  cannot bypass the quota. The client applies the same rule before sending a
+  layer: only layers the server does not skip count towards the announced
+  quota.
+- A v2 server bounds the received archive while scanning it (entry count, name
+  and owner lengths), not after holding all of it in memory.
+- A commit the registry refuses aborts the upload session and fails the
+  backup; a read-back that disagrees with what was pushed is an integrity
+  error (`ErrorIntegrity`, exit 5 on the client).
 - A v1 session writes no receiver-side layer data to disk; a v2 session writes
   at most the layer currently being assembled, in `--work-dir`, with mode 0600,
   and removes it on every exit path including cancellation.

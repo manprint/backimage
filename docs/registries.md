@@ -28,7 +28,12 @@ Le credenziali sono risolte in ordine:
 5. accesso anonimo.
 
 `auth.json` usa il formato Docker `auths`, viene scritto atomicamente con
-permessi 0600 e viene rifiutato se leggibile da gruppo o altri. I tre alias
+permessi 0600 e viene rifiutato se leggibile da gruppo o altri. Ogni modifica
+(`login`, `logout`) rilegge e riscrive il file tenendo un lock esclusivo su
+`auth.json.lock`, nella stessa directory: due `login` concorrenti, anche da
+processi diversi, non si cancellano più a vicenda gli account. La lettura non
+prende il lock, perché la pubblicazione per rename la rende già atomica. Il
+file `.lock` è vuoto e può restare sul disco. I tre alias
 `docker.io`, `index.docker.io` e `registry-1.docker.io` sono equivalenti.
 `--token` salva un bearer token già pronto; dopo un 401 la richiesta viene
 ritentata una sola volta.
@@ -81,7 +86,27 @@ prima con un backup piccolo.
 - 403 non viene ritentato;
 - ogni `PATCH` adotta il nuovo `Location` restituito dal registry;
 - i manifest di piattaforma vengono pubblicati prima dell'image index;
-- un checkpoint corrotto o riferito a un'altra reference blocca il resume.
+- un checkpoint corrotto o riferito a un'altra reference blocca il resume;
+- dopo il push blob, manifest e tag vengono riletti: un registry che non
+  conserva ciò che ha accettato (blob mancante o di altra lunghezza, manifest
+  diverso, tag che risolve altrove) fa fallire il backup con **exit 5**
+  (integrità), non 6 (rete), anche quando il push l'ha eseguito un server
+  `listen-remote`. La rilettura del manifest legge al più un byte oltre ciò che
+  è stato pubblicato.
+
+Il client registry tratta le risposte come input non fidato:
+
+- il `realm` della challenge `WWW-Authenticate` deve essere `http` o `https`,
+  e un registry raggiunto in `https` non può mandare lo scambio del token in
+  chiaro su `http`: la credenziale non lascerebbe mai TLS;
+- la challenge è letta come da RFC 7235: chiavi senza distinzione di maiuscole,
+  valori fra virgolette con escape, una virgoletta non chiusa è un errore;
+- la risposta del token server è limitata a 1 MiB, e una `expires_in` enorme
+  viene ridotta a un anno invece di andare in overflow;
+- l'elenco dei tag (`repo tags`, `repo stats`, `repo prune`, la base di
+  `--dedup`) segue la paginazione `Link` con un limite di 10.000 pagine,
+  1.000.000 di tag e 32 MiB per pagina, e si ferma con un errore su un `Link`
+  che torna a una pagina già vista invece di girare per sempre.
 
 Nessun log include password, token o contenuto di `auth.json`.
 

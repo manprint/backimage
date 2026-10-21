@@ -22,7 +22,7 @@ docker run --rm --network none --read-only --tmpfs /tmp \
 tar -xzf backimage_*.tar.gz && sudo install -m 0755 backimage /usr/local/bin/
 backimage version
 
-# da sorgente (Go 1.26+)
+# da sorgente (Go 1.27+)
 go install github.com/manprint/backimage/cmd/backimage@latest
 
 # container
@@ -119,11 +119,15 @@ integrità invece di ignorare in silenzio la credenziale: è esattamente
 l'aspetto che avrebbe un'immagine sostituita con una in chiaro. Per leggere di
 proposito backup misti c'è `--allow-unencrypted`.
 
-Senza `-x` né `-o` il tar va su stdout. Il digest in chiaro di ogni chunk viene
-verificato prima di scrivere qualsiasi cosa; `--strict` rifiuta di degradare
-anche una sola operazione di metadati, `--continue` salva tutto ciò che verifica
-e dichiara ciò che è andato perso. Per ownership, device node, ACL e xattr
-`trusted.*` il restore va eseguito come root.
+Senza `-x` né `-o` il tar viene scritto in `<repo>_<tag>.tar` dentro
+`--destination` (di default la directory corrente); soltanto `-o -` lo manda su
+stdout. Il digest in chiaro di ogni chunk viene verificato prima di scrivere
+qualsiasi cosa. Con `-x`, `--strict` rifiuta di degradare anche una sola
+operazione di metadati; `--continue` salva tutto ciò che verifica e dichiara ciò
+che è andato perso. Un flag che l'esito scelto ignorerebbe è un errore d'uso:
+`-o` insieme a `-x`, e `--strip-components`, `--strict` o `--no-preserve-*` su
+un restore tar. Per ownership, device node, ACL e xattr `trusted.*` il restore
+va eseguito come root.
 
 ### `restore` senza installare nulla
 
@@ -342,7 +346,7 @@ sparsi) e indica il rimedio per ogni capacità mancante.
 ```console
 # server
 backimage listen-remote --bind-address 0.0.0.0:7575 --tls-self-signed \
-  --auth-token-file ./token --allow-repo 'ghcr.io/me/*'
+  --auth-token-file ./token --allow-repo ghcr.io/me/
 
 # client: dalla macchina esce solo il flusso tar
 backimage backup /srv/data --repo ghcr.io/me/dumps --tag daily \
@@ -355,7 +359,13 @@ client non tiene mai né l'archivio né un layer e il suo uso di disco non cresc
 con la dimensione del backup (misurato: 4 KiB di spool sul client per un backup
 da 4 GiB). Il compromesso è dichiarato: **il server vede il plaintext**, perché è
 lui a cifrarlo. Usare `--remote-mode layers` quando il ricevente non deve
-vederlo.
+vederlo. In `layers` conviene la stessa versione su client e server: il client
+non invia il proprio self-extract, e un server di un'altra versione mette il suo
+nel layer 0. In quel caso il client rilegge l'immagine pubblicata, controlla che
+piattaforme, metadati e dati siano i suoi e la ripubblica con il proprio
+estrattore (avviso su stderr, exit 0); se differisce altro, o se la
+ripubblicazione fallisce, esce con 5. La riparazione la fa il client: un client
+fino alla 0.6.1 esce ancora con 5 contro un ricevente di un'altra build.
 
 Le credenziali del registry restano sul client, che consegna al server token
 bearer di breve durata attraverso TLS, validi solo per la sessione che li ha

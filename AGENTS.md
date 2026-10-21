@@ -1,6 +1,6 @@
 # AGENTS.md — guida operativa per backimage
 
-Ultimo consolidamento: 2026-08-11. Questo file si applica all'intero
+Ultimo consolidamento: 2026-10-21. Questo file si applica all'intero
 repository e serve come punto di ingresso per agenti e sviluppatori.
 
 ## Prima di iniziare
@@ -50,7 +50,7 @@ codice, path, nomi e dati sensibili o proprietari dalla descrizione pubblica.
 
 ## Stato funzionale attuale
 
-backimage è una CLI Go 1.26 che archivia file in immagini OCI eseguibili,
+backimage è una CLI Go 1.27 che archivia file in immagini OCI eseguibili,
 cifrate e multi-piattaforma. Il modulo è
 `github.com/manprint/backimage`.
 
@@ -124,6 +124,46 @@ wire e `pkg/transport` fornisce TCP/TLS e QUIC.
 In entrambi i modi le credenziali permanenti del registry restano sul client.
 Il client delega al server solo token bearer a scope e durata limitati, dentro
 la sessione TLS autenticata.
+
+Contratti del ricevente da non rompere:
+
+- la pubblicazione finale (dopo `StreamEnd` in v2, dopo l'ultimo `LayerEnd` in
+  v1) gira mentre la sessione continua a leggere il client
+  (`pkg/server/publish.go`): il token di cui ha bisogno può essere quello che
+  il client manda in quel momento. Si accettano keepalive e `Token`; `Cancel`
+  ferma la pubblicazione; altro è un errore d'uso. Test:
+  `pkg/server/session_publish_token_test.go`;
+- `--allow-repo` confronta prefissi letterali su componenti di path intere;
+  glob e voci vuote sono rifiutati prima del bind (`ValidateAllowedRepos`);
+- lo scan del tar v2 applica i limiti dell'indice (entry, lunghezza di nomi e
+  owner) mentre legge, non dopo;
+- un errore di `accept` transitorio si ritenta con backoff; uno fatale ferma il
+  server con quell'errore, invece di lasciarlo vivo e sordo.
+
+Contratto del client v1 (`--remote-mode layers`):
+
+- se il digest pubblicato dal ricevente differisce, il client rilegge per
+  digest (non per tag) l'indice dichiarato, con le proprie credenziali, e
+  accetta soltanto una differenza nel layer 0, il self-extract, e in ciò che ne
+  deriva (config, manifest, indice): stesse piattaforme, ogni altro layer stesso
+  blob (`onlySelfExtractDiffers`). Poi ripubblica la propria immagine con il
+  proprio estrattore, con verifica quick e senza checkpoint, e i contatori
+  restano quelli del ricevente (`republishOwnSelfExtract` in
+  `pkg/backup/remote.go`);
+- non accettare mai il layer 0 del ricevente: è il programma che `docker run`
+  esegue e che legge la passphrase, e `layers` esiste per un ricevente non
+  fidato;
+- ogni altra differenza è exit 5 (`registry.ErrPublishedMismatch`) senza
+  ripubblicazione; una ripubblicazione fallita è exit 5 e l'errore dice che il
+  tag contiene ancora l'estrattore del ricevente;
+- l'avviso della ripubblicazione passa da `Config.Warn`, non da `Progress`, e
+  `Result.SelfExtractRepublished` lo registra in `--json`.
+
+Test: `TestRemoteLayersRepublishesOwnSelfExtract`,
+`TestRemoteLayersOtherDataIsNotRepaired`,
+`TestRemoteLayersFailedRepairNamesTheTag`,
+`TestRemoteLayersInvalidDigestIsAnIntegrityFailure` e
+`TestOnlySelfExtractDiffers` (`pkg/backup`).
 
 ### Immagine auto-estraente
 
@@ -211,8 +251,16 @@ senza rete e senza backimage installato sull'host di destinazione.
   casuale, nessuna dipendenza dal numero di worker: `pkg/compress`
   `TestCodecOutputIsReproducible` e `TestZstdOutputIndependentOfWorkerCount`
   bloccano la proprietà, perché una sua rottura degrada la dedup in silenzio
-  invece di fallire.
+  invece di fallire. `TestCodecOutputMatchesThePinnedDigests` fissa invece i
+  byte fra versioni delle librerie: se un aggiornamento lo fa fallire, i nuovi
+  digest si aggiornano solo annunciando nel `CHANGELOG.md` il ricaricamento
+  una tantum dei backup `--dedup` con quel codec.
 - La passphrase del backup non è una credenziale del registry.
+- Da file e da stdin la passphrase è la **prima riga**, senza `\n` o `\r\n`
+  finale, con la stessa regola per entrambi; le letture delle versioni
+  precedenti restano solo come candidati di fallback in lettura
+  (`crypt.ReadPassphraseCandidates`), mai in scrittura. Test:
+  `pkg/crypt/passphrase_line_test.go`.
 - Non loggare password, token, DEK, passphrase o chiavi private.
 - Preferire file o stdin ai segreti sulla command line.
 - La modalità dedup convergente rivela uguaglianza fra chunk e richiede la
@@ -272,8 +320,19 @@ Test di riferimento: `pkg/archive/swap_test.go`,
 - Quando più account convivono, nessun fallback deve scegliere silenziosamente
   l'identità sbagliata.
 
-Test di riferimento: `pkg/registry/auth_multi_test.go` e
-`internal/cli/login_multi_test.go`.
+- Ogni modifica dello store passa da `fileStore.update`, che tiene un lock
+  esclusivo su `auth.json.lock` (flock su Unix, `LockFileEx` su Windows)
+  attorno a lettura-modifica-scrittura: senza, due `login` concorrenti si
+  cancellavano gli account. La lettura resta senza lock (rename atomico).
+- Le risposte del registry sono input non fidato: `realm` solo `http`/`https`
+  e mai `http` da un registry `https`, challenge letta come da RFC 7235,
+  risposta token ≤ 1 MiB, rilettura del manifest ≤ lunghezza pubblicata + 1,
+  elenco tag solo tramite `ListTagNames` (limiti di pagine, tag e byte,
+  guardia sui cicli di `Link`).
+
+Test di riferimento: `pkg/registry/auth_multi_test.go`,
+`internal/cli/login_multi_test.go`, `pkg/registry/auth_lock_test.go`,
+`pkg/registry/hardening_test.go` e `pkg/registry/tags_test.go`.
 
 ### Ambiente e precedenza CLI
 
@@ -339,9 +398,26 @@ Test di riferimento: `internal/cli/repo_prune_test.go` e
   le registrazioni plugin già previste.
 - Le funzioni che fanno I/O ricevono `context.Context` come primo parametro
   quando l'API lo consente.
-- Dati richiesti su stdout; log, warning e progress su stderr.
+- Dati richiesti su stdout; log, warning e progress su stderr. `--quiet`
+  toglie il progress, non i warning: in `pkg/backup` ciò che l'operatore non
+  deve perdere passa da `Config.Warn` (`printer.Warnf`), non da `Progress`.
 - Exit code CLI: 0 ok, 1 generico, 2 uso, 3 privilegi, 4 passphrase,
   5 integrità, 6 rete, 7 interrotto.
+- La classe di un errore si decide con `errors.Is`/`errors.As` sui sentinel,
+  non su sottostringhe del messaggio: `registry.ErrPublishedMismatch` → 5,
+  `backup.ErrPrivileges` e `fs.ErrPermission` → 3, i sentinel di passphrase →
+  4, `context.Canceled` e i segnali (SIGINT/SIGTERM in entrambi i `main`) → 7,
+  con 5 s di grazia dopo il primo segnale e uscita immediata al secondo
+  (`windDown`: un passo che non guarda il contesto non deve tenere vivo il
+  processo), un errore di rete (`net.Error` che non sia un `syscall.Errno`:
+  un `ENOENT` o un `ENOSPC` locale soddisfa anche lui l'interfaccia) → 6. Un
+  `*cli.Error` già classificato non va riclassificato. Test:
+  `internal/cli/exitcode_test.go`, `internal/cli/interrupt_test.go` e i
+  `signal_unix_test.go` dei due `main`.
+- Un flag che il comando ignorerebbe in silenzio è un errore d'uso (exit 2):
+  `-x` con `-o`, i flag di sola estrazione senza `-x`, i parametri
+  `--dedup-*` senza `--dedup`, `--remove-local-image` senza `--local-repo`,
+  `--verify-after-push full|off` con `--remote`.
 - Ogni package deve mantenere una package doc concisa.
 - Non aggiungere dipendenze senza autorizzazione e senza aggiornare
   `docs/DEPENDENCIES.md`.
@@ -357,9 +433,9 @@ corrente, non un elenco file obsoleto nel piano.
 
 Requisiti base:
 
-- Go 1.26 o superiore, con `toolchain go1.26.6` come minimo pinzato in `go.mod`;
-- `golangci-lint` v2.1.6 in `$HOME/go/bin/golangci-lint` (la configurazione è sullo schema v2; un binario della serie 1 non la sa leggere e `make lint` lo rifiuta prima di partire);
-- `protoc` 27.3 e `protoc-gen-go` v1.34.2 per `proto-check`;
+- Go 1.27 o superiore, con `toolchain go1.27.3` come minimo pinzato in `go.mod`;
+- `golangci-lint` v2.15.0 in `$HOME/go/bin/golangci-lint` (la configurazione è sullo schema v2; un binario della serie 1 non la sa leggere e `make lint` lo rifiuta prima di partire; il controllo accetta la versione con o senza la `v` iniziale). Va compilato con un Go non più vecchio di quello del modulo, come in CI: compilato con la 1.26 non sa leggere la standard library della 1.27 e riempie il rapporto di falsi `typecheck`. Un binario installato altrove si passa con `make lint GOLANGCI=/percorso/golangci-lint`;
+- `protoc` 36.2 e `protoc-gen-go` v1.36.12 per `proto-check`, la stessa versione del runtime `google.golang.org/protobuf` in `go.mod`. Con la v1.34.2 il file generato dipendeva dal Go con cui era compilato il plugin (un commento cambiava fra 1.26 e 1.27): la v1.36.12 produce gli stessi byte con entrambe;
 - Docker e QEMU solo per e2e/cross-arch;
 - CGO disabilitato per build normali; il race detector lo abilita.
 
@@ -402,14 +478,29 @@ make vuln
 ```
 
 `make vuln` esegue `govulncheck ./...`. Fa parte di `check`: `go.mod`
-pinza `toolchain go1.26.6`, che chiude tutte le advisory della standard
-library raggiungibili da questo codice. Le advisory che restano sono negli
-import e nei moduli richiesti e non risultano chiamate; sono elencate nel
-`CHANGELOG.md` della 0.5.0.
+pinza `toolchain go1.27.3`, con cui nessuna advisory della standard library
+risulta raggiungibile da questo codice (con la 1.26.6 erano 11, e la 1.27.2
+aveva ancora GO-2026-6809). Resta una sola advisory di modulo, non chiamata e
+senza correzione: GO-2026-5932 (`golang.org/x/crypto/openpgp`), elencata nel
+`CHANGELOG.md` della 0.5.0. `govulncheck` giudica la standard library del Go
+in uso, non il minimo: un Go locale senza la patch che chiude un'advisory fa
+fallire il gate anche se il codice è a posto, e `GOTOOLCHAIN=go1.27.3 make
+vuln` riproduce la toolchain della CI. Il minimo va rialzato quando una nuova
+advisory raggiungibile viene chiusa da una patch successiva.
 
 I test root-gated e alcuni e2e richiedono privilegi reali, xattr, ACL,
 capability, device/FIFO, Docker o rete. Non sostituirli con mock quando il gate
-richiede la semantica del kernel.
+richiede la semantica del kernel. Senza `sudo` si eseguono compilando il
+binario di test e lanciandolo come root in un container usa e getta:
+
+```console
+CGO_ENABLED=0 go test -c -tags root -o /tmp/archive.test ./pkg/archive
+docker run --rm -v /tmp:/t:ro --tmpfs /work:exec,mode=1777 -e TMPDIR=/work \
+  --entrypoint /t/archive.test debian:13 -test.count=1
+```
+
+Per `phase_01.sh` da root serve anche `--cap-add LINUX_IMMUTABLE` (il caso
+`chattr +i`).
 
 ## Scelta dei test per area
 
@@ -549,9 +640,12 @@ pubblicata da un branch in prova (per esempio `v0.2.3-dev.1`): GoReleaser la
 marca come pre-release e il tag GHCR `latest` non viene spostato. Non creare
 tag, release, push o pubblicazioni senza richiesta esplicita.
 
-Baseline verificata il 2026-08-11: `make check` verde, incluso race completo;
-immagine Docker avviata come `nonroot:nonroot` con nuovo named volume, coppia
-TLS persistente creata e nessun errore di permessi. Questa è una fotografia,
+Baseline verificata il 2026-10-21 con go1.27.3: `make check` verde con
+`proto-check` reale (`BACKIMAGE_REQUIRE_PROTOC=1`), incluso race completo;
+test root di `pkg/archive` e `test/fixtures` verdi in container; matrice e2e
+locale verde tranne la 06, che richiede QEMU arm64; immagine Docker avviata
+come `nonroot:nonroot` con nuovo named volume, coppia TLS persistente creata e
+riusata dopo il restart, nessun errore di permessi. Questa è una fotografia,
 non sostituisce il gate dopo nuove modifiche.
 
 ## Documentazione autorevole
@@ -585,6 +679,12 @@ non sostituisce il gate dopo nuove modifiche.
   sono presenti al momento di questo consolidamento.
 - Non dichiarare milestone v1.0.0 completata finché i gate formali e una
   release candidate firmata non sono verificati.
+- Nella fase dati di una sessione remota un `Token` dietro frame dati viene
+  letto solo quando la pipeline accetta quei frame: un passo che tiene il
+  ricevente (un chunk da 32 MiB del v1, o di `--upload-chunk-size`) più a
+  lungo del 40% della vita del token registry fallisce dopo 30 secondi e il
+  client ritenta. Descritto in `docs/protocol.md`; la pubblicazione finale non
+  ha più questo limite.
 
 ## Definition of Done per ogni modifica
 

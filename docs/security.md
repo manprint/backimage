@@ -353,18 +353,36 @@ suggerisce. Per questo:
   dell'utente e nessuno script esistente si rompe. Il messaggio non contiene mai
   la passphrase.
 
-La passphrase è trattata **byte per byte**, senza normalizzazione Unicode e senza
-trim oltre al singolo newline finale di `--passphrase-file` e
-`--passphrase-stdin`. Punteggiatura ASCII completa, spazi interni e finali, `\r`
-incorporato e UTF-8 multibyte arrivano intatti a scrypt su tutte le sorgenti
-(`--password`, `--passphrase-file`, `--passphrase-stdin`,
-`BACKIMAGE_PASSPHRASE`, prompt su `/dev/tty`); il contratto è bloccato da
-`TestReadPassphrasePreservesEveryByte` e
-`TestWrapUnwrapWithSpecialCharacters`. Due conseguenze pratiche: una passphrase
-non può contenere un newline se passa da file o stdin, e una passphrase con
-caratteri combinanti Unicode deve essere consegnata sempre nella stessa forma di
-normalizzazione (digitarla a mano dopo averla generata NFC/NFD può non
-coincidere) — motivo in più per usare `genpass` e un password manager.
+La passphrase è trattata **byte per byte**, senza normalizzazione Unicode.
+`--passphrase-file` e `--passphrase-stdin` seguono una sola regola: la passphrase
+è la **prima riga**, senza il suo terminatore (`\n` oppure `\r\n`). La stessa
+riga è quindi la stessa passphrase da qualunque sorgente: un backup sigillato da
+un cron con un file si apre digitando la stessa riga su stdin, anche da un
+terminale che chiude le righe con CRLF. Un file con altre righe non vuote dopo
+la prima produce un avviso (senza il contenuto) e se ne usa solo la prima; un
+file la cui prima riga è vuota non contiene una passphrase.
+Punteggiatura ASCII completa, spazi interni e finali, `\r` incorporato e UTF-8
+multibyte arrivano intatti a scrypt su tutte le sorgenti (`--password`,
+`--passphrase-file`, `--passphrase-stdin`, `BACKIMAGE_PASSPHRASE`, prompt su
+`/dev/tty`); il contratto è bloccato da `TestReadPassphrasePreservesEveryByte`,
+`TestPassphraseFileAndStdinReadTheSameLine` e
+`TestWrapUnwrapWithSpecialCharacters`. `BACKIMAGE_PASSPHRASE` vuota equivale a
+non impostata.
+
+Fino alla 0.6.1 le due sorgenti leggevano in modo diverso: il file per intero
+meno un solo newline finale (`pass\n\n` era `pass\n`, un file di più righe una
+passphrase multilinea), stdin la prima riga con l'eventuale `\r`. Per non
+rendere illeggibili i backup sigillati così, chi **legge** un backup (restore,
+verify, ls, find, inspect, l'autoestraente e il backup di riferimento di
+`--dedup`) prova prima la lettura attuale e poi, solo se diversa e solo davanti
+a una passphrase errata, quella vecchia dello stesso input. Un backup nuovo è
+sempre sigillato con la lettura attuale.
+
+Due conseguenze pratiche: una passphrase non può contenere un newline se passa
+da file o stdin, e una passphrase con caratteri combinanti Unicode deve essere
+consegnata sempre nella stessa forma di normalizzazione (digitarla a mano dopo
+averla generata NFC/NFD può non coincidere) — motivo in più per usare `genpass`
+e un password manager.
 
 ## Limite noto: il binario `/backimage` non è firmato
 
@@ -389,6 +407,44 @@ non esegue il controllo che gli si chiede di fare. La difesa è **fuori banda**:
 
 `docker run IMAGE restore` resta il percorso comodo e va bene per un'immagine
 che non ha mai lasciato un perimetro fidato.
+
+### Client e ricevente v1 di versioni diverse
+
+In `--remote-mode layers` il client non invia il proprio self-extract (ognuno
+supera la dimensione massima di un frame), quindi il ricevente costruisce il
+layer 0 con quello della propria build. Fino alla 0.6.1, fra versioni diverse,
+il tag restava sull'immagine del ricevente, con il suo `/backimage`, e solo
+l'exit 5 del client segnalava la differenza. Accettare quel layer 0 vorrebbe dire
+lasciare a un ricevente non fidato, quello per cui `layers` esiste, la scelta del
+programma che `docker run` esegue e che legge la passphrase.
+
+Ora il client rilegge per digest l'indice che il ricevente dichiara, con le
+proprie credenziali, e lo tratta come differenza di versione solo se le
+piattaforme e ogni layer diverso dal layer 0 (metadati e dati) coincidono con i
+suoi. In quel caso avvisa e ripubblica la propria immagine, con il proprio
+estrattore: il tag finisce sul digest del client. Ogni altra differenza resta
+exit 5, senza ripubblicazione. Da qui una versione diversa non si distingue da
+un estrattore sostituito, e la ripubblicazione copre entrambi i casi. L'avviso
+arriva su stderr anche con `--quiet`, e `--json` riporta
+`"selfExtractRepublished": true`. La correzione sta nel client: un client fino
+alla 0.6.1 contro un ricevente di un'altra build lascia ancora il tag
+sull'estrattore del ricevente ed esce con 5, anche se il ricevente è
+aggiornato.
+
+Restano due finestre:
+
+- fra la pubblicazione del ricevente e la ripubblicazione del client il tag
+  risolve all'immagine del ricevente: un `docker run` di quel tag in
+  quell'intervallo esegue il suo estrattore. Se la ripubblicazione fallisce
+  l'errore lo dice e il tag resta lì: non va eseguito con `docker run` e il
+  backup va ripetuto (`backimage restore` non esegue il layer 0, e i layer che
+  legge sono stati verificati come quelli del client);
+- un ricevente malevolo tiene il token di push delegato fino alla sua scadenza
+  (scope del solo repository, durata limitata) e può ritaggare dopo la
+  sessione. Vale con qualsiasi versione, come prima di questa correzione.
+
+Riferire l'immagine per il digest che il client stampa, come raccomandato
+sopra, chiude entrambe.
 
 ### `--expect-digest`: ancorare la lettura a un valore esterno (0.5.0)
 

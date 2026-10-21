@@ -22,7 +22,7 @@ docker run --rm --network none --read-only --tmpfs /tmp \
 tar -xzf backimage_*.tar.gz && sudo install -m 0755 backimage /usr/local/bin/
 backimage version
 
-# from source (Go 1.26+)
+# from source (Go 1.27+)
 go install github.com/manprint/backimage/cmd/backimage@latest
 
 # container
@@ -118,11 +118,14 @@ instead of quietly ignoring the credential — that is what a substituted
 plaintext image would look like. Use `--allow-unencrypted` when reading mixed
 backups on purpose.
 
-Without `-x` or `-o` a tar goes to stdout. Each chunk's plaintext digest is
-verified before anything is written; `--strict` refuses to degrade a single
-metadata operation, `--continue` salvages every entry that verifies and reports
-the ones lost. For ownership, device nodes, ACLs and `trusted.*` xattrs, run the
-restore as root.
+Without `-x` or `-o` the tar is written to `<repo>_<tag>.tar` in
+`--destination` (the current directory by default); only `-o -` writes it to
+stdout. Each chunk's plaintext digest is verified before anything is written.
+With `-x`, `--strict` refuses to degrade a single metadata operation;
+`--continue` salvages every entry that verifies and reports the ones lost. A
+flag the chosen outcome would ignore is a usage error: `-o` next to `-x`, and
+`--strip-components`, `--strict` or `--no-preserve-*` on a tar restore. For
+ownership, device nodes, ACLs and `trusted.*` xattrs, run the restore as root.
 
 ### `restore` without installing anything
 
@@ -336,7 +339,7 @@ files) and gives the remedy for each capability that is missing.
 ```console
 # server
 backimage listen-remote --bind-address 0.0.0.0:7575 --tls-self-signed \
-  --auth-token-file ./token --allow-repo 'ghcr.io/me/*'
+  --auth-token-file ./token --allow-repo ghcr.io/me/
 
 # client: only the tar stream leaves the machine
 backimage backup /srv/data --repo ghcr.io/me/dumps --tag daily \
@@ -348,7 +351,13 @@ In the default `stream` mode the server runs the whole pipeline, so the client
 never holds the archive or a layer and its disk use does not grow with the
 backup size (measured: 4 KiB of client spool for a 4 GiB backup). The trade-off
 is explicit: **the server sees the plaintext**, because it is the one encrypting
-it. Use `--remote-mode layers` when the receiver must not.
+it. Use `--remote-mode layers` when the receiver must not. In `layers` mode the
+same backimage version on both sides is recommended: a server of another
+version puts its own self-extract in layer 0, and the client, once it has
+checked that platforms, metadata and data are its own, republishes the image
+with its own extractor (exit 0, with a warning); any other difference, or a
+failed republish, exits 5. The repair is the client's: a client up to 0.6.1
+still exits 5 against a receiver of another build, upgraded or not.
 
 Registry credentials stay on the client, which hands the server short-lived
 bearer tokens over TLS, scoped to the session that supplied them. The scope is

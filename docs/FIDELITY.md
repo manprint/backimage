@@ -252,7 +252,7 @@ that was never read.
 
 What says the bytes are missing is `Stats.ContentSkipped`, surfaced as
 `contentSkipped` in `backup --json` and as a warning line on every run that has
-one. A restore materialises those entries as empty files.
+one, `--quiet` included. A restore materialises those entries as empty files.
 
 Until this was fixed the digest was simply left empty, which the index schema
 rejects (`entry[N] bad sha256`): a single unreadable file made the whole backup

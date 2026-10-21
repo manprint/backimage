@@ -135,7 +135,7 @@ decompressione in più, non memoria in più.
 | `--timestamp-format` | `20060102T150405Z` | layout Go del timestamp |
 | `--compression` | `zstd` | `zstd`, `gzip`, `xz`, `lz4`, `none` |
 | `--compression-level` | codec | livello del codec |
-| `--max-layer-size` | `1GiB` | obiettivo per un layer dati |
+| `--max-layer-size` | `1GiB` | obiettivo per un layer dati; minimo 16 MiB (un valore inferiore viene alzato, con un avviso) |
 | `--encrypt` | true | cifra i chunk |
 | `--no-encrypt` | false | backup in chiaro |
 | `--passphrase-file` | — | legge la passphrase da file |
@@ -152,7 +152,7 @@ decompressione in più, non memoria in più.
 | `--one-file-system` | false | non attraversa mount point: la directory su cui qualcosa è montato viene archiviata, ciò che sta oltre no (come `tar --one-file-system` e `rsync -x`) |
 | `--numeric-owner` | false | non risolve nomi utente/gruppo |
 | `--allow-degraded` | false | continua sulle feature non disponibili |
-| `--verify-after-push` | quick | rilettura post-push: `quick` (digest di blob e manifest, nessun download), `full` (riscarica ogni layer e ricalcola i digest memorizzati, in streaming), `off` |
+| `--verify-after-push` | quick | rilettura post-push: `quick` (digest di blob e manifest, nessun download), `full` (riscarica ogni layer e ricalcola i digest memorizzati, in streaming), `off`; con `--remote` solo `quick`, perché pubblica il ricevente |
 | `--no-metadata` | false | omette sorgenti e host dalle label |
 | `--dry-run` | false | piano senza rete o scritture |
 | `--resume` | true | usa checkpoint |
