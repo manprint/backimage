@@ -24,10 +24,26 @@ func EnvVarFor(flagName string) string {
 // be configured entirely through env vars while still allowing an override on
 // the command line. Repeatable flags accept a comma-separated list.
 func applyEnvDefaults(cmd *cobra.Command) error {
+	explicit := map[string]bool{}
+	mark := func(f *pflag.Flag) {
+		if f.Changed {
+			explicit[f.Name] = true
+		}
+	}
+	cmd.InheritedFlags().VisitAll(mark)
+	cmd.Flags().VisitAll(mark)
 	var errs []error
 	apply := func(f *pflag.Flag) {
 		if f.Changed {
 			return
+		}
+		for _, alt := range envAlternatives(f.Name) {
+			if explicit[alt] {
+				// The command line chose the other source for this
+				// setting: filling this one would turn its override into
+				// a conflict.
+				return
+			}
 		}
 		raw, ok := os.LookupEnv(EnvVarFor(f.Name))
 		if !ok {
@@ -50,4 +66,17 @@ func applyEnvDefaults(cmd *cobra.Command) error {
 	cmd.InheritedFlags().VisitAll(apply)
 	cmd.Flags().VisitAll(apply)
 	return errors.Join(errs...)
+}
+
+// envAlternatives returns the flags that give the same setting from another
+// source as name. The environment never fills a flag whose alternative was
+// passed on the command line.
+func envAlternatives(name string) []string {
+	switch name {
+	case "auth-token":
+		return []string{"auth-token-file"}
+	case "auth-token-file":
+		return []string{"auth-token"}
+	}
+	return nil
 }

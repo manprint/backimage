@@ -40,8 +40,15 @@ func Execute(ctx context.Context, args []string) error {
 	root := NewRootCommand()
 	root.SetArgs(args)
 	root.SetContext(WithLogger(ctx, NewLoggerFor(os.Stderr, countVerbose(args))))
-	err := root.ExecuteContext(ctx)
-	return classify(err)
+	err := classify(root.ExecuteContext(ctx))
+	if err != nil && ctx.Err() != nil && ExitCodeFor(err) != int(KindInterrupted) {
+		// ctx is what SIGINT and SIGTERM cancel. Whatever a command made of
+		// the cancellation — a refused network call, a cut stream, an
+		// unfinished extraction — the run was interrupted, and exit 7 is
+		// how a script tells that apart from a failure.
+		return &Error{Kind: KindInterrupted, Msg: "interrotto", Err: err}
+	}
+	return err
 }
 
 // classify maps cobra-level usage errors (unknown command/flag) to KindUsage.

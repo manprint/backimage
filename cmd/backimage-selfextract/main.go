@@ -5,6 +5,10 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/signal"
+	"strings"
+	"syscall"
+	"time"
 
 	"github.com/manprint/backimage/internal/buildinfo"
 )
@@ -15,10 +19,63 @@ var (
 )
 
 func main() {
-	if err := run(context.Background(), os.Args[1:]); err != nil {
+	os.Exit(mainExit(os.Args[1:]))
+}
+
+// signalGrace is how long a run has, after the first SIGINT or SIGTERM, to
+// wind down on its own before the process ends anyway.
+const signalGrace = 5 * time.Second
+
+// mainExit runs one command and returns the process exit status.
+//
+// SIGINT and SIGTERM cancel the run instead of ending the process: the
+// extraction stops between entries and reports how it ended, and the exit
+// status is the documented 7 rather than the 130/143 of a killed process. In
+// a container this binary is PID 1, and the kernel delivers no default action
+// to PID 1 at all: without a handler `docker stop` waits out its timeout and
+// falls back to SIGKILL. A read that does not watch the context — a blob or
+// a passphrase FIFO nobody writes, a terminal prompt — would hold the process
+// just the same, so a second signal, or the grace period running out, ends it
+// at once with exit 7.
+func mainExit(args []string) int {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	signals := make(chan os.Signal, 2)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(signals)
+	go windDown(signals, cancel, signalGrace, func() {
+		fmt.Fprintln(stderr, "errore: interrotto")
+		os.Exit(exitInterrupted)
+	})
+	err := interrupted(ctx, run(ctx, args))
+	if err != nil {
 		fmt.Fprintln(stderr, "errore:", err)
-		os.Exit(exitCode(err))
 	}
+	return exitCode(err)
+}
+
+// windDown cancels the run on the first signal and calls exit on the second,
+// or once grace has passed without the run ending first.
+func windDown(signals <-chan os.Signal, cancel context.CancelFunc, grace time.Duration, exit func()) {
+	<-signals
+	cancel()
+	timer := time.NewTimer(grace)
+	defer timer.Stop()
+	select {
+	case <-signals:
+	case <-timer.C:
+	}
+	exit()
+}
+
+// interrupted reports a run that failed after ctx was cancelled as
+// interrupted, whatever the command made of the cancellation: a truncated
+// stream is a consequence of the signal, not damage in the backup.
+func interrupted(ctx context.Context, err error) error {
+	if err == nil || ctx.Err() == nil {
+		return err
+	}
+	return withCode(exitInterrupted, fmt.Errorf("interrotto: %w", err))
 }
 
 func run(ctx context.Context, args []string) error {
@@ -29,7 +86,7 @@ func run(ctx context.Context, args []string) error {
 		usage(stdout)
 		return nil
 	}
-	if args[0][0] == '-' {
+	if strings.HasPrefix(args[0], "-") {
 		return cmdInfo(ctx, args)
 	}
 	switch args[0] {

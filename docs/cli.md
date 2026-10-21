@@ -90,15 +90,15 @@ backimage backup <PATH...> --repo IMAGE [flags]
   -h, --help                       help for backup
       --jobs int                   number of concurrent blob uploads (default 3)
       --local-repo                 output to the Docker daemon instead of a registry
-      --max-layer-size string      target size of each OCI layer, e.g. 512MiB, 2GiB (default "1GiB")
+      --max-layer-size string      target size of each OCI layer, e.g. 512MiB, 2GiB; at least 16MiB (a smaller value is raised, with a warning) (default "1GiB")
       --no-encrypt                 disable encryption (exclusive with --encrypt)
       --no-metadata                omit source paths from labels
       --numeric-owner              do not resolve user/group names
       --one-file-system            do not cross mount points
       --output string              registry|daemon|oci-layout|tar (default "registry")
       --output-path string         destination for oci-layout/tar
-      --passphrase-file string     read the passphrase from a file
-      --passphrase-stdin           read the passphrase from stdin
+      --passphrase-file string     read the passphrase from the first line of a file
+      --passphrase-stdin           read the passphrase from the first line of stdin
       --password string            passphrase (visible in shell history and process listings)
       --platform strings           self-extract platforms (repeatable) (default [linux/amd64,linux/arm64])
       --recipient strings          age public key (repeatable)
@@ -119,7 +119,7 @@ backimage backup <PATH...> --repo IMAGE [flags]
       --tls-pin string             remote server certificate SHA-256 fingerprint, hex only (drop the SHA256: prefix printed by the server)
       --udp                        use QUIC instead of TCP for --remote
       --upload-chunk-size string   split each blob upload into HTTP chunks of this size, e.g. 32MiB; 0 sends one request per blob (fastest, use a value only for a registry that refuses large bodies) (default "0")
-      --verify-after-push string   read back the published image: quick (blob and manifest digests, no download), full (re-download every layer and recompute each stored digest), off (default "quick")
+      --verify-after-push string   read back the published image: quick (blob and manifest digests, no download), full (re-download every layer and recompute each stored digest), off; with --remote the receiver publishes and always reads back quick (default "quick")
 ```
 
 ### Options inherited from parent commands
@@ -210,7 +210,7 @@ backimage find IMAGE PATTERN [flags]
   -l, --long                     long listing: mode, owner, size and modification time
       --oci-layout string        read the image from this local OCI layout directory
       --passphrase-file string   read the backup passphrase from this file (first line)
-      --passphrase-stdin         read the backup passphrase from stdin
+      --passphrase-stdin         read the backup passphrase from stdin (first line)
       --password ps              backup passphrase inline (visible in shell history and in ps: prefer --passphrase-file)
       --platform string          platform variant to read from the multi-arch image, OS/ARCH (default "linux/amd64")
 ```
@@ -325,7 +325,7 @@ backimage inspect IMAGE [flags]
       --local-repo               read the image from the local Docker daemon instead of a registry
       --oci-layout string        read the image from this local OCI layout directory
       --passphrase-file string   read the backup passphrase from this file (first line)
-      --passphrase-stdin         read the backup passphrase from stdin
+      --passphrase-stdin         read the backup passphrase from stdin (first line)
       --password ps              backup passphrase inline (visible in shell history and in ps: prefer --passphrase-file)
       --platform string          platform variant to read from the multi-arch image, OS/ARCH (default "linux/amd64")
 ```
@@ -366,7 +366,7 @@ backimage listen-remote [flags]
 ### Options
 
 ```
-      --allow-repo strings         repository prefix a client may push to, e.g. ghcr.io/team/ (repeatable; empty = any)
+      --allow-repo strings         repository prefix a client may push to, matched on whole path components, e.g. ghcr.io/team/ (literal, no globs; repeatable; empty = any)
       --also-tcp                   when using --udp, also listen on TCP at the same address
       --auth-token string          pre-shared client authentication token
       --auth-token-file string     read the pre-shared token from a file
@@ -543,7 +543,7 @@ backimage ls IMAGE [PATH] [flags]
   -l, --long                     long listing: mode, owner, size and modification time
       --oci-layout string        read the image from this local OCI layout directory
       --passphrase-file string   read the backup passphrase from this file (first line)
-      --passphrase-stdin         read the backup passphrase from stdin
+      --passphrase-stdin         read the backup passphrase from stdin (first line)
       --password ps              backup passphrase inline (visible in shell history and in ps: prefer --passphrase-file)
       --platform string          platform variant to read from the multi-arch image, OS/ARCH (default "linux/amd64")
 ```
@@ -855,8 +855,10 @@ restore a backup image to disk or to a tar file.
 
 IMAGE is the reference to restore (or --repo, or a local source with
 --local-repo/--oci-layout). Choose one of two outcomes: -x extracts into
---destination, -o writes a tar file (- for stdout). Without either, a tar
-is written to stdout.
+--destination, -o writes a tar file (- for stdout). Without either, the
+tar is written to <repo>_<tag>.tar in --destination; only -o - writes to
+stdout. -o is refused with -x, and the extraction-only flags
+(--strip-components, --strict, --no-preserve-*) without it.
 
   # extract everything into /restore
   backimage restore ghcr.io/me/dumps:daily -x -C /restore --passphrase-file ./pass
@@ -895,10 +897,10 @@ backimage restore [IMAGE] [flags]
   -o, --output string            write the archive to this tar file; - means stdout
       --overwrite                allow writing over an existing tar file or a non-empty destination
       --passphrase-file string   read the backup passphrase from this file (first line)
-      --passphrase-stdin         read the backup passphrase from stdin
+      --passphrase-stdin         read the backup passphrase from stdin (first line)
       --password ps              backup passphrase inline (visible in shell history and in ps: prefer --passphrase-file)
       --platform string          platform variant to read from the multi-arch image, OS/ARCH (default "linux/amd64")
-      --remove-local-image       delete the pulled Docker image once the restore succeeded
+      --remove-local-image       with --local-repo: delete the image from the Docker daemon once the restore reproduced it 1:1 (kept after any difference, with or without --strict)
       --repo string              image reference (alias for positional IMAGE)
       --strict                   abort the extraction when a metadata operation is refused, instead of degrading and reporting it; the few losses that cannot be prevented on the destination (extended attributes the filesystem refuses outright, trusted.* without CAP_SYS_ADMIN) do not stop the run but make it exit 8
       --strip-components int     drop this many leading path components from each restored path (like tar)
@@ -952,7 +954,7 @@ backimage verify IMAGE [flags]
       --local-repo               read the image from the local Docker daemon instead of a registry
       --oci-layout string        read the image from this local OCI layout directory
       --passphrase-file string   read the backup passphrase from this file (first line)
-      --passphrase-stdin         read the backup passphrase from stdin
+      --passphrase-stdin         read the backup passphrase from stdin (first line)
       --password ps              backup passphrase inline (visible in shell history and in ps: prefer --passphrase-file)
       --platform string          platform variant to read from the multi-arch image, OS/ARCH (default "linux/amd64")
       --quick                    check public metadata and layer digests only, without downloading the data layers

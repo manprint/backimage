@@ -160,7 +160,13 @@ func cmdTar(ctx context.Context, args []string) error {
 	defer b.Close()
 	b.SetProgress(func(message string) { progress.WriteLine(stderr, message) })
 	progress.WriteLine(stderr, "restore: ricostruzione tar in corso")
-	if err := b.StreamTar(ctx, stdout, !*noVerify); err != nil {
+	out := &outputWriter{w: stdout}
+	if err := b.StreamTar(ctx, out, !*noVerify); err != nil {
+		if out.err != nil {
+			// A full disk or a closed pipe downstream says nothing about the
+			// backup: exit 5 is reserved for data that failed its checks.
+			return fmt.Errorf("scrittura del tar su stdout: %w", out.err)
+		}
 		if exitCode(err) == exitPassphrase {
 			return err
 		}
@@ -168,6 +174,21 @@ func cmdTar(ctx context.Context, args []string) error {
 	}
 	progress.WriteLine(stderr, "restore: ricostruzione tar completata")
 	return nil
+}
+
+// outputWriter remembers the first error writing the command's output, so a
+// failure of the destination is told apart from a failure of the backup.
+type outputWriter struct {
+	w   io.Writer
+	err error
+}
+
+func (o *outputWriter) Write(p []byte) (int, error) {
+	n, err := o.w.Write(p)
+	if err != nil && o.err == nil {
+		o.err = err
+	}
+	return n, err
 }
 
 func cmdExtract(ctx context.Context, args []string) error {
@@ -236,6 +257,12 @@ func cmdExtract(ctx context.Context, args []string) error {
 		if err != nil {
 			return usageErrorf("%v", err)
 		}
+		if len(selected) == 0 {
+			// Same answer as the host binary: a filter that matches nothing
+			// is a mistake to report, not an extraction of nothing that
+			// exits 0.
+			return usageErrorf("nessuna voce selezionata su %d; usa `list` per vedere i percorsi", len(idx.Entries))
+		}
 	}
 	if *keepGoing && idx == nil {
 		// The partial recovery maps damaged chunks to entries, so it needs the
@@ -251,6 +278,11 @@ func cmdExtract(ctx context.Context, args []string) error {
 	go func() {
 		var err error
 		switch {
+		case *keepGoing && selected != nil:
+			// Tolerating damaged chunks and honouring the filters are
+			// independent: the tolerant stream alone wrote the whole
+			// backup, and with --overwrite wrote it over the destination.
+			partial, err = b.StreamSelectedTarPartial(ctx, idx, selected, pw, true)
 		case *keepGoing:
 			partial, err = b.StreamTarPartial(ctx, idx, pw, true)
 		case selected != nil:
@@ -298,9 +330,29 @@ func cmdExtract(ctx context.Context, args []string) error {
 	// and fully reported either way; what a tolerated metadata loss must not
 	// do is exit 0. See strictFidelityError in internal/cli/restore.go.
 	fidelityErr := strictFidelityError(*strict, stats)
+	// Entries lost to damaged chunks are missing data: that is exit 5 in
+	// every output format, and it outranks a fidelity verdict on what did
+	// come back.
+	var partialErr error
+	if *keepGoing && partial.Skipped > 0 {
+		partialErr = withCode(exitIntegrity, fmt.Errorf(
+			"recupero parziale: %d entry non recuperate dai chunk danneggiati %v", partial.Skipped, partial.BadChunks))
+	}
 	if *asJSON {
-		if err := json.NewEncoder(stdout).Encode(stats); err != nil {
+		// The stats keep their top-level keys; a partial recovery adds the
+		// report of what it could not write.
+		result := struct {
+			archive.Stats
+			Partial *recovery.PartialReport `json:"partial,omitempty"`
+		}{Stats: stats}
+		if *keepGoing {
+			result.Partial = &partial
+		}
+		if err := json.NewEncoder(stdout).Encode(result); err != nil {
 			return err
+		}
+		if partialErr != nil {
+			return partialErr
 		}
 		return fidelityErr
 	}
@@ -326,10 +378,9 @@ func cmdExtract(ctx context.Context, args []string) error {
 		for _, line := range partial.Summary() {
 			fmt.Fprintln(stdout, line)
 		}
-		if partial.Skipped > 0 {
-			return withCode(exitIntegrity, fmt.Errorf(
-				"recupero parziale: %d entry non recuperate dai chunk danneggiati %v", partial.Skipped, partial.BadChunks))
-		}
+	}
+	if partialErr != nil {
+		return partialErr
 	}
 	return fidelityErr
 }

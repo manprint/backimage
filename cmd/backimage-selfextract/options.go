@@ -5,7 +5,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"os"
 
 	"github.com/manprint/backimage/pkg/crypt"
 	"github.com/manprint/backimage/pkg/index"
@@ -25,8 +24,8 @@ func newFlagSet(name string, common *commonOptions) *flag.FlagSet {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	fs.StringVar(&common.root, "root", "/backup", "backup root")
-	fs.StringVar(&common.passphraseFile, "passphrase-file", "", "read passphrase from file")
-	fs.BoolVar(&common.passphraseStdin, "passphrase-stdin", false, "read passphrase from stdin")
+	fs.StringVar(&common.passphraseFile, "passphrase-file", "", "read passphrase from the first line of file")
+	fs.BoolVar(&common.passphraseStdin, "passphrase-stdin", false, "read passphrase from the first line of stdin")
 	fs.StringVar(&common.password, "password", "", "passphrase (visible in shell history and process listings)")
 	fs.StringVar(&common.identity, "identity", "", "age private key file")
 	fs.BoolVar(&common.allowUnencrypted, "allow-unencrypted", false,
@@ -48,8 +47,8 @@ func (o commonOptions) hasCredential() bool {
 	if o.identity != "" || o.passphraseFile != "" || o.passphraseStdin || o.password != "" {
 		return true
 	}
-	_, ok := os.LookupEnv("BACKIMAGE_PASSPHRASE")
-	return ok
+	// An empty variable is an unset one, as in the host binary.
+	return crypt.PassphraseEnvSet("")
 }
 
 func (o commonOptions) unlock(ctx context.Context, b *recovery.Backup, required bool) error {
@@ -69,18 +68,30 @@ func (o commonOptions) unlock(ctx context.Context, b *recovery.Backup, required 
 	if o.password != "" {
 		direct = []byte(o.password)
 	}
-	pass, err := crypt.ReadPassphrase(crypt.PassphraseSource{
+	candidates, err := crypt.ReadPassphraseCandidates(crypt.PassphraseSource{
 		Direct: direct, File: o.passphraseFile, Stdin: o.passphraseStdin,
 		EnvVar: "BACKIMAGE_PASSPHRASE", Prompt: required,
 	})
 	if err != nil {
 		return err
 	}
-	defer wipe(pass)
-	if err := b.Unlock(ctx, crypt.Identity{Passphrase: pass}); err != nil {
-		return unlockError(err)
+	defer func() {
+		for _, p := range candidates {
+			wipe(p)
+		}
+	}()
+	// Each reading of the input in turn, current first; as in the host
+	// binary, only a wrong passphrase moves on to the next one.
+	for _, pass := range candidates {
+		err = b.Unlock(ctx, crypt.Identity{Passphrase: pass})
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, crypt.ErrWrongPassphrase) {
+			break
+		}
 	}
-	return nil
+	return unlockError(err)
 }
 
 // unlockError keeps the extractor's diagnosis aligned with the host binary's:

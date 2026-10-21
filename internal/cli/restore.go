@@ -48,8 +48,9 @@ func (f sourceFlags) hasCredential() bool {
 	if f.identity != "" || f.passphraseFile != "" || f.passphraseStdin || f.password != "" {
 		return true
 	}
-	_, ok := os.LookupEnv("BACKIMAGE_PASSPHRASE")
-	return ok
+	// An empty variable is an unset one: exporting BACKIMAGE_PASSPHRASE=""
+	// states no expectation about the backup.
+	return crypt.PassphraseEnvSet("")
 }
 
 var (
@@ -69,7 +70,7 @@ func addSourceFlags(f *cobra.Command, repoAlias bool) {
 	flags.String("platform", "linux/amd64", "platform variant to read from the multi-arch image, OS/ARCH")
 	flags.String("cache-size", "2GiB", "maximum size of the downloaded-layer cache, e.g. 512MiB, 4GiB (0 disables it)")
 	flags.String("passphrase-file", "", "read the backup passphrase from this file (first line)")
-	flags.Bool("passphrase-stdin", false, "read the backup passphrase from stdin")
+	flags.Bool("passphrase-stdin", false, "read the backup passphrase from stdin (first line)")
 	flags.String("password", "", "backup passphrase inline (visible in shell history and in `ps`: prefer --passphrase-file)")
 	flags.String("identity", "", "age private key file, for a backup encrypted with --recipient")
 	flags.Bool("allow-unencrypted", false, "accept an unencrypted backup even when a passphrase or an identity was supplied")
@@ -183,29 +184,44 @@ func unlockBackup(ctx context.Context, b *recovery.Backup, flags sourceFlags, re
 	if flags.passwordSet && flags.password == "" {
 		return &Error{Kind: KindUsage, Msg: "--password non può essere vuota"}
 	}
-	hasEnv := false
-	if _, ok := os.LookupEnv("BACKIMAGE_PASSPHRASE"); ok {
-		hasEnv = true
-	}
-	if !required && flags.password == "" && flags.passphraseFile == "" && !flags.passphraseStdin && !hasEnv {
+	if !required && !flags.hasCredential() {
 		return nil
 	}
 	var direct []byte
 	if flags.password != "" {
 		direct = []byte(flags.password)
 	}
-	pass, err := crypt.ReadPassphrase(crypt.PassphraseSource{
+	candidates, err := crypt.ReadPassphraseCandidates(crypt.PassphraseSource{
 		Direct: direct, File: flags.passphraseFile, Stdin: flags.passphraseStdin,
 		EnvVar: "BACKIMAGE_PASSPHRASE", Prompt: required,
 	})
 	if err != nil {
 		return &Error{Kind: KindPassphrase, Msg: "passphrase richiesta", Err: err}
 	}
-	defer wipeBytes(pass)
-	if err := b.Unlock(ctx, crypt.Identity{Passphrase: pass}); err != nil {
+	defer func() {
+		for _, p := range candidates {
+			wipeBytes(p)
+		}
+	}()
+	if err := unlockWithCandidates(ctx, b, candidates); err != nil {
 		return unlockError("passphrase errata", err)
 	}
 	return nil
+}
+
+// unlockWithCandidates tries each reading of the passphrase input in order
+// (crypt.ReadPassphraseCandidates) and stops at the first that opens the
+// backup, or at the first failure that is not a wrong passphrase: an integrity
+// failure is an answer about the backup, and trying again would hide it.
+func unlockWithCandidates(ctx context.Context, b *recovery.Backup, candidates [][]byte) error {
+	var err error
+	for _, pass := range candidates {
+		err = b.Unlock(ctx, crypt.Identity{Passphrase: pass})
+		if err == nil || !errors.Is(err, crypt.ErrWrongPassphrase) {
+			return err
+		}
+	}
+	return err
 }
 
 // unlockError classifies a failed unlock.
@@ -264,8 +280,10 @@ func newRestoreCommand() *cobra.Command {
 		Long: "restore a backup image to disk or to a tar file.\n\n" +
 			"IMAGE is the reference to restore (or --repo, or a local source with\n" +
 			"--local-repo/--oci-layout). Choose one of two outcomes: -x extracts into\n" +
-			"--destination, -o writes a tar file (- for stdout). Without either, a tar\n" +
-			"is written to stdout.\n\n" +
+			"--destination, -o writes a tar file (- for stdout). Without either, the\n" +
+			"tar is written to <repo>_<tag>.tar in --destination; only -o - writes to\n" +
+			"stdout. -o is refused with -x, and the extraction-only flags\n" +
+			"(--strip-components, --strict, --no-preserve-*) without it.\n\n" +
 			"  # extract everything into /restore\n" +
 			"  backimage restore ghcr.io/me/dumps:daily -x -C /restore --passphrase-file ./pass\n\n" +
 			"  # only the PDFs, without the leading directory level\n" +
@@ -289,7 +307,7 @@ func newRestoreCommand() *cobra.Command {
 	f.Bool("no-preserve-xattrs", false, "do not restore extended attributes")
 	f.Bool("strict", false, "abort the extraction when a metadata operation is refused, instead of degrading and reporting it; the few losses that cannot be prevented on the destination (extended attributes the filesystem refuses outright, trusted.* without CAP_SYS_ADMIN) do not stop the run but make it exit 8")
 	f.Bool("continue", false, "do not stop at the first damaged chunk: restore every entry that verifies and report the ones lost")
-	f.Bool("remove-local-image", false, "delete the pulled Docker image once the restore succeeded")
+	f.Bool("remove-local-image", false, "with --local-repo: delete the image from the Docker daemon once the restore reproduced it 1:1 (kept after any difference, with or without --strict)")
 	f.Bool("overwrite", false, "allow writing over an existing tar file or a non-empty destination")
 	f.Bool("no-verify", false, "skip the plaintext chunk digest check (faster, unsafe)")
 	f.Int("jobs", 3, "number of concurrent layer downloads")
@@ -310,6 +328,15 @@ func runRestore(cmd *cobra.Command, args []string) error {
 	}
 	if getFlagInt(cmd, "strip-components") < 0 {
 		return usageErrorf("--strip-components non può essere negativo")
+	}
+	if err := restoreOutcomeFlags(cmd); err != nil {
+		return err
+	}
+	if getFlagBool(cmd, "remove-local-image") && !flags.localRepo {
+		// The image removed is the daemon's. A restore read from a registry
+		// or a layout never pulled it, and would delete whatever local image
+		// happens to carry the same reference.
+		return usageErrorf("--remove-local-image richiede --local-repo: rimuove l'immagine dal daemon da cui il restore la legge")
 	}
 	restoreCPUs, err := cpu.Apply(getFlagInt(cmd, "cpus"))
 	if err != nil {
@@ -428,13 +455,19 @@ func runRestore(cmd *cobra.Command, args []string) error {
 	fidelityErr := strictFidelityError(
 		getFlagBool(cmd, "strict") && getFlagBool(cmd, "extract"), extracted)
 	imageRemoved := false
-	if getFlagBool(cmd, "remove-local-image") && fidelityErr == nil {
+	if getFlagBool(cmd, "remove-local-image") {
 		// Never discard the image a restore just failed to reproduce
-		// faithfully: it is the only copy of what is still missing.
-		if err := removeDockerImage(ctx, refText); err != nil {
-			return &Error{Kind: KindNetwork, Msg: "rimozione immagine locale fallita", Err: err}
+		// faithfully: it is the only copy of what is still missing. That
+		// holds with or without --strict, which only decides the exit code.
+		if degraded, skipped := fidelityLoss(extracted); degraded > 0 || skipped > 0 {
+			log(fmt.Sprintf("restore: immagine locale conservata: il ripristino non è 1:1 "+
+				"(%d differenze di metadati, %d entry non create)", degraded, skipped))
+		} else {
+			if err := removeDockerImage(ctx, refText); err != nil {
+				return &Error{Kind: KindNetwork, Msg: "rimozione immagine locale fallita", Err: err}
+			}
+			imageRemoved = true
 		}
-		imageRemoved = true
 	}
 	pr := NewPrinter(cmd.OutOrStdout(), cmd.ErrOrStderr(), mustOptions(cmd))
 	if mustOptions(cmd).JSON {
@@ -491,6 +524,15 @@ func degradedExamples(m map[string]string) map[string]string {
 	return m
 }
 
+// fidelityLoss counts what an extraction did not reproduce: metadata the
+// destination refused, and entries it did not create.
+func fidelityLoss(stats archive.Stats) (degraded, skipped int64) {
+	for _, n := range stats.Degraded {
+		degraded += n
+	}
+	return degraded, stats.Skipped
+}
+
 // strictFidelityError turns a completed but not-1:1 extraction into a failure
 // when --strict was asked for.
 //
@@ -510,22 +552,40 @@ func strictFidelityError(strict bool, stats archive.Stats) error {
 	if !strict {
 		return nil
 	}
-	var degraded int64
-	for _, n := range stats.Degraded {
-		degraded += n
-	}
-	if degraded == 0 && stats.Skipped == 0 {
+	degraded, skipped := fidelityLoss(stats)
+	if degraded == 0 && skipped == 0 {
 		return nil
 	}
 	return &Error{
 		Kind: KindFidelity,
 		Msg: fmt.Sprintf(
 			"--strict: ripristino completato ma NON 1:1: %d differenze di metadati, %d entry non create",
-			degraded, stats.Skipped),
+			degraded, skipped),
 		Hint: "rileggi le righe \"differenza\" qui sopra; esegui senza --strict per accettare quelle " +
 			"differenze, oppure ripristina con i privilegi necessari (sudo, --privileged) e su un " +
 			"filesystem che regge gli attributi estesi dell'archivio",
 	}
+}
+
+// restoreOutcomeFlags refuses a flag the chosen outcome would ignore: -o next
+// to -x, and the extraction-only flags on a tar restore, which leaves the
+// archive as it is.
+func restoreOutcomeFlags(cmd *cobra.Command) error {
+	if getFlagBool(cmd, "extract") {
+		if getFlagString(cmd, "output") != "" {
+			return usageErrorf("-x e -o si escludono: -x estrae in --destination, -o scrive un tar")
+		}
+		return nil
+	}
+	if getFlagInt(cmd, "strip-components") != 0 {
+		return usageErrorf("--strip-components vale solo con -x: un restore tar conserva l'archivio com'è")
+	}
+	for _, name := range []string{"strict", "no-preserve-owner", "no-preserve-xattrs"} {
+		if getFlagBool(cmd, name) {
+			return usageErrorf("--%s vale solo con -x: un restore tar conserva l'archivio com'è", name)
+		}
+	}
+	return nil
 }
 
 // errorTexts renders the per-entry failures for the JSON output.

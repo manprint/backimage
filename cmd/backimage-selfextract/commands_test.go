@@ -30,19 +30,42 @@ type commandFixture struct {
 
 func newCommandFixture(t *testing.T, encrypted bool) commandFixture {
 	t.Helper()
+	return newCommandFixtureFiles(t, encrypted, fixtureFile{name: "root/a.txt", content: "hello from selfextract\n"})
+}
+
+type fixtureFile struct{ name, content string }
+
+// newCommandFixtureFiles builds a one-chunk backup holding the directory
+// "root" and files, in that order.
+func newCommandFixtureFiles(t *testing.T, encrypted bool, files ...fixtureFile) commandFixture {
+	t.Helper()
 	var plain bytes.Buffer
 	tw := tar.NewWriter(&plain)
 	mtime := time.Unix(1234, 0).UTC()
 	if err := tw.WriteHeader(&tar.Header{Name: "root", Typeflag: tar.TypeDir, Mode: 0o755, ModTime: mtime}); err != nil {
 		t.Fatal(err)
 	}
-	fileOffset := int64(512)
-	content := []byte("hello from selfextract\n")
-	if err := tw.WriteHeader(&tar.Header{Name: "root/a.txt", Typeflag: tar.TypeReg, Mode: 0o640, Size: int64(len(content)), ModTime: mtime}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := tw.Write(content); err != nil {
-		t.Fatal(err)
+	entries := make([]index.FileEntry, 0, 1+len(files))
+	entries = append(entries, index.FileEntry{Path: "root", Type: index.TypeDir, Mode: "0755", MTime: mtime, TarOffset: 0})
+	var rawBytes int64
+	for _, file := range files {
+		// Flush writes the padding of the previous entry, so the buffer
+		// length is where this header starts.
+		if err := tw.Flush(); err != nil {
+			t.Fatal(err)
+		}
+		offset := int64(plain.Len())
+		content := []byte(file.content)
+		if err := tw.WriteHeader(&tar.Header{Name: file.name, Typeflag: tar.TypeReg, Mode: 0o640, Size: int64(len(content)), ModTime: mtime}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := tw.Write(content); err != nil {
+			t.Fatal(err)
+		}
+		fh := sha256.Sum256(content)
+		entries = append(entries, index.FileEntry{Path: file.name, Type: index.TypeRegular, Mode: "0640", Size: int64(len(content)),
+			MTime: mtime, TarOffset: offset, SHA256: hex.EncodeToString(fh[:])})
+		rawBytes += int64(len(content))
 	}
 	if err := tw.Close(); err != nil {
 		t.Fatal(err)
@@ -82,7 +105,7 @@ func newCommandFixture(t *testing.T, encrypted bool) commandFixture {
 	}
 	m := &index.Manifest{
 		SchemaVersion: 1, Tool: index.ToolInfo{Name: "backimage", Version: "test"}, CreatedAt: mtime,
-		Sources: []string{"/source"}, Totals: index.Totals{Files: 1, Dirs: 1, BytesRaw: int64(len(content)), BytesStored: int64(len(stored))},
+		Sources: []string{"/source"}, Totals: index.Totals{Files: int64(len(files)), Dirs: 1, BytesRaw: rawBytes, BytesStored: int64(len(stored))},
 		Archive:  index.ArchiveInfo{Format: "tar", Compression: "store"},
 		Chunking: index.ChunkingInfo{Strategy: "length", TargetChunkBytes: int64(len(plain.Bytes())), Count: 1},
 		Layers:   []index.LayerInfo{{Index: 0, Digest: "sha256:fixture", ChunkFrom: 0, ChunkTo: 0, StoredBytes: int64(len(stored))}},
@@ -97,11 +120,7 @@ func newCommandFixture(t *testing.T, encrypted bool) commandFixture {
 		Pb: int64(plain.Len()), Sb: int64(len(stored)),
 	}}}
 	writeCommandFile(t, filepath.Join(root, "chunks.json"), func(w io.Writer) error { return index.WriteChunkTable(w, ct) })
-	fh := sha256.Sum256(content)
-	idx := &index.Index{SchemaVersion: 1, Entries: []index.FileEntry{
-		{Path: "root", Type: index.TypeDir, Mode: "0755", MTime: mtime, TarOffset: 0},
-		{Path: "root/a.txt", Type: index.TypeRegular, Mode: "0640", Size: int64(len(content)), MTime: mtime, TarOffset: fileOffset, SHA256: hex.EncodeToString(fh[:])},
-	}}
+	idx := &index.Index{SchemaVersion: 1, Entries: entries}
 	writeCommandFile(t, filepath.Join(root, "index.json.zst"), func(w io.Writer) error { return index.WriteIndex(w, idx, sealer) })
 	if encrypted {
 		writeCommandFile(t, filepath.Join(root, "keys.pass.age"), func(w io.Writer) error {

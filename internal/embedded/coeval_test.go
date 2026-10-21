@@ -85,7 +85,7 @@ func expectedStamp(t *testing.T) (version, commit string) {
 
 func gitOutput(t *testing.T, args ...string) string {
 	t.Helper()
-	out, err := exec.Command("git", args...).Output()
+	out, err := exec.CommandContext(t.Context(), "git", args...).Output()
 	if err != nil {
 		t.Fatalf("git %s: %v (this test needs either a stamped binary or a git checkout "+
 			"to know which revision the assets should declare)", strings.Join(args, " "), err)

@@ -4,8 +4,10 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -47,7 +49,7 @@ func newListenRemoteCommand() *cobra.Command {
 	f.String("auth-token", "", "pre-shared client authentication token")
 	f.String("auth-token-file", "", "read the pre-shared token from a file")
 	f.Bool("insecure-no-auth", false, "allow unauthenticated clients (strongly discouraged)")
-	f.StringSlice("allow-repo", nil, "repository prefix a client may push to, e.g. ghcr.io/team/ (repeatable; empty = any)")
+	f.StringSlice("allow-repo", nil, "repository prefix a client may push to, matched on whole path components, e.g. ghcr.io/team/ (literal, no globs; repeatable; empty = any)")
 	f.Int("max-sessions", 4, "maximum concurrent backup sessions; server disk needed is 3 x layer size x sessions")
 	f.Int("push-jobs", 3, "parallel blob uploads per registry push")
 	f.String("upload-chunk-size", "0", "registry PATCH chunk size, e.g. 32MiB (0 = one request per blob, faster)")
@@ -67,6 +69,13 @@ func runListenRemote(cmd *cobra.Command, _ []string) error {
 		return err
 	}
 	printer := NewPrinter(cmd.OutOrStdout(), cmd.ErrOrStderr(), opts)
+	switch getFlagString(cmd, "log-format") {
+	case "text":
+	case "json":
+		printer = &jsonLog{Printer: printer, errOut: cmd.ErrOrStderr(), quiet: opts.Quiet}
+	default:
+		return New(KindUsage, "", "--log-format must be text or json")
+	}
 	workDir := getFlagString(cmd, "work-dir")
 	if getFlagBool(cmd, "spool") {
 		printer.Warnf("--spool is deprecated: streaming sessions always spool one layer at a time in --work-dir")
@@ -79,12 +88,23 @@ func runListenRemote(cmd *cobra.Command, _ []string) error {
 	if getFlagBool(cmd, "also-tcp") && !getFlagBool(cmd, "udp") {
 		return New(KindUsage, "", "--also-tcp requires --udp")
 	}
-	if format := getFlagString(cmd, "log-format"); format != "text" && format != "json" {
-		return New(KindUsage, "", "--log-format must be text or json")
-	}
 	sharedToken, err := sharedAuthToken(cmd)
 	if err != nil {
 		return New(KindUsage, "", "%v", err)
+	}
+	if err := server.ValidateAllowedRepos(getFlagStrings(cmd, "allow-repo")); err != nil {
+		return New(KindUsage, "", "--allow-repo: %v", err)
+	}
+	pushJobs := getFlagInt(cmd, "push-jobs")
+	if pushJobs <= 0 {
+		return New(KindUsage, "", "--push-jobs must be positive")
+	}
+	uploadChunk, err := parseLimitFlag(getFlagString(cmd, "upload-chunk-size"))
+	if err != nil {
+		return New(KindUsage, "", "--upload-chunk-size: %v", err)
+	}
+	if uploadChunk > 64<<20 {
+		return New(KindUsage, "", "--upload-chunk-size cannot exceed 64MiB")
 	}
 	bind := getFlagString(cmd, "bind-address")
 	tlsConfig, pin, mtls, err := listenTLSConfig(cmd, bind, workDir, printer)
@@ -96,10 +116,15 @@ func runListenRemote(cmd *cobra.Command, _ []string) error {
 		return New(KindUsage, "", "client authentication is required: configure mTLS, --auth-token, or explicitly --insecure-no-auth")
 	}
 	if insecure {
-		printer.Warnf("WARNING: remote server authentication is disabled")
+		printer.Warnf("remote server authentication is disabled")
 	}
 	if pin != "" {
-		_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "TLS fingerprint SHA256:%s\n", pin)
+		// Printed even with --quiet: a client cannot connect without it.
+		if log, ok := printer.(*jsonLog); ok {
+			log.record("info", "TLS fingerprint SHA256:"+pin)
+		} else {
+			_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "TLS fingerprint SHA256:%s\n", pin)
+		}
 	}
 	maxBytes, err := parseLimitFlag(getFlagString(cmd, "max-bytes"))
 	if err != nil {
@@ -133,17 +158,6 @@ func runListenRemote(cmd *cobra.Command, _ []string) error {
 			return New(KindNetwork, "", "listen TCP %s: %v", bind, errors.Join(err, listener.Close()))
 		}
 	}
-	pushJobs := getFlagInt(cmd, "push-jobs")
-	if pushJobs <= 0 {
-		return New(KindUsage, "", "--push-jobs must be positive")
-	}
-	uploadChunk, err := parseLimitFlag(getFlagString(cmd, "upload-chunk-size"))
-	if err != nil {
-		return New(KindUsage, "", "--upload-chunk-size: %v", err)
-	}
-	if uploadChunk > 64<<20 {
-		return New(KindUsage, "", "--upload-chunk-size cannot exceed 64MiB")
-	}
 	// One sink, and therefore one token broker, per session: a registry token
 	// a client hands over must never be reachable by another client's session
 	// pushing to the same repository.
@@ -173,7 +187,7 @@ func runListenRemote(cmd *cobra.Command, _ []string) error {
 
 	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	metricsServer, metricsErr := startMetricsServer(getFlagString(cmd, "metrics-address"), metrics, func(err error) {
+	metricsServer, metricsErr := startMetricsServer(ctx, getFlagString(cmd, "metrics-address"), metrics, func(err error) {
 		printer.Warnf("metrics server: %v", err)
 	})
 	if metricsErr != nil {
@@ -214,6 +228,40 @@ func runListenRemote(cmd *cobra.Command, _ []string) error {
 		}
 	}
 	return nil
+}
+
+// jsonLog renders the diagnostics of listen-remote as one JSON object per line
+// on stderr (--log-format json), for a collector that parses the server
+// output. Results still go through the embedded printer.
+type jsonLog struct {
+	Printer
+	errOut io.Writer
+	quiet  bool
+}
+
+func (l *jsonLog) Infof(format string, args ...any) {
+	if !l.quiet {
+		l.record("info", fmt.Sprintf(format, args...))
+	}
+}
+
+func (l *jsonLog) Warnf(format string, args ...any) {
+	l.record("warning", fmt.Sprintf(format, args...))
+}
+
+// record writes one line in a single Write, as the text printer does, so
+// records of concurrent sessions never interleave.
+func (l *jsonLog) record(level, msg string) {
+	line, err := json.Marshal(struct {
+		Time  string `json:"time"`
+		Level string `json:"level"`
+		Msg   string `json:"msg"`
+	}{time.Now().UTC().Format(time.RFC3339Nano), level, msg})
+	if err != nil {
+		_, _ = fmt.Fprintf(l.errOut, "%s: %s\n", level, msg)
+		return
+	}
+	_, _ = fmt.Fprintf(l.errOut, "%s\n", line)
 }
 
 func closeOptionalListener(listener transport.Listener) error {
@@ -359,11 +407,11 @@ func parseLimitFlag(value string) (uint64, error) {
 	return uint64(n), nil
 }
 
-func startMetricsServer(address string, metrics *server.Metrics, onError func(error)) (*http.Server, error) {
+func startMetricsServer(ctx context.Context, address string, metrics *server.Metrics, onError func(error)) (*http.Server, error) {
 	if address == "" {
 		return nil, nil
 	}
-	ln, err := net.Listen("tcp", address)
+	ln, err := new(net.ListenConfig).Listen(ctx, "tcp", address)
 	if err != nil {
 		return nil, err
 	}

@@ -1,7 +1,9 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -47,7 +49,14 @@ func parseHumanDuration(value string) (time.Duration, error) {
 		if rest[i] == 'w' {
 			unit = 7 * 24 * time.Hour
 		}
-		total += time.Duration(n * float64(unit))
+		// float64(math.MaxInt64) rounds up to 2^63, so >= is the exact bound.
+		term := n * float64(unit)
+		if term >= float64(math.MaxInt64) {
+			return 0, fmt.Errorf("duration %q out of range", value)
+		}
+		if total, err = addDuration(total, time.Duration(term)); err != nil {
+			return 0, fmt.Errorf("duration %q out of range", value)
+		}
 		rest = rest[i+1:]
 		consumed = true
 	}
@@ -59,7 +68,9 @@ func parseHumanDuration(value string) (time.Duration, error) {
 		if d < 0 {
 			return 0, fmt.Errorf("invalid duration %q: mixed signs", value)
 		}
-		total += d
+		if total, err = addDuration(total, d); err != nil {
+			return 0, fmt.Errorf("duration %q out of range", value)
+		}
 	} else if !consumed {
 		return 0, fmt.Errorf("invalid duration %q (%s)", value, durationUnitsHelp)
 	}
@@ -67,6 +78,15 @@ func parseHumanDuration(value string) (time.Duration, error) {
 		total = -total
 	}
 	return total, nil
+}
+
+// addDuration adds two non-negative durations, refusing a sum past the int64
+// range instead of wrapping it into a short or negative one.
+func addDuration(a, b time.Duration) (time.Duration, error) {
+	if b > math.MaxInt64-a {
+		return 0, errors.New("duration overflow")
+	}
+	return a + b, nil
 }
 
 // humanDuration is the pflag value behind every duration flag: it accepts the

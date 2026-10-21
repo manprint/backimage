@@ -1,11 +1,17 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
+	"io/fs"
+	"net"
+	"syscall"
 
+	"github.com/manprint/backimage/pkg/backup"
 	"github.com/manprint/backimage/pkg/crypt"
 	"github.com/manprint/backimage/pkg/index"
+	"github.com/manprint/backimage/pkg/registry"
 )
 
 // Kind classifies an error for exit-code mapping and user messaging.
@@ -63,10 +69,14 @@ func ExitCodeFor(err error) int {
 	if errors.As(err, &usageErr) && usageErr.UsageError() {
 		return int(KindUsage)
 	}
-	if errors.Is(err, ErrPassphrase) {
+	// The sentinels below are the fallback for a path that did not classify
+	// its error by hand: the documented exit code must not depend on every
+	// caller remembering to.
+	if errors.Is(err, ErrPassphrase) || errors.Is(err, crypt.ErrPassphrase) || errors.Is(err, crypt.ErrWrongPassphrase) ||
+		errors.Is(err, crypt.ErrNoPassphrase) || errors.Is(err, crypt.ErrEmptyPassphrase) {
 		return int(KindPassphrase)
 	}
-	if errors.Is(err, ErrInterrupted) {
+	if errors.Is(err, ErrInterrupted) || errors.Is(err, context.Canceled) {
 		return int(KindInterrupted)
 	}
 	// crypt.ErrIntegrity and index.ErrBadSchema are the two shapes a refused
@@ -74,8 +84,30 @@ func ExitCodeFor(err error) int {
 	// authenticated envelope the backup claims. Both are integrity answers,
 	// and reporting them as the generic exit 1 hides from a script the one
 	// distinction that matters — the backup is not what it says it is.
-	if errors.Is(err, ErrIntegrity) || errors.Is(err, crypt.ErrIntegrity) || errors.Is(err, index.ErrBadSchema) {
+	// A read-back that found the registry holding something else belongs
+	// here too: the registry answered, and what it holds is not the backup.
+	if errors.Is(err, ErrIntegrity) || errors.Is(err, crypt.ErrIntegrity) || errors.Is(err, index.ErrBadSchema) ||
+		errors.Is(err, registry.ErrPublishedMismatch) {
 		return int(KindIntegrity)
 	}
+	if errors.Is(err, backup.ErrPrivileges) || errors.Is(err, fs.ErrPermission) {
+		return int(KindPermission)
+	}
+	if isNetworkError(err) {
+		return int(KindNetwork)
+	}
 	return int(KindGeneric)
+}
+
+// isNetworkError reports a failure of the network, not of the local system.
+// net.Error alone does not say that: syscall.Errno satisfies it too, and a
+// missing file or a full disk would exit 6. errors.As stops at the outermost
+// match, so an Errno the net package wrapped is still seen as the *OpError.
+func isNetworkError(err error) bool {
+	var netErr net.Error
+	if !errors.As(err, &netErr) {
+		return false
+	}
+	_, local := netErr.(syscall.Errno)
+	return !local
 }

@@ -356,6 +356,9 @@ func runRepoPrune(cmd *cobra.Command, args []string) error {
 		Scope:      scope,
 		GroupBy:    groupBy,
 	}
+	if err := p.Validate(); err != nil {
+		return New(KindUsage, "", "%v", err)
+	}
 
 	a, opts, err := repoAdapter(cmd, repo)
 	if err != nil {

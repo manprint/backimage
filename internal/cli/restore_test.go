@@ -270,7 +270,7 @@ func TestRestoreRemovesLocalImageAfterSuccess(t *testing.T) {
 	}
 
 	dst := filepath.Join(t.TempDir(), "extract")
-	_, _, err := runRoot(t, "restore", "example.test/repo:tag", "--extract", "-C", dst, "--no-preserve-owner", "--remove-local-image")
+	_, _, err := runRoot(t, "restore", "example.test/repo:tag", "--local-repo", "--extract", "-C", dst, "--no-preserve-owner", "--remove-local-image")
 	if err != nil {
 		t.Fatalf("restore with image removal = %v", err)
 	}

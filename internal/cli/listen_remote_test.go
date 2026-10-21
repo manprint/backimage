@@ -130,7 +130,7 @@ func TestQUICFlagsAreHiddenAndValidated(t *testing.T) {
 }
 
 func TestMetricsServerLifecycle(t *testing.T) {
-	httpServer, err := startMetricsServer("127.0.0.1:0", new(server.Metrics), nil)
+	httpServer, err := startMetricsServer(t.Context(), "127.0.0.1:0", new(server.Metrics), nil)
 	if err != nil || httpServer == nil {
 		t.Fatalf("server = %v, %v", httpServer, err)
 	}
@@ -139,7 +139,27 @@ func TestMetricsServerLifecycle(t *testing.T) {
 	if err := httpServer.Shutdown(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if noServer, err := startMetricsServer("", new(server.Metrics), nil); err != nil || noServer != nil {
+	if noServer, err := startMetricsServer(t.Context(), "", new(server.Metrics), nil); err != nil || noServer != nil {
 		t.Fatalf("empty metrics server = %v, %v", noServer, err)
+	}
+}
+
+// TestListenRemoteRefusesAnAllowRepoGlob: --allow-repo takes prefixes, so a
+// glob is a usage error found before anything binds, not a server that
+// refuses every backup.
+func TestListenRemoteRefusesAnAllowRepoGlob(t *testing.T) {
+	done := make(chan error, 1)
+	go func() {
+		_, _, err := runRoot(t, "listen-remote", "--tls-self-signed", "--work-dir", t.TempDir(),
+			"--auth-token", "x", "--bind-address", "127.0.0.1:0", "--allow-repo", "ghcr.io/me/*")
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if ExitCodeFor(err) != 2 || !strings.Contains(err.Error(), "--allow-repo") {
+			t.Fatalf("err = %v (exit %d), want a usage error on --allow-repo", err, ExitCodeFor(err))
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("listen-remote started serving with a glob --allow-repo")
 	}
 }

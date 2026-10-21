@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -134,10 +135,10 @@ func recoveryInstructions(ref string, encrypted, runnable bool) string {
 	fmt.Fprint(&out, "  - Se non vuoi ripristinare ownership e gruppi, aggiungi --no-preserve-owner al comando backimage o a extract.\n") //nolint:misspell // Messaggio CLI italiano.
 	fmt.Fprint(&out, "  - Per limitare la CPU, aggiungi --cpus N al comando backimage o a extract.\n")                                    //nolint:misspell // Messaggio CLI italiano.
 	fmt.Fprint(&out, "  - Per estrarre solo una parte, aggiungi --include GLOB e/o --exclude GLOB.\n")
-	fmt.Fprint(&out, "  - Per rimuovere l'immagine Docker dopo un'estrazione riuscita, aggiungi --remove-local-image\n") //nolint:misspell // Messaggio CLI italiano.
-	fmt.Fprint(&out, "    al comando backimage: è un'operazione dell'host e l'autoestraente non la esegue, così\n")      //nolint:misspell // Messaggio CLI italiano.
-	fmt.Fprint(&out, "    il container non ha mai bisogno del socket Docker.\n")                                         //nolint:misspell // Messaggio CLI italiano.
-	fmt.Fprint(&out, "  - Se la directory di destinazione non è vuota, aggiungi --overwrite.\n")                         //nolint:misspell // Messaggio CLI italiano.
+	fmt.Fprint(&out, "  - Per rimuovere l'immagine Docker dopo un'estrazione 1:1, aggiungi --local-repo --remove-local-image\n") //nolint:misspell // Messaggio CLI italiano.
+	fmt.Fprint(&out, "    al comando backimage (legge l'immagine dal daemon e solo lì la rimuove): è un'operazione\n")           //nolint:misspell // Messaggio CLI italiano.
+	fmt.Fprint(&out, "    dell'host e l'autoestraente non la esegue, così il container non ha mai bisogno del socket Docker.\n") //nolint:misspell // Messaggio CLI italiano.
+	fmt.Fprint(&out, "  - Se la directory di destinazione non è vuota, aggiungi --overwrite.\n")                                 //nolint:misspell // Messaggio CLI italiano.
 	return out.String()
 }
 
@@ -168,11 +169,11 @@ func newBackupCommand() *cobra.Command {
 	f.String("timestamp-format", "20060102T150405Z", "Go time layout used by --timestamp (reference date 2006-01-02 15:04:05)")
 	f.String("compression", "zstd", "layer codec: zstd|gzip|xz|lz4|none (xz and lz4 require --runnable=false)")
 	f.Int("compression-level", 0, "codec compression level; 0 = codec default, higher = smaller and slower")
-	f.String("max-layer-size", "1GiB", "target size of each OCI layer, e.g. 512MiB, 2GiB")
+	f.String("max-layer-size", "1GiB", "target size of each OCI layer, e.g. 512MiB, 2GiB; at least 16MiB (a smaller value is raised, with a warning)")
 	f.Bool("encrypt", true, "encrypt chunks (default)")
 	f.Bool("no-encrypt", false, "disable encryption (exclusive with --encrypt)")
-	f.String("passphrase-file", "", "read the passphrase from a file")
-	f.Bool("passphrase-stdin", false, "read the passphrase from stdin")
+	f.String("passphrase-file", "", "read the passphrase from the first line of a file")
+	f.Bool("passphrase-stdin", false, "read the passphrase from the first line of stdin")
 	f.String("password", "", "passphrase (visible in shell history and process listings)")
 	f.StringSlice("recipient", nil, "age public key (repeatable)")
 	f.String("age-identity", "", "age identity file used to reuse a deduplication key")
@@ -189,7 +190,7 @@ func newBackupCommand() *cobra.Command {
 	f.Bool("one-file-system", false, "do not cross mount points")
 	f.Bool("numeric-owner", false, "do not resolve user/group names")
 	f.Bool("allow-degraded", false, "continue despite unreadable files")
-	f.String("verify-after-push", "quick", "read back the published image: quick (blob and manifest digests, no download), full (re-download every layer and recompute each stored digest), off")
+	f.String("verify-after-push", "quick", "read back the published image: quick (blob and manifest digests, no download), full (re-download every layer and recompute each stored digest), off; with --remote the receiver publishes and always reads back quick")
 	f.Int("jobs", 3, "number of concurrent blob uploads")
 	f.String("upload-chunk-size", "0", "split each blob upload into HTTP chunks of this size, e.g. 32MiB; 0 sends one request per blob (fastest, use a value only for a registry that refuses large bodies)")
 	f.StringSlice("platform", []string{"linux/amd64", "linux/arm64"}, "self-extract platforms (repeatable)")
@@ -248,6 +249,15 @@ func runBackup(cmd *cobra.Command, args []string) error {
 		// normal incremental backups while leaving the non-dedup default intact.
 		maxLayer = 64 << 20
 	}
+	if !dedup {
+		// The CDC parameters only shape a --dedup backup: without it they
+		// would be read and silently dropped.
+		for _, name := range []string{"dedup-chunk-min", "dedup-chunk-avg", "dedup-chunk-max", "dedup-polynomial"} {
+			if getFlagString(cmd, name) != "" {
+				return New(KindUsage, "", "--%s requires --dedup", name)
+			}
+		}
+	}
 	dedupParams, err := readDedupParams(cmd)
 	if err != nil {
 		return New(KindUsage, "", "%v", err)
@@ -286,6 +296,14 @@ func runBackup(cmd *cobra.Command, args []string) error {
 	}
 
 	var passFn func() ([]byte, error)
+	// earlier holds the readings releases up to 0.6.1 made of the same
+	// passphrase input: --dedup tries them on the base backup's key file.
+	var earlier [][]byte
+	defer func() {
+		for _, p := range earlier {
+			wipeBytes(p)
+		}
+	}()
 	if encrypt && (passfile != "" || passStdin || password != "") {
 		var direct []byte
 		if password != "" {
@@ -297,9 +315,15 @@ func runBackup(cmd *cobra.Command, args []string) error {
 			Stdin:   passStdin,
 			Prompt:  password == "",
 			Confirm: password == "",
+			Warn: func(message string) {
+				if !opts.Quiet {
+					progress.WriteLine(cmd.ErrOrStderr(), message)
+				}
+			},
 		}
 		passFn = func() ([]byte, error) {
-			p, err := crypt.ReadPassphrase(src)
+			p, older, err := crypt.ReadPassphraseAll(src)
+			earlier = older
 			if err != nil {
 				if errors.Is(err, crypt.ErrEmptyPassphrase) || errors.Is(err, crypt.ErrNoPassphrase) {
 					return nil, New(KindUsage, "", "passphrase: %v", err)
@@ -393,6 +417,12 @@ func runBackup(cmd *cobra.Command, args []string) error {
 	if !backup.ValidVerifyAfterPush(verifyAfterPush) {
 		return usageErrorf("--verify-after-push: valori ammessi quick, full, off")
 	}
+	// A remote backup is published by the receiver, which always reads it back
+	// the quick way: the protocol carries no level, so another one would be
+	// dropped without a word.
+	if getFlagString(cmd, "remote") != "" && verifyAfterPush != "" && verifyAfterPush != backup.VerifyPushQuick {
+		return usageErrorf("--verify-after-push %s non si applica a --remote: pubblica il ricevente, sempre con la verifica quick", verifyAfterPush)
+	}
 	noMeta := getFlagBool(cmd, "no-metadata")
 	dryRun := getFlagBool(cmd, "dry-run")
 	jobs := getFlagInt(cmd, "jobs")
@@ -412,6 +442,9 @@ func runBackup(cmd *cobra.Command, args []string) error {
 		Version:         buildinfo.Version,
 		Encrypt:         encrypt,
 		Passphrase:      passFn,
+		PassphraseFallbacks: func() [][]byte {
+			return earlier
+		},
 		Recipients:      recipients,
 		Dedup:           dedup,
 		DedupParams:     dedupParams,
@@ -441,11 +474,11 @@ func runBackup(cmd *cobra.Command, args []string) error {
 		return New(KindUsage, "", "%v", err)
 	}
 
-	if cfg.Runnable && compression != "zstd" && compression != "gzip" && compression != "none" {
-		// runnable images only allow standard codecs; the plan gates this.
-		if compression == "lz4" || compression == "xz" || compression == "store" {
-			return New(KindUsage, "", "--runnable=true non ammette il codec %q: usare --runnable=false", compression)
-		}
+	// A runnable image is unpacked by a container runtime, which knows plain,
+	// gzip and zstd layers only. "store" (what "none" became above) is a plain
+	// tar layer and runs like the other two.
+	if cfg.Runnable && (compression == "lz4" || compression == "xz") {
+		return New(KindUsage, "", "--runnable=true non ammette il codec %q: usare --runnable=false", compression)
 	}
 
 	ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
@@ -458,23 +491,11 @@ func runBackup(cmd *cobra.Command, args []string) error {
 		progress.WriteLine(cmd.ErrOrStderr(), msg)
 	}
 	cfg.Progress = prog
+	cfg.Warn = func(msg string) { pr.Warnf("%s", msg) }
 
 	res, err := backup.Run(ctx, cfg)
 	if err != nil {
-		if ctx.Err() != nil {
-			return New(KindInterrupted, "", "backup interrotto")
-		}
-		if errors.Is(err, backup.ErrNoData) {
-			return New(KindGeneric, "", "%v", err)
-		}
-		var remoteErr *backremote.Error
-		if errors.As(err, &remoteErr) && remoteErr.Kind >= uint32(KindGeneric) && remoteErr.Kind <= uint32(KindInterrupted) {
-			return New(Kind(remoteErr.Kind), remoteErr.Hint, "%s", remoteErr.Message)
-		}
-		if isNetworkErr(err) || strings.Contains(err.Error(), "registry") || strings.Contains(err.Error(), "push") {
-			return New(KindNetwork, "", "%v", err)
-		}
-		return New(KindGeneric, "", "%v", err)
+		return backupError(ctx, err)
 	}
 
 	if dryRun {
@@ -521,7 +542,34 @@ func readDedupParams(cmd *cobra.Command) (chunk.CDCParams, error) {
 	return p, nil
 }
 
-// parseSize parses sizes like "512MiB", "1GiB", "1048576".
+// backupError maps a failed backup.Run to the error the CLI reports. A kind
+// already decided — by the CLI itself, the remote server or a sentinel
+// ExitCodeFor knows — wins over the message heuristics, which only sort out
+// what is left.
+func backupError(ctx context.Context, err error) error {
+	if ctx.Err() != nil {
+		return New(KindInterrupted, "", "backup interrotto")
+	}
+	var ce *Error
+	if errors.As(err, &ce) {
+		return err
+	}
+	if errors.Is(err, backup.ErrNoData) {
+		return New(KindGeneric, "", "%v", err)
+	}
+	var remoteErr *backremote.Error
+	if errors.As(err, &remoteErr) && remoteErr.Kind >= uint32(KindGeneric) && remoteErr.Kind <= uint32(KindInterrupted) {
+		return New(Kind(remoteErr.Kind), remoteErr.Hint, "%s", remoteErr.Message)
+	}
+	if code := ExitCodeFor(err); code != int(KindGeneric) {
+		return New(Kind(code), "", "%v", err)
+	}
+	if isNetworkErr(err) || strings.Contains(err.Error(), "registry") || strings.Contains(err.Error(), "push") {
+		return New(KindNetwork, "", "%v", err)
+	}
+	return New(KindGeneric, "", "%v", err)
+}
+
 func isNetworkErr(err error) bool {
 	return errors.Is(err, syscall.ECONNREFUSED) ||
 		errors.Is(err, syscall.ECONNRESET) ||
@@ -530,6 +578,7 @@ func isNetworkErr(err error) bool {
 		strings.Contains(err.Error(), "connection refused")
 }
 
+// parseSize parses sizes like "512MiB", "1GiB", "1048576".
 func parseSize(s string) (int64, error) {
 	if s == "" {
 		return 0, nil
