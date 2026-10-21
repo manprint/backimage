@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"sync"
 	"testing"
@@ -93,6 +94,11 @@ func assertAccounts(t *testing.T, path string, want int) {
 	}
 	if len(accounts) != want {
 		t.Fatalf("store holds %d accounts after %d concurrent logins", len(accounts), want)
+	}
+	// Windows has no mode bits to check: os.Stat reports 0666 for any
+	// writable file.
+	if runtime.GOOS == "windows" {
+		return
 	}
 	if st, err := os.Stat(path + ".lock"); err == nil && st.Mode().Perm()&0o77 != 0 {
 		t.Fatalf("lock file mode %04o, want no group/other access", st.Mode().Perm())

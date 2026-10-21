@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -55,6 +56,11 @@ func TestRemoveLocalImageRequiresTheDaemonSource(t *testing.T) {
 func TestRemoveLocalImageKeepsTheImageAfterADegradedRestore(t *testing.T) {
 	if os.Geteuid() == 0 {
 		t.Skip("root restores the archived owner: nothing degrades")
+	}
+	if runtime.GOOS == "windows" {
+		// Owners are not restored there by design (docs/FIDELITY.md) and
+		// count as no difference, so this fixture cannot degrade.
+		t.Skip("no owner to lose on windows")
 	}
 	removed := stubImageRemoval(t)
 	s, _ := newMockImageSource(t, false)
