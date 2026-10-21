@@ -821,6 +821,11 @@ func (b *Backup) StreamSelectedTar(ctx context.Context, idx *index.Index, select
 
 	for _, span := range ranges {
 		for off := span.start; off < span.end; {
+			// Checked per write, as StreamTar does per chunk: a span served
+			// from the cached chunk never reaches a call that would notice.
+			if err := ctx.Err(); err != nil {
+				return err
+			}
 			i := sort.Search(len(b.Chunks.Chunks), func(i int) bool { return b.prefix[i+1] > off })
 			if i >= len(b.Chunks.Chunks) {
 				return fmt.Errorf("tar offset %d outside chunk table", off)
