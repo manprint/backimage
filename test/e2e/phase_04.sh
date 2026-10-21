@@ -15,12 +15,28 @@ for tool in go jq curl; do
 done
 
 PORT=${PHASE04_PORT:-5000}
+NAME=bi-registry-p04
 REG="localhost:${PORT}/test/img:v1"
+# A registry of its own, removed on exit with the image the phase pulls: a
+# registry left running from an earlier run may listen on another port, or
+# already hold the tag this phase is meant to publish.
+cleanup() {
+	docker rm -f "$NAME" >/dev/null 2>&1 || true
+	docker image rm "$REG" >/dev/null 2>&1 || true
+}
+trap cleanup EXIT
 
-if ! docker ps --format '{{.Names}}' | grep -q '^bi-registry$'; then
-	docker rm -f bi-registry >/dev/null 2>&1 || true
-	docker run -d --name bi-registry -p ${PORT}:5000 registry:2 >/dev/null
-fi
+docker rm -f "$NAME" >/dev/null 2>&1 || true
+docker run -d --name "$NAME" -p "${PORT}:5000" registry:2 >/dev/null
+ready=0
+for _ in $(seq 1 100); do
+	if curl -fsS "http://localhost:${PORT}/v2/" >/dev/null 2>&1; then
+		ready=1
+		break
+	fi
+	sleep 0.05
+done
+[ "$ready" = 1 ] || { echo "registry on port ${PORT} did not start"; exit 1; }
 
 echo "==> push"
 go run ./test/e2e/tools/publishimg "${REG}"

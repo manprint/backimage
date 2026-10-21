@@ -23,6 +23,9 @@ cleanup() {
 		for log in t1.err t2.err; do [ -f "$work/$log" ] && { echo "[$log]" >&2; sed -n '1,100p' "$work/$log" >&2; }; done
 	fi
 	docker rm -f "$NAME" >/dev/null 2>&1 || true
+	# Every tag of this phase's repository that a pull or a `docker run` left
+	# in the local daemon.
+	docker image ls --format '{{.Repository}}:{{.Tag}}' "$REPO" | xargs -r docker image rm -f >/dev/null 2>&1 || true
 	chmod -R u+rwX "$work" >/dev/null 2>&1 || true
 	rm -rf "$work"
 	return "$rc"

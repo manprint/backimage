@@ -28,16 +28,15 @@ for tool in jq stat sha256sum diff; do
 done
 
 work=$(mktemp -d)
-images=()
 cleanup() {
 	rc=$?
 	if [ "$rc" -ne 0 ] && [ -f "$work/last.log" ]; then
 		echo "phase A9 diagnostics (exit $rc)" >&2
 		sed -n '1,40p' "$work/last.log" >&2
 	fi
-	for img in "${images[@]:-}"; do
-		[ -n "$img" ] && docker rmi -f "$img" >/dev/null 2>&1 || true
-	done
+	# By repository, not by the list backup_to_daemon keeps: its callers run
+	# it in $(...), so what it appends never reaches this shell.
+	docker image ls --format '{{.Repository}}:{{.Tag}}' bi-e2e-a9 | xargs -r docker image rm -f >/dev/null 2>&1 || true
 	chmod -R u+rwX "$work" >/dev/null 2>&1 || true
 	rm -rf "$work"
 	return "$rc"
@@ -94,7 +93,6 @@ source_paths=$(wc -l <"$work/source.txt")
 backup_to_daemon() {
 	local tag=$1; shift
 	local ref="bi-e2e-a9:$tag"
-	images+=("$ref")
 	docker rmi -f "$ref" >/dev/null 2>&1 || true
 	# The status is returned explicitly: a caller that tests it (A9.3 does,
 	# because a daemon may refuse a codec) suspends set -e for the whole
@@ -221,14 +219,27 @@ echo "A9.4 backup cifrato: restore e verify dal daemon: OK"
 # ---------------------------------------------------------------------------
 # A9.5 — more than one data layer: the reader has to switch layer mid-restore
 # ---------------------------------------------------------------------------
-ref=$(backup_to_daemon multi --no-encrypt --max-layer-size 4MiB)
-grep -q '"layers": *[2-9]' "$work/last.log" 2>/dev/null || true
+# The shared fixture is ~300 KB, under any layer size, so it always made one
+# layer and the switch was never exercised: this copy carries 40 MB of
+# incompressible data, cut into layers of 16 MiB, the smallest there are.
+multi_tree="$work/multi/tree"
+mkdir -p "$multi_tree"
+cp -a "$tree/." "$multi_tree/"
+head -c 40000000 /dev/urandom >"$multi_tree/big.bin"
+snapshot "$multi_tree" >"$work/multi-source.txt"
+shared_tree=$tree
+tree=$multi_tree
+ref=$(backup_to_daemon multi --no-encrypt --max-layer-size 16MiB)
+tree=$shared_tree
+bin/backimage inspect "$ref" --local-repo --json >"$work/inspect-multi.json" 2>"$work/last.log"
+layers=$(jq '.manifest.layers | length' "$work/inspect-multi.json")
+[ "$layers" -ge 2 ] || { echo "FAIL: A9.5 needs several data layers, the backup has $layers"; exit 1; }
 rm -rf "$work/out-multi"
 bin/backimage restore "$ref" --local-repo -x -C "$work/out-multi" >"$work/last.log" 2>&1
 snapshot "$(restored_root "$work/out-multi")" >"$work/out-multi.txt"
-diff -q "$work/source.txt" "$work/out-multi.txt" >/dev/null || {
+diff -q "$work/multi-source.txt" "$work/out-multi.txt" >/dev/null || {
 	echo "FAIL: backup multi-layer dal daemon: albero diverso"; exit 1; }
-echo "A9.5 backup su più layer dati: restore dal daemon identico: OK"
+echo "A9.5 backup su $layers layer dati: restore dal daemon identico: OK"
 
 # ---------------------------------------------------------------------------
 # A9.6 — the read-only commands read the same image from the daemon

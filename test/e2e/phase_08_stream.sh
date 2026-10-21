@@ -35,6 +35,9 @@ cleanup() {
 	[ -n "$watch_pid" ] && { kill "$watch_pid" >/dev/null 2>&1 || true; wait "$watch_pid" >/dev/null 2>&1 || true; }
 	[ -n "$server_pid" ] && { kill "$server_pid" >/dev/null 2>&1 || true; wait "$server_pid" >/dev/null 2>&1 || true; }
 	docker rm -f "$NAME" >/dev/null 2>&1 || true
+	# Every tag of this phase's repository that a pull or a `docker run` left
+	# in the local daemon.
+	docker image ls --format '{{.Repository}}:{{.Tag}}' "$REPO" | xargs -r docker image rm -f >/dev/null 2>&1 || true
 	chmod -R u+rwX "$work" >/dev/null 2>&1 || true
 	rm -rf "$work"
 	return "$rc"
@@ -168,8 +171,16 @@ rm -rf "$work/out"/*
 
 echo "==> server released every temporary file and logged no secret"
 [ -z "$(find "$work/server-work" -mindepth 1 -print -quit)" ]
-! grep -F 'phase08-stream-secret' "$work/server.log"
-! grep -F "$PASSPHRASE" "$work/server.log"
+# A negated command never trips errexit: "! grep" let a leaked secret
+# through. -q keeps the secret itself out of the test output.
+if grep -qF -- 'phase08-stream-secret' "$work/server.log"; then
+	echo "FAIL: the server log contains the shared token"
+	exit 1
+fi
+if grep -qF -- "$PASSPHRASE" "$work/server.log"; then
+	echo "FAIL: the server log contains the backup passphrase"
+	exit 1
+fi
 curl -fsS "http://127.0.0.1:${METRICS_PORT}/metrics" | grep -q backimage_bytes_uploaded_total
 stop_server
 

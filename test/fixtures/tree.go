@@ -1,8 +1,10 @@
-// Package fixtures builds filesystem trees used by archive round-trip tests.
+//go:build unix
+
 package fixtures
 
 import (
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -35,6 +37,17 @@ const (
 	FeatTimes                         // mtime with nanoseconds, mtime in 1970, mtime in 2200
 	FeatBigFile                       // 128 MiB file (skipped in short mode)
 )
+
+// Owners given to the FeatOwnership entries. They are deliberately unusual
+// and distinct from each other, so that a restore which drops ownership, or
+// swaps uid and gid, cannot land on the right values by accident.
+const (
+	ForeignUID = 4242
+	ForeignGID = 4343
+)
+
+// BigFileSize is the size of the FeatBigFile entry.
+const BigFileSize = 128 << 20
 
 // RequiresRoot reports which of the requested features need privileges.
 func RequiresRoot(feats Feature) Feature {
@@ -80,6 +93,20 @@ func Build(t *testing.T, dir string, feats Feature) *Manifest {
 			t.Fatalf("symlink %s: %v", rel, err)
 		}
 		m.Symlinks = append(m.Symlinks, rel)
+	}
+	// record adds a file created by other means, hashing what is on disk.
+	record := func(rel string) {
+		f, err := os.Open(filepath.Join(dir, rel))
+		if err != nil {
+			t.Fatalf("open %s: %v", rel, err)
+		}
+		defer f.Close()
+		h := sha256.New()
+		if _, err := io.Copy(h, f); err != nil {
+			t.Fatalf("hash %s: %v", rel, err)
+		}
+		m.Files = append(m.Files, rel)
+		m.SHA[rel] = hex.EncodeToString(h.Sum(nil))
 	}
 
 	if feats&FeatBasic != 0 {
@@ -193,7 +220,10 @@ func Build(t *testing.T, dir string, feats Feature) *Manifest {
 		if _, err := f.Write([]byte("tail")); err != nil {
 			t.Fatalf("write sparse tail: %v", err)
 		}
-		f.Close()
+		if err := f.Close(); err != nil {
+			t.Fatalf("close sparse: %v", err)
+		}
+		record("sparse/bighole")
 	}
 	if feats&(FeatACLs|FeatCaps) != 0 {
 		// ACLs and capabilities are xattrs in the system/security namespace.
@@ -201,10 +231,7 @@ func Build(t *testing.T, dir string, feats Feature) *Manifest {
 		write("acls/file.txt", []byte("acl"))
 		// FeatACLs: user ACL entries via system.posix_acl_access
 		if feats&FeatACLs != 0 {
-			setXattr(t, filepath.Join(dir, "acls/file.txt"), "system.posix_acl_access",
-				[]byte{0x02, 0x00, 0x00, 0x00, 0x01, 0x00, 0x06, 0x00, 0xff, 0xff, 0xff, 0xff,
-					0x02, 0x00, 0x04, 0x00, 0xff, 0xff, 0xff, 0xff, 0x20, 0x00, 0x00, 0x00,
-					0x04, 0x00, 0x20, 0x00, 0xff, 0xff, 0xff, 0xff, 0x10, 0x00, 0x00, 0x00})
+			setXattr(t, filepath.Join(dir, "acls/file.txt"), "system.posix_acl_access", accessACL())
 		}
 		// FeatCaps: security.capability
 		if feats&FeatCaps != 0 {
@@ -215,7 +242,7 @@ func Build(t *testing.T, dir string, feats Feature) *Manifest {
 	if feats&(FeatDevices|FeatFifos) != 0 {
 		mkd("special")
 		if feats&FeatDevices != 0 {
-			if err := unix.Mknod(filepath.Join(dir, "special/chardev"), unix.S_IFCHR|0o600, int(unix.Mkdev(1, 3))); err != nil {
+			if err := mknod(filepath.Join(dir, "special/chardev"), unix.S_IFCHR|0o600, unix.Mkdev(1, 3)); err != nil {
 				if os.Geteuid() != 0 {
 					t.Logf("skip devices: mknod: %v", err)
 				} else {
@@ -224,7 +251,7 @@ func Build(t *testing.T, dir string, feats Feature) *Manifest {
 			} else {
 				m.Devices = append(m.Devices, "special/chardev")
 			}
-			if err := unix.Mknod(filepath.Join(dir, "special/blockdev"), unix.S_IFBLK|0o600, int(unix.Mkdev(7, 0))); err != nil {
+			if err := mknod(filepath.Join(dir, "special/blockdev"), unix.S_IFBLK|0o600, unix.Mkdev(7, 0)); err != nil {
 				if os.Geteuid() != 0 {
 					t.Logf("skip devices: mknod: %v", err)
 				} else {
@@ -244,6 +271,45 @@ func Build(t *testing.T, dir string, feats Feature) *Manifest {
 	if feats&FeatOwnership != 0 {
 		if os.Geteuid() != 0 {
 			t.Log("skip ownership wiring: requires root")
+		} else {
+			mkd("owner/dir")
+			write("owner/file", []byte("owned"))
+			link("owner/link", "file")
+			for rel, id := range map[string][2]int{
+				"owner/file": {ForeignUID, ForeignGID},
+				"owner/dir":  {ForeignGID, ForeignUID}, // swapped: a uid/gid mix-up shows
+				"owner/link": {ForeignUID + 1, ForeignGID + 1},
+			} {
+				if err := os.Lchown(filepath.Join(dir, rel), id[0], id[1]); err != nil {
+					t.Fatalf("lchown %s: %v", rel, err)
+				}
+			}
+		}
+	}
+	if feats&FeatBigFile != 0 {
+		if testing.Short() {
+			t.Log("skip big file: -short")
+		} else {
+			mkd("big")
+			p := filepath.Join(dir, "big/file.bin")
+			f, err := os.Create(p)
+			if err != nil {
+				t.Fatalf("create big file: %v", err)
+			}
+			h := sha256.New()
+			w := io.MultiWriter(f, h)
+			block := make([]byte, 1<<20)
+			for i := range BigFileSize / len(block) {
+				bigFileBlock(block, uint64(i))
+				if _, err := w.Write(block); err != nil {
+					t.Fatalf("write big file: %v", err)
+				}
+			}
+			if err := f.Close(); err != nil {
+				t.Fatalf("close big file: %v", err)
+			}
+			m.Files = append(m.Files, "big/file.bin")
+			m.SHA["big/file.bin"] = hex.EncodeToString(h.Sum(nil))
 		}
 	}
 
@@ -251,6 +317,44 @@ func Build(t *testing.T, dir string, feats Feature) *Manifest {
 	sort.Strings(m.Dirs)
 	sort.Strings(m.Symlinks)
 	return m
+}
+
+// accessACL encodes u::rw-,u:ForeignUID:r--,g::r--,m::r--,o::r-- in the
+// kernel's system.posix_acl_access layout: a version-2 header, then one
+// (tag, perm, id) entry per line, sorted by tag, with a mask because a named
+// user is present.
+func accessACL() []byte {
+	const undefinedID = 0xffffffff
+	entries := []struct {
+		tag, perm uint16
+		id        uint32
+	}{
+		{0x01, 6, undefinedID}, // ACL_USER_OBJ
+		{0x02, 4, ForeignUID},  // ACL_USER
+		{0x04, 4, undefinedID}, // ACL_GROUP_OBJ
+		{0x10, 4, undefinedID}, // ACL_MASK
+		{0x20, 4, undefinedID}, // ACL_OTHER
+	}
+	out := binary.LittleEndian.AppendUint32(nil, 2)
+	for _, e := range entries {
+		out = binary.LittleEndian.AppendUint16(out, e.tag)
+		out = binary.LittleEndian.AppendUint16(out, e.perm)
+		out = binary.LittleEndian.AppendUint32(out, e.id)
+	}
+	return out
+}
+
+// bigFileBlock fills buf with the n-th block of the big file: xorshift64 bytes
+// seeded by the block number, so the content is deterministic, does not
+// compress and no two blocks are equal.
+func bigFileBlock(buf []byte, n uint64) {
+	x := n*0x9e3779b97f4a7c15 + 1
+	for i := 0; i+8 <= len(buf); i += 8 {
+		x ^= x << 13
+		x ^= x >> 7
+		x ^= x << 17
+		binary.LittleEndian.PutUint64(buf[i:], x)
+	}
 }
 
 // MapPath maps a manifest-relative path into dir.

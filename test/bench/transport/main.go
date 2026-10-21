@@ -10,7 +10,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"syscall"
 	"time"
 
 	backtransport "github.com/manprint/backimage/pkg/transport"
@@ -158,13 +157,4 @@ func printResult(v result) {
 	if err := json.NewEncoder(os.Stdout).Encode(v); err != nil {
 		panic(err)
 	}
-}
-
-func processCPU() time.Duration {
-	var usage syscall.Rusage
-	if err := syscall.Getrusage(syscall.RUSAGE_SELF, &usage); err != nil {
-		return 0
-	}
-	return time.Duration(usage.Utime.Sec+usage.Stime.Sec)*time.Second +
-		time.Duration(usage.Utime.Usec+usage.Stime.Usec)*time.Microsecond
 }

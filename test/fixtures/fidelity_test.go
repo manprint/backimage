@@ -1,3 +1,5 @@
+//go:build unix
+
 package fixtures
 
 import (
@@ -23,7 +25,7 @@ func TestCompareCpA(t *testing.T) {
 	if err := os.Chmod(filepath.Join(want, "perms/secret000"), 0o400); err != nil {
 		t.Fatal(err)
 	}
-	out, err := exec.Command("cp", "-a", want, got).CombinedOutput()
+	out, err := exec.CommandContext(t.Context(), "cp", "-a", want, got).CombinedOutput()
 	if err != nil {
 		t.Fatalf("cp -a: %v\n%s", err, out)
 	}
@@ -46,7 +48,7 @@ func TestCompareCpR(t *testing.T) {
 	if err := os.Chmod(filepath.Join(want, "perms/secret000"), 0o400); err != nil {
 		t.Fatal(err)
 	}
-	out, err := exec.Command("cp", "-r", want, got).CombinedOutput()
+	out, err := exec.CommandContext(t.Context(), "cp", "-r", want, got).CombinedOutput()
 	if err != nil {
 		t.Fatalf("cp -r: %v\n%s", err, out)
 	}

@@ -29,6 +29,9 @@ cleanup() {
 	fi
 	if [ -n "$server_pid" ]; then kill "$server_pid" >/dev/null 2>&1 || true; wait "$server_pid" >/dev/null 2>&1 || true; fi
 	docker rm -f "$NAME" >/dev/null 2>&1 || true
+	# Every tag of this phase's repository that a pull or a `docker run` left
+	# in the local daemon.
+	docker image ls --format '{{.Repository}}:{{.Tag}}' "$REPO" | xargs -r docker image rm -f >/dev/null 2>&1 || true
 	chmod -R u+rwX "$work" >/dev/null 2>&1 || true
 	rm -rf "$work"
 	return "$rc"

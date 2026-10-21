@@ -25,6 +25,9 @@ REPO="${HOST}/e2e/backup"
 work=$(mktemp -d)
 cleanup() {
 	docker rm -f "$NAME" >/dev/null 2>&1 || true
+	# Every tag of this phase's repository that a pull or a `docker run` left
+	# in the local daemon.
+	docker image ls --format '{{.Repository}}:{{.Tag}}' "$REPO" | xargs -r docker image rm -f >/dev/null 2>&1 || true
 	rm -rf "$work"
 }
 trap cleanup EXIT
