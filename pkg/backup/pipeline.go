@@ -12,7 +12,6 @@ import (
 	"fmt"
 	"io"
 	"os"
-	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
@@ -53,7 +52,12 @@ type Config struct {
 
 	Encrypt    bool
 	Passphrase func() ([]byte, error) // encrypted with a passphrase
-	Recipients []string               // age X25519 public keys
+	// PassphraseFallbacks returns, after Passphrase has been called, the
+	// readings earlier releases made of the same input
+	// (crypt.ReadPassphraseAll). They are only tried on the key file of the
+	// --dedup reference, never used to seal; the pipeline wipes them.
+	PassphraseFallbacks func() [][]byte
+	Recipients          []string // age X25519 public keys
 	// Dedup enables CDC, content-defined layer boundaries and convergent
 	// encryption. It is deliberately opt-in because it reveals chunk equality.
 	Dedup       bool
@@ -100,7 +104,21 @@ type Config struct {
 	VerifyAfterPush string
 
 	Progress func(string) // optional diagnostics
-	Created  string       // RFC3339; empty = wall clock
+	// Warn receives what the run must not keep from the operator; unlike
+	// Progress the CLI prints it under --quiet too. Unset, warnings go to
+	// Progress.
+	Warn    func(string)
+	Created string // RFC3339; empty = wall clock
+}
+
+// warn delivers one warning to Warn, or to Progress when Warn is unset.
+func (c Config) warn(message string) {
+	switch {
+	case c.Warn != nil:
+		c.Warn(message)
+	case c.Progress != nil:
+		c.Progress(message)
+	}
 }
 
 // RemoteUploader is implemented by remote.Client. Keeping the pipeline
@@ -131,10 +149,18 @@ type Result struct {
 	// a restore materialises them as empty files. Zero on a strict run, which
 	// refuses to start instead.
 	ContentSkipped int64 `json:"contentSkipped"`
+	// SelfExtractRepublished reports that a v1 receiver published a
+	// /backimage other than this client's and the client put its own back on
+	// the tag (see republishOwnSelfExtract).
+	SelfExtractRepublished bool `json:"selfExtractRepublished,omitempty"`
 }
 
 // ErrNoData is returned when the archive stream produced no chunks at all.
 var ErrNoData = errors.New("backup: nessun dato prodotto")
+
+// ErrPrivileges is returned when the privilege preflight refuses a strict
+// backup: the run lacks a capability it needs to capture the tree as it is.
+var ErrPrivileges = errors.New("insufficient privileges")
 
 // Validate checks flag-level conflicts before any filesystem work.
 func Validate(cfg Config) error {
@@ -237,7 +263,7 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 			// extended attributes are invisible without CAP_SYS_ADMIN): they
 			// never block the backup.
 			if !c.Available && archive.BlockingCapability(c) {
-				return res, fmt.Errorf("preflight: %s non disponibile (%s): %s", c.Name, c.Reason, c.Remedy)
+				return res, fmt.Errorf("preflight: %w: %s non disponibile (%s): %s", ErrPrivileges, c.Name, c.Reason, c.Remedy)
 			}
 		}
 	}
@@ -412,6 +438,9 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 		return res, nil
 	}
 
+	// Registered before anything is spooled: a build or finalize that fails
+	// must not leave its spool and layer files in --temp-dir.
+	defer bp.cleanup()
 	if err := bp.build(ctx); err != nil {
 		if errors.Is(err, ErrNoData) {
 			return res, ErrNoData
@@ -424,17 +453,16 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	if err := bp.finalize(); err != nil {
 		return res, fmt.Errorf("metadati: %w", err)
 	}
-	defer bp.cleanup()
 
 	res.Files = bp.stats.Files
 	res.BytesRaw = bp.stats.BytesRaw
 	res.ContentSkipped = bp.stats.ContentSkipped
-	if res.ContentSkipped > 0 && cfg.Progress != nil {
+	if res.ContentSkipped > 0 {
 		// The count belongs in the run's own output, not only in --json: a
 		// backup that silently holds empty files where data should be is the
-		// one thing --allow-degraded must never hide.
-		cfg.Progress(fmt.Sprintf(
-			"backup: attenzione: %d file archiviati SENZA contenuto perché illeggibili; "+
+		// one thing --allow-degraded must never hide, --quiet included.
+		cfg.warn(fmt.Sprintf(
+			"backup: %d file archiviati SENZA contenuto perché illeggibili; "+
 				"un restore li ricrea vuoti (elenco completo con --json)", res.ContentSkipped))
 	}
 	res.Chunks = int(bp.chunkIdx)
@@ -472,9 +500,12 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 			return res, fmt.Errorf("remote push: %w", uploadErr)
 		}
 		if remoteResult.Digest != payload.ExpectedDigest {
-			return res, fmt.Errorf("remote index digest %s differs from local %s", remoteResult.Digest, payload.ExpectedDigest)
+			if err := bp.republishOwnSelfExtract(ctx, idx, images, payload.ExpectedDigest, remoteResult.Digest); err != nil {
+				return res, err
+			}
+			res.SelfExtractRepublished = true
 		}
-		bp.digest = remoteResult.Digest
+		bp.digest = payload.ExpectedDigest
 		bp.skipped = int(remoteResult.BlobsSkipped)
 		if cfg.Progress != nil {
 			cfg.Progress("backup: upload remoto completato")
@@ -575,7 +606,7 @@ func findDedupBase(ctx context.Context, cfg Config) (*dedupBase, error) {
 		kc = registry.NewKeychainForUser(nil, cfg.Store, cfg.RegistryUser)
 	}
 	opts := []v1remote.Option{v1remote.WithContext(ctx), v1remote.WithAuthFromKeychain(kc)}
-	tags, err := v1remote.List(ref.Context(), opts...)
+	tags, err := registry.ListTagNames(ctx, ref.Context(), opts...)
 	if err != nil {
 		return nil, err
 	}
@@ -709,21 +740,35 @@ func reuseDedupKey(previous *dedupBase, cfg Config, passphrase []byte) (*crypt.K
 		return nil, "dedup: rotazione della chiave richiesta con --rotate-key: " +
 			"questo backup ricarica tutti i blob una volta"
 	}
-	identity := crypt.Identity{Passphrase: passphrase, AgeKeyFile: cfg.AgeIdentity}
+	// The base may have been sealed by a release that read the same input
+	// differently; its key is still the one to reuse, and this backup wraps
+	// it under the current reading.
+	passphrases := [][]byte{passphrase}
+	if cfg.PassphraseFallbacks != nil {
+		fallbacks := cfg.PassphraseFallbacks()
+		defer func() {
+			for _, p := range fallbacks {
+				clear(p)
+			}
+		}()
+		passphrases = append(passphrases, fallbacks...)
+	}
 	for _, keyName := range []string{"keys.pass.age", "keys.age"} {
 		data := previous.keyFiles[keyName]
 		if len(data) == 0 {
 			continue
 		}
-		km, err := crypt.UnwrapKeys(bytes.NewReader(data), identity)
-		if err != nil {
-			continue
+		for _, p := range passphrases {
+			km, err := crypt.UnwrapKeys(bytes.NewReader(data), crypt.Identity{Passphrase: p, AgeKeyFile: cfg.AgeIdentity})
+			if err != nil {
+				continue
+			}
+			if reuseErr := km.ReusableFor(crypt.EnvelopeVersion, crypt.NonceConvergent); reuseErr != nil {
+				km.Wipe()
+				return nil, keyRefusalWarning(reuseErr)
+			}
+			return km, ""
 		}
-		if reuseErr := km.ReusableFor(crypt.EnvelopeVersion, crypt.NonceConvergent); reuseErr != nil {
-			km.Wipe()
-			return nil, keyRefusalWarning(reuseErr)
-		}
-		return km, ""
 	}
 	// No key file opened at all: the reason is about the credential, not about
 	// the key.
@@ -849,13 +894,16 @@ type spoolFile struct {
 	size int64
 }
 
-func newSpool(dir string, idx int) (*spoolFile, error) {
-	path := filepath.Join(dir, fmt.Sprintf("backimage-layer-%06d.blob.tmp", idx))
-	f, err := os.Create(path)
+// newSpool creates the spool with a name no other process can predict or
+// share: --temp-dir defaults to the system temporary directory, where two
+// backups run side by side and other users can plant names. The file is only
+// ever read back through f, never reopened by path.
+func newSpool(dir string) (*spoolFile, error) {
+	f, err := os.CreateTemp(dir, "backimage-layer-*.blob.tmp")
 	if err != nil {
 		return nil, err
 	}
-	return &spoolFile{path: path, f: f}, nil
+	return &spoolFile{path: f.Name(), f: f}, nil
 }
 
 func (s *spoolFile) Write(p []byte) error {
@@ -871,30 +919,48 @@ func (s *spoolFile) Remove() {
 	_ = os.Remove(s.path)
 }
 
+// errBuildAborted stops the archive goroutine when build returns before
+// reading the whole stream.
+var errBuildAborted = errors.New("backup stream aborted")
+
 // build runs the streaming archive/split/compress/seal section.
 func (b *builder) build(ctx context.Context) error {
 	b.reportBuildProgress(true)
 	pr, pw := io.Pipe()
-	awErr := make(chan error, 1)
+	// archiveErr is written by the archive goroutine before archiveDone
+	// closes, and read only after.
+	var archiveErr error
+	archiveDone := make(chan struct{})
+	archived := false
+	defer func() {
+		if archived {
+			return
+		}
+		// An early return leaves the archive goroutine blocked on the pipe
+		// with source files open: unblock it and wait, so nothing it does
+		// outlives build. Its error is the abort's own echo.
+		_ = pr.CloseWithError(errBuildAborted)
+		<-archiveDone
+	}()
 	go func() {
+		defer close(archiveDone)
 		defer pw.Close()
 		aw := archive.NewWriter(pw, archiveOptions(b.cfg))
 		for _, r := range b.cfg.RootPaths {
 			if err := aw.AddRoot(ctx, r); err != nil {
 				_ = pw.CloseWithError(err)
-				awErr <- err
+				archiveErr = err
 				return
 			}
 		}
 		st, err := aw.Close()
 		if err != nil {
 			_ = pw.CloseWithError(err)
-			awErr <- err
+			archiveErr = err
 			return
 		}
 		b.stats = st
 		b.entries = aw.Entries()
-		awErr <- nil
 	}()
 
 	var sp chunk.Splitter
@@ -954,8 +1020,10 @@ func (b *builder) build(ctx context.Context) error {
 		}
 	}
 
-	if err := <-awErr; err != nil {
-		return fmt.Errorf("archivio: %w", err)
+	archived = true
+	<-archiveDone
+	if archiveErr != nil {
+		return fmt.Errorf("archivio: %w", archiveErr)
 	}
 	if b.chunkIdx == 0 {
 		return ErrNoData
@@ -1038,7 +1106,7 @@ func (b *builder) storeChunk(ck *chunk.Chunk) ([]byte, error) {
 	}
 
 	if b.spool == nil {
-		s, err := newSpool(b.cfg.TempDir, b.blobIdx)
+		s, err := newSpool(b.cfg.TempDir)
 		if err != nil {
 			return nil, err
 		}
@@ -1060,10 +1128,6 @@ func (b *builder) rollLayer() error {
 	}
 	digest, err := streamDigest(b.spool)
 	if err != nil {
-		b.spool.Remove()
-		return err
-	}
-	if err := b.spool.Close(); err != nil {
 		return err
 	}
 
@@ -1082,17 +1146,20 @@ func (b *builder) rollLayer() error {
 		b.rows[i].P = dataPath
 	}
 
+	spool := b.spool
 	lf := ociimg.LayerFile{
 		Path: "/" + dataPath,
 		Mode: 0o644,
-		Size: b.spool.size,
+		Size: spool.size,
 		Open: func() (io.ReadCloser, error) {
-			return os.Open(b.spool.path)
+			// Read through the descriptor that wrote the bytes digested
+			// above: reopening by path would read whatever the name points
+			// to now.
+			return io.NopCloser(io.NewSectionReader(spool.f, 0, spool.size)), nil
 		},
 	}
 	l, err := ociimg.NewFileLayer([]ociimg.LayerFile{lf}, b.codec, b.level, b.cfg.TempDir)
 	if err != nil {
-		b.spool.Remove()
 		return err
 	}
 	b.data = append(b.data, l)
@@ -1474,12 +1541,7 @@ func (b *builder) cleanup() {
 
 // pushRegistry publishes through the checkpoint-aware push.
 func (b *builder) pushRegistry(ctx context.Context, idx v1.ImageIndex, images map[string]v1.Image) error {
-	opts := registry.PushOptions{
-		Jobs:       b.cfg.Jobs,
-		ChunkSize:  b.cfg.UploadChunkSize,
-		MaxRetries: 5,
-		Verify:     registry.VerifyQuick,
-	}
+	opts := b.basePushOptions()
 	if b.cfg.VerifyAfterPush == VerifyPushOff {
 		opts.Verify = registry.VerifyOff
 	}
@@ -1488,6 +1550,38 @@ func (b *builder) pushRegistry(ctx context.Context, idx v1.ImageIndex, images ma
 		opts.ID = checkpointID(b.cfg)
 		opts.Manifest = b.manifestBytes
 	}
+	ref, err := name.ParseReference(b.cfg.Ref)
+	if err != nil {
+		return err
+	}
+	if err := b.pushImages(ctx, ref, idx, images, opts); err != nil {
+		return err
+	}
+	return b.verifyPushedFull(ctx, ref, b.keychain())
+}
+
+// basePushOptions is the push every publish of this client starts from: no
+// checkpoint, quick read-back.
+func (b *builder) basePushOptions() registry.PushOptions {
+	return registry.PushOptions{
+		Jobs:       b.cfg.Jobs,
+		ChunkSize:  b.cfg.UploadChunkSize,
+		MaxRetries: 5,
+		Verify:     registry.VerifyQuick,
+	}
+}
+
+// keychain resolves the client's own registry credentials.
+func (b *builder) keychain() registry.Keychain {
+	if b.cfg.Keychain != nil {
+		return b.cfg.Keychain
+	}
+	return registry.NewKeychainForUser(nil, b.cfg.Store, b.cfg.RegistryUser)
+}
+
+// pushImages runs one push to ref and turns its progress into the run's
+// counters and progress lines.
+func (b *builder) pushImages(ctx context.Context, ref name.Reference, idx v1.ImageIndex, images map[string]v1.Image, opts registry.PushOptions) error {
 	pch := make(chan registry.Progress, 8)
 	opts.Progress = pch
 	done := make(chan struct{})
@@ -1570,22 +1664,10 @@ func (b *builder) pushRegistry(ctx context.Context, idx v1.ImageIndex, images ma
 		}
 		report(true)
 	}()
-	kc := b.cfg.Keychain
-	if kc == nil {
-		kc = registry.NewKeychainForUser(nil, b.cfg.Store, b.cfg.RegistryUser)
-	}
-	ref, err := name.ParseReference(b.cfg.Ref)
-	if err != nil {
-		close(pch)
-		return err
-	}
-	err = registry.Push(ctx, ref, images, idx, kc, opts)
+	err := registry.Push(ctx, ref, images, idx, b.keychain(), opts)
 	close(pch)
 	<-done
-	if err != nil {
-		return err
-	}
-	return b.verifyPushedFull(ctx, ref, kc)
+	return err
 }
 
 // Post-push read-back levels.

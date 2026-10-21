@@ -69,7 +69,7 @@ func TestDedupLayerFallbackAndHardLimit(t *testing.T) {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
-	spool, err := newSpool(dir, 110)
+	spool, err := newSpool(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +100,7 @@ func TestDedupLayerFallbackAndHardLimit(t *testing.T) {
 	if b.shouldRollLayer([32]byte{}) {
 		t.Fatal("no spool should never roll")
 	}
-	b.spool, err = newSpool(dir, 999)
+	b.spool, err = newSpool(dir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -347,7 +347,7 @@ func TestRunValidationAndEstimateErrors(t *testing.T) {
 }
 
 func TestSpoolFailureAndUnknownLocalOutput(t *testing.T) {
-	if _, err := newSpool(filepath.Join(t.TempDir(), "missing"), 0); err == nil {
+	if _, err := newSpool(filepath.Join(t.TempDir(), "missing")); err == nil {
 		t.Fatal("spool in missing directory accepted")
 	}
 	file, err := os.CreateTemp(t.TempDir(), "spool")

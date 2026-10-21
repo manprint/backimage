@@ -42,8 +42,10 @@ func newMemReg() *memReg {
 	return &memReg{blobs: map[string][]byte{}, manifests: map[string]string{}, ups: map[string][]byte{}}
 }
 
-func (m *memReg) server() *httptest.Server {
-	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+func (m *memReg) server() *httptest.Server { return httptest.NewServer(m.handler()) }
+
+func (m *memReg) handler() http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/v2/" {
 			w.Header().Set("WWW-Authenticate",
 				`Bearer realm="http://`+r.Host+`/token",service="test"`)
@@ -131,7 +133,7 @@ func (m *memReg) server() *httptest.Server {
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
-	}))
+	})
 }
 
 func refTo(srvURL string) string {

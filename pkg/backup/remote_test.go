@@ -53,7 +53,7 @@ func TestPipelineRemotePayloadUsesSameBuiltLayers(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Digest == "" || res.Digest != capture.backup.ExpectedDigest || res.SkippedBlobs != 2 {
+	if res.Digest == "" || res.Digest != capture.backup.ExpectedDigest || res.SkippedBlobs != 2 || res.SelfExtractRepublished {
 		t.Fatalf("result = %#v", res)
 	}
 	if capture.backup.Start == nil || len(capture.backup.Layers) != res.Layers {

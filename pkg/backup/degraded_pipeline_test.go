@@ -76,6 +76,38 @@ func TestAllowDegradedCompletesWithAnUnreadableFile(t *testing.T) {
 	}
 }
 
+// TestContentSkippedIsAWarning: the count goes to Warn, which the CLI prints
+// under --quiet too, and not to Progress, which --quiet drops: an unattended
+// run is where a backup with holes in it goes unnoticed.
+func TestContentSkippedIsAWarning(t *testing.T) {
+	tree := degradedTree(t)
+	var progress, warnings []string
+	_, err := Run(context.Background(), Config{
+		RootPaths:     []string{tree},
+		Ref:           "example.com/t/degraded:tag1",
+		Compression:   "zstd",
+		Jobs:          1,
+		MaxLayerSize:  1 << 20,
+		AllowDegraded: true,
+		SelfExtract:   stubSelf,
+		Platforms:     []string{"linux/amd64"},
+		Output:        "oci-layout",
+		OutputPath:    filepath.Join(t.TempDir(), "layout"),
+		CheckpointDir: t.TempDir(),
+		Progress:      func(msg string) { progress = append(progress, msg) },
+		Warn:          func(msg string) { warnings = append(warnings, msg) },
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !containsSubstring(warnings, "SENZA contenuto") {
+		t.Errorf("no warning about the dropped content: %v", warnings)
+	}
+	if containsSubstring(progress, "SENZA contenuto") {
+		t.Errorf("the warning went to Progress, which --quiet drops: %v", progress)
+	}
+}
+
 // TestStrictRefusesAnUnreadableFile is the other half: the default run does
 // not produce a backup with a hole in it. The preflight stops it before any
 // work, and the message names the remedy.

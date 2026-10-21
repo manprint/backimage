@@ -190,6 +190,14 @@ func TestRemoteStreamBackupRoundTrip(t *testing.T) {
 
 func streamClient(t *testing.T, ref, registryURL string) *backremote.Client {
 	t.Helper()
+	return remoteClient(t, ref, registryURL, stubSelf)
+}
+
+// remoteClient connects to a real in-process server session whose receiver
+// builds layer 0 from serverSelf when the client sends no extractor, as a
+// listen-remote does with the binaries of its own build.
+func remoteClient(t *testing.T, ref, registryURL string, serverSelf func(string) ([]byte, error)) *backremote.Client {
+	t.Helper()
 	parsed, err := name.ParseReference(ref)
 	if err != nil {
 		t.Fatal(err)
@@ -201,7 +209,7 @@ func streamClient(t *testing.T, ref, registryURL string) *backremote.Client {
 	}
 	sink, err := server.NewRegistrySink(server.RegistrySinkOptions{
 		Broker: server.NewTokenBroker(5 * time.Second), Jobs: 2,
-		SelfExtract: stubSelf,
+		SelfExtract: serverSelf,
 	})
 	if err != nil {
 		t.Fatal(err)

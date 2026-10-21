@@ -11,8 +11,8 @@ import "testing"
 // for 64 MiB while the real peak was 1024 MiB.
 func TestTempSpaceNeededCoversEveryRetainedLayer(t *testing.T) {
 	const (
-		raw   = 20 << 30 // a 20 GiB source
-		layer = 1 << 30  // the default --max-layer-size
+		raw   int64 = 20 << 30 // a 20 GiB source
+		layer int64 = 1 << 30  // the default --max-layer-size
 	)
 	need := tempSpaceNeeded(raw, layer)
 	if need < raw {
@@ -27,7 +27,7 @@ func TestTempSpaceNeededCoversEveryRetainedLayer(t *testing.T) {
 // TestTempSpaceNeededIgnoresJobs is the point of the change: concurrency does
 // not bound the peak, because nothing is released between layers.
 func TestTempSpaceNeededIgnoresJobs(t *testing.T) {
-	const raw, layer = 4 << 30, 512 << 20
+	const raw, layer int64 = 4 << 30, 512 << 20
 	if a, b := tempSpaceNeeded(raw, layer), tempSpaceNeeded(raw, layer); a != b {
 		t.Fatalf("not deterministic: %d != %d", a, b)
 	}

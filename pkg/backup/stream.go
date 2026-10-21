@@ -88,9 +88,9 @@ func (b *builder) runStream(ctx context.Context, est Estimate, res Result) (Resu
 	// The client is the only side that ever saw the source, so it is the only
 	// side that can say a file went over the wire without its content.
 	res.ContentSkipped = stats.ContentSkipped
-	if res.ContentSkipped > 0 && cfg.Progress != nil {
-		cfg.Progress(fmt.Sprintf(
-			"backup: attenzione: %d file inviati SENZA contenuto perché illeggibili; "+
+	if res.ContentSkipped > 0 {
+		cfg.warn(fmt.Sprintf(
+			"backup: %d file inviati SENZA contenuto perché illeggibili; "+
 				"un restore li ricrea vuoti (elenco completo con --json)", res.ContentSkipped))
 	}
 	if remoteResult.Files > 0 {
