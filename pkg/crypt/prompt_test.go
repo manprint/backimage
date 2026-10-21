@@ -85,8 +85,10 @@ func TestPassphraseEnv(t *testing.T) {
 	if err != nil || string(p) != "envval" {
 		t.Fatalf("env: %q %v", p, err)
 	}
+	// An empty variable is an unset one, as for every BACKIMAGE_* variable:
+	// the reading moves on to the next source instead of failing.
 	t.Setenv("BACKIMAGE_PASSPHRASE", "")
-	if _, err := ReadPassphrase(PassphraseSource{EnvVar: "BACKIMAGE_PASSPHRASE"}); !errors.Is(err, ErrEmptyPassphrase) {
+	if _, err := ReadPassphrase(PassphraseSource{EnvVar: "BACKIMAGE_PASSPHRASE"}); !errors.Is(err, ErrNoPassphrase) {
 		t.Fatalf("empty env: %v", err)
 	}
 	t.Setenv("BACKIMAGE_PASSPHRASE", "x")

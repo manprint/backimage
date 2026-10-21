@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
@@ -218,9 +220,67 @@ type layoutWriter struct {
 
 func (w *layoutWriter) Name() Target { return TargetOCILayout }
 
+// Write removes, on failure, what it created: a directory holding oci-layout
+// and some blobs but no index.json looks like a layout and is not one. A
+// directory that already held something is left as it is.
 func (w *layoutWriter) Write(ctx context.Context, ref name.Reference, idx v1.ImageIndex, ch chan<- Progress) error {
+	before, err := statBefore(w.path)
+	if err != nil {
+		return fmt.Errorf("OCI layout at %s: %w", w.path, err)
+	}
 	if _, err := layout.Write(w.path, idx); err != nil {
-		return fmt.Errorf("writing OCI layout at %s: %w", w.path, err)
+		return errors.Join(fmt.Errorf("writing OCI layout at %s: %w", w.path, err), before.undo(w.path))
+	}
+	return nil
+}
+
+// priorState is what a destination path held before a writer filled it.
+type priorState int
+
+const (
+	priorAbsent   priorState = iota // nothing at the path
+	priorEmptyDir                   // an empty directory
+	priorContent                    // anything else: never cleaned up
+)
+
+func statBefore(path string) (priorState, error) {
+	st, err := os.Lstat(path)
+	if os.IsNotExist(err) {
+		return priorAbsent, nil
+	}
+	if err != nil {
+		return 0, err
+	}
+	if !st.IsDir() {
+		return priorContent, nil
+	}
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return 0, err
+	}
+	if len(entries) == 0 {
+		return priorEmptyDir, nil
+	}
+	return priorContent, nil
+}
+
+// undo brings path back to the state recorded before a failed write.
+func (p priorState) undo(path string) error {
+	switch p {
+	case priorAbsent:
+		if err := os.RemoveAll(path); err != nil {
+			return fmt.Errorf("removing the partial output %s: %w", path, err)
+		}
+	case priorEmptyDir:
+		entries, err := os.ReadDir(path)
+		if err != nil {
+			return fmt.Errorf("emptying the partial output %s: %w", path, err)
+		}
+		for _, e := range entries {
+			if err := os.RemoveAll(filepath.Join(path, e.Name())); err != nil {
+				return fmt.Errorf("emptying the partial output %s: %w", path, err)
+			}
+		}
 	}
 	return nil
 }
@@ -237,8 +297,18 @@ func (w *tarWriter) Write(ctx context.Context, ref name.Reference, idx v1.ImageI
 	if err != nil {
 		return err
 	}
+	before, err := statBefore(w.path)
+	if err != nil {
+		return fmt.Errorf("tar at %s: %w", w.path, err)
+	}
 	if err := tarball.WriteToFile(w.path, ref, img); err != nil {
-		return fmt.Errorf("writing tar at %s: %w", w.path, err)
+		err = fmt.Errorf("writing tar at %s: %w", w.path, err)
+		if before == priorAbsent {
+			// Only a file this write created: an existing one may still be
+			// intact when the failure came before the truncation.
+			err = errors.Join(err, before.undo(w.path))
+		}
+		return err
 	}
 	return nil
 }

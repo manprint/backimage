@@ -26,8 +26,11 @@ func (c *xzCodec) NewWriter(w io.Writer, level int) (io.WriteCloser, error) {
 	return &closeOnly{WriteCloser: xw}, nil
 }
 
+// NewReader decodes an xz stream behind xzGuard: the decoder allocates the
+// dictionary a block header declares, so the header is checked before the
+// decoder reads it.
 func (c *xzCodec) NewReader(r io.Reader) (io.ReadCloser, error) {
-	xr, err := xz.NewReader(r)
+	xr, err := xz.NewReader(newXzGuard(r))
 	if err != nil {
 		return nil, err
 	}

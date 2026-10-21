@@ -62,6 +62,11 @@ func PlanLayers(estimatedStoredBytes int64, limits LayerLimits) (Plan, error) {
 	}
 	// Step 5: tiny inputs must still fill a minimal layer.
 	if layerBytes < limits.MinLayerBytes {
+		if limits.TargetLayerBytes < limits.MinLayerBytes {
+			p.Warnings = append(p.Warnings, fmt.Sprintf(
+				"--max-layer-size %d sotto il minimo di %d byte: si usano layer da %d",
+				limits.TargetLayerBytes, limits.MinLayerBytes, limits.MinLayerBytes))
+		}
 		layerBytes = limits.MinLayerBytes
 		layerCount = ceilDiv(estimatedStoredBytes, layerBytes)
 	}

@@ -2,7 +2,7 @@ package index
 
 import (
 	"fmt"
-	"path"
+	"math"
 	"sort"
 
 	"github.com/manprint/backimage/internal/pathglob"
@@ -21,8 +21,8 @@ type Locator struct {
 }
 
 // NewLocator builds a locator from a validated chunk table (ReadChunkTable
-// contracts). Negative sizes in the table produce a locator whose searches
-// return usage errors rather than panicking.
+// contracts). Negative sizes, or sizes whose sum overflows, produce a locator
+// whose searches return usage errors rather than panicking.
 //
 // It relies on the plain sizes, which are confidential in an encrypted backup:
 // pass a table whose Pb fields have been filled by MergePrivate, otherwise
@@ -33,7 +33,7 @@ func NewLocator(t *ChunkTable) *Locator {
 	}
 	l := &Locator{t: t, prefix: make([]int64, len(t.Chunks)+1)}
 	for i, c := range t.Chunks {
-		if c.Pb < 0 {
+		if c.Pb < 0 || c.Pb > math.MaxInt64-l.prefix[i] {
 			return &Locator{t: t}
 		}
 		l.prefix[i+1] = l.prefix[i] + c.Pb
@@ -109,29 +109,24 @@ func matchAnyEntry(e FileEntry, pats []string) bool {
 	return false
 }
 
-// entryMatches reports whether e matches pat. Beyond the plain glob the
-// convenience rules apply: a pattern matching an ancestor directory (or a
-// directory entry) includes the entry, and trailing "/" forces that.
+// entryMatches reports whether e matches pat: the entry itself or one of its
+// ancestor directories matches (pathglob.MatchTree), so a pattern naming a
+// directory selects its content too. backup --exclude applies the same rule.
 func entryMatches(e FileEntry, pat string) bool {
-	if pathglob.Match(pat, e.Path) {
-		return true
-	}
-	dir := path.Dir(e.Path)
-	for dir != "." && dir != "/" {
-		if pathglob.Match(pat, dir) {
-			return true
-		}
-		dir = path.Dir(dir)
-	}
-	return false
+	return pathglob.MatchTree(pat, e.Path)
 }
 
 // entryRange returns the plaintext span [start,end) occupied by e: the tar
 // header block (512 B) plus the payload rounded up to a 512-byte boundary.
-func entryRange(e FileEntry) (start, end int64) {
-	start = e.TarOffset
+func entryRange(e FileEntry) (start, end int64, err error) {
+	if e.TarOffset < 0 || e.Size < 0 {
+		return 0, 0, fmt.Errorf("negative offset %d or size %d", e.TarOffset, e.Size)
+	}
+	if e.Size > math.MaxInt64-2*tarHeaderBlock || e.TarOffset > math.MaxInt64-2*tarHeaderBlock-e.Size {
+		return 0, 0, fmt.Errorf("span of offset %d and size %d overflows", e.TarOffset, e.Size)
+	}
 	data := (e.Size + tarHeaderBlock - 1) &^ (tarHeaderBlock - 1)
-	return start, start + tarHeaderBlock + data
+	return e.TarOffset, e.TarOffset + tarHeaderBlock + data, nil
 }
 
 // ChunksFor returns the sorted, deduplicated set of chunk indices needed to
@@ -142,7 +137,10 @@ func ChunksFor(l *Locator, entries []FileEntry) ([]int, error) {
 	}
 	seen := map[int]bool{}
 	for _, e := range entries {
-		start, end := entryRange(e)
+		start, end, err := entryRange(e)
+		if err != nil {
+			return nil, fmt.Errorf("%q: %w", e.Path, err)
+		}
 		from, to, err := l.Range(start, end)
 		if err != nil {
 			return nil, fmt.Errorf("%q: %w", e.Path, err)

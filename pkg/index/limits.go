@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 )
 
 // The public metadata of a backup decides how much memory a reader is about
@@ -50,6 +51,11 @@ func MaxStoredChunkBytes(m *Manifest) int64 {
 	}
 	if plain <= 0 {
 		return 0
+	}
+	if plain > (math.MaxInt64-expansionFloor)/(expansionDenominator+1)*expansionDenominator {
+		// The sum would overflow and come out negative, which reads as "no
+		// bound": saturate instead.
+		return math.MaxInt64
 	}
 	return plain + plain/expansionDenominator + expansionFloor
 }
@@ -132,11 +138,13 @@ func validateLayers(m *Manifest, t *ChunkTable) error {
 				return fmt.Errorf("%w: chunk %d declares %d stored bytes, more than the %d a chunk of this backup can hold",
 					ErrBadSchema, i, c.Sb, maxStored)
 			}
-			sum += c.Sb
-			if sum > layer.StoredBytes {
+			// sum <= StoredBytes here, so the subtraction cannot overflow
+			// where the addition could, and wrap back to a valid total.
+			if c.Sb > layer.StoredBytes-sum {
 				return fmt.Errorf("%w: the chunks of layer %d add up past its %d stored bytes",
 					ErrBadSchema, layer.Index, layer.StoredBytes)
 			}
+			sum += c.Sb
 		}
 		if sum != layer.StoredBytes {
 			return fmt.Errorf("%w: the chunks of layer %d add up to %d, the layer declares %d",
