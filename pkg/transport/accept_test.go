@@ -85,7 +85,7 @@ func dialSilent(t *testing.T, transportName, addr, pin string) func() {
 	t.Helper()
 	if transportName == "tcp" {
 		// A bare TCP connection: the TLS ClientHello never arrives.
-		conn, err := net.Dial("tcp", addr)
+		conn, err := new(net.Dialer).DialContext(t.Context(), "tcp", addr)
 		if err != nil {
 			t.Fatal(err)
 		}

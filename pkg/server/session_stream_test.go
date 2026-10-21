@@ -2,11 +2,13 @@ package server
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"testing"
 	"time"
 
 	"github.com/manprint/backimage/pkg/protocol"
+	backregistry "github.com/manprint/backimage/pkg/registry"
 )
 
 // streamPeer drives the client half of a streaming session: it reads server
@@ -296,5 +298,21 @@ func TestPipelineErrorKind(t *testing.T) {
 		if got := pipelineErrorKind(tc.err); got != tc.kind {
 			t.Fatalf("pipelineErrorKind(%v) = %d, want %d", tc.err, got, tc.kind)
 		}
+	}
+}
+
+// A read-back that found the registry holding something else was reported to
+// the client as a network failure (exit 6): the message names the registry,
+// and both classifiers keyed on that. It is an integrity failure (exit 5).
+func TestPublishedMismatchIsAnIntegrityFailure(t *testing.T) {
+	err := fmt.Errorf("registry push: %w", backregistry.ErrPublishedMismatch)
+	if got := pipelineErrorKind(err); got != ErrorIntegrity {
+		t.Errorf("pipelineErrorKind(%v) = %d, want %d", err, got, ErrorIntegrity)
+	}
+	if got := commitErrorKind(err); got != ErrorIntegrity {
+		t.Errorf("commitErrorKind(%v) = %d, want %d", err, got, ErrorIntegrity)
+	}
+	if got := commitErrorKind(errors.New("registry upload failed")); got != ErrorNetwork {
+		t.Errorf("commitErrorKind(upload) = %d, want %d", got, ErrorNetwork)
 	}
 }

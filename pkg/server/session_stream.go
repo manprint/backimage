@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/manprint/backimage/pkg/protocol"
+	backregistry "github.com/manprint/backimage/pkg/registry"
 )
 
 // streamStart opens a protocol v2 session. From here on the client only sends
@@ -103,7 +104,17 @@ func (s *Session) streamEnd(ctx context.Context, stream *sessionStream, rs *runS
 	in := rs.ingest
 	// Finish waits for the pipeline to drain, so the heartbeat has to outlive
 	// it: publishing a large backup is the longest silence of the session.
-	result, err := in.Finish()
+	// The session keeps reading the client meanwhile, for the registry token
+	// the publication may be waiting for.
+	var result StreamResult
+	err, sessionErr := s.publishWhileReading(ctx, stream, rs, func() error {
+		var err error
+		result, err = in.Finish()
+		return err
+	})
+	if sessionErr != nil {
+		return sessionErr
+	}
 	rs.heartbeat.Stop()
 	rs.heartbeat = nil
 	rs.ingest = nil
@@ -134,6 +145,10 @@ func (s *Session) streamEnd(ctx context.Context, stream *sessionStream, rs *runS
 
 func pipelineErrorKind(err error) uint32 {
 	switch {
+	case errors.Is(err, backregistry.ErrPublishedMismatch):
+		// The registry answered with something other than what was pushed:
+		// its message names the registry, but it is no network failure.
+		return ErrorIntegrity
 	case errors.Is(err, errStreamAborted):
 		return ErrorNetwork
 	case strings.Contains(err.Error(), "registry"):

@@ -41,7 +41,7 @@ func TestScanArchiveClassifiesEveryEntryType(t *testing.T) {
 	if err := writer.Close(); err != nil {
 		t.Fatal(err)
 	}
-	entries, stats, err := scanArchive(bytes.NewReader(buf.Bytes()))
+	entries, stats, err := scanArchive(bytes.NewReader(buf.Bytes()), index.MaxIndexEntries)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -74,7 +74,7 @@ func TestScanArchiveRejectsTruncatedStream(t *testing.T) {
 	if err := writer.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := scanArchive(bytes.NewReader(buf.Bytes()[:600])); err == nil {
+	if _, _, err := scanArchive(bytes.NewReader(buf.Bytes()[:600]), index.MaxIndexEntries); err == nil {
 		t.Fatal("a truncated stream was accepted")
 	}
 }
@@ -109,7 +109,7 @@ func TestScanArchiveMatchesLocalWriter(t *testing.T) {
 	}
 	want := writer.Entries()
 
-	got, scanned, err := scanArchive(bytes.NewReader(buf.Bytes()))
+	got, scanned, err := scanArchive(bytes.NewReader(buf.Bytes()), index.MaxIndexEntries)
 	if err != nil {
 		t.Fatal(err)
 	}

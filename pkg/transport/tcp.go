@@ -95,14 +95,22 @@ func handshakeWithTimeout(ctx context.Context, conn *tls.Conn, idle time.Duratio
 // the peers behind it.
 const maxPendingHandshakes = 64
 
+// tcpAcceptor is the part of *net.TCPListener the accept loop uses.
+type tcpAcceptor interface {
+	AcceptTCP() (*net.TCPConn, error)
+	Addr() net.Addr
+	Close() error
+}
+
 type tcpListener struct {
-	ln  *net.TCPListener
+	ln  tcpAcceptor
 	cfg Config
 
 	ready    chan Stream
 	closed   chan struct{}
 	once     sync.Once
 	closeErr error
+	stopErr  error // why the accept loop stopped, when it was not Close
 }
 
 func newTCPListener(addr string, cfg Config) (Listener, error) {
@@ -124,12 +132,18 @@ func newTCPListener(addr string, cfg Config) (Listener, error) {
 	if err != nil {
 		return nil, err
 	}
+	return startTCPListener(ln, cfg), nil
+}
+
+// startTCPListener serves ln with cfg, which already carries its TLS
+// configuration and defaults.
+func startTCPListener(ln tcpAcceptor, cfg Config) *tcpListener {
 	l := &tcpListener{
 		ln: ln, cfg: cfg,
 		ready: make(chan Stream), closed: make(chan struct{}),
 	}
 	go l.acceptLoop()
-	return l, nil
+	return l
 }
 
 // acceptLoop keeps the TLS handshake off the accept path. Performed inline it
@@ -137,15 +151,29 @@ func newTCPListener(addr string, cfg Config) (Listener, error) {
 // other client for as long as it cares to hold the connection.
 func (l *tcpListener) acceptLoop() {
 	pending := make(chan struct{}, maxPendingHandshakes)
+	var delay time.Duration
 	for {
 		raw, err := l.ln.AcceptTCP()
 		if err != nil {
-			var ne net.Error
-			if errors.As(err, &ne) && ne.Timeout() {
-				continue
+			if isClosed(l.closed) {
+				return
 			}
-			return
+			// Returning here used to leave the port open and Accept waiting
+			// forever: a listener that no longer accepts must either retry
+			// or say so.
+			if !transientAcceptError(err) {
+				l.stop(err)
+				return
+			}
+			delay = nextAcceptDelay(delay)
+			select {
+			case <-time.After(delay):
+			case <-l.closed:
+				return
+			}
+			continue
 		}
+		delay = 0
 		select {
 		case pending <- struct{}{}:
 		case <-l.closed:
@@ -191,7 +219,7 @@ func (l *tcpListener) Accept(ctx context.Context) (Stream, error) {
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	case <-l.closed:
-		return nil, net.ErrClosed
+		return nil, closedError(l.stopErr)
 	case stream := <-l.ready:
 		return stream, nil
 	}
@@ -200,11 +228,18 @@ func (l *tcpListener) Accept(ctx context.Context) (Stream, error) {
 func (l *tcpListener) Addr() net.Addr { return l.ln.Addr() }
 
 func (l *tcpListener) Close() error {
+	l.stop(nil)
+	return l.closeErr
+}
+
+// stop closes the listener; cause, when not nil, is the accept error that
+// made the loop give up, and every later Accept reports it.
+func (l *tcpListener) stop(cause error) {
 	l.once.Do(func() {
+		l.stopErr = cause
 		close(l.closed)
 		l.closeErr = l.ln.Close()
 	})
-	return l.closeErr
 }
 
 func setDefaults(cfg *Config) {

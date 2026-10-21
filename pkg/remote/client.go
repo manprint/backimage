@@ -185,17 +185,20 @@ func (c *Client) uploadOnce(ctx context.Context, backup Backup) (Result, error) 
 	// large archive learned about the ceiling after uploading its way up to
 	// it. The announcement is a limit the peer published; verifying it here
 	// costs one addition per layer.
+	//
+	// The rule is the server's: a layer must fit next to the bytes already
+	// received, and only a layer the server does not skip is received.
+	// Counting skipped layers too refused backups the server would take.
 	var sent uint64
 	for i, layer := range backup.Layers {
 		digest, diffID, size, mediaType, err := layerDescriptor(layer)
 		if err != nil {
 			return result, fmt.Errorf("layer %d: %w", i, err)
 		}
-		sent += uint64(size)
-		if ack.MaxBytes > 0 && sent > ack.MaxBytes {
+		if ack.MaxBytes > 0 && sent+uint64(size) > ack.MaxBytes {
 			return result, &Error{Kind: 2, Message: fmt.Sprintf(
 				"remote quota exceeded: layer %d takes the upload to %d bytes, the server announced %d",
-				i, sent, ack.MaxBytes)}
+				i, sent+uint64(size), ack.MaxBytes)}
 		}
 		if err := conn.writeClient(&protocol.ClientMessage{Msg: &protocol.ClientMessage_LayerStart{LayerStart: &protocol.LayerStart{
 			Index: uint32(i), Size: uint64(size), Sha256: digest,
@@ -211,6 +214,7 @@ func (c *Client) uploadOnce(ctx context.Context, backup Backup) (Result, error) 
 			if err := conn.streamLayer(layer); err != nil {
 				return result, err
 			}
+			sent += uint64(size)
 		}
 		if err := conn.writeClient(&protocol.ClientMessage{Msg: &protocol.ClientMessage_LayerEnd{LayerEnd: &protocol.LayerEnd{
 			Index: uint32(i), Digest: digest,

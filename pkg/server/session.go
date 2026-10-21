@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/manprint/backimage/pkg/protocol"
+	backregistry "github.com/manprint/backimage/pkg/registry"
 	"github.com/manprint/backimage/pkg/transport"
 )
 
@@ -94,6 +95,9 @@ func NewSession(cfg SessionConfig, sink Sink) (*Session, error) {
 	if len(cfg.AuthToken) == 0 && !cfg.AllowNoAuth {
 		return nil, errors.New("client authentication is required")
 	}
+	if err := ValidateAllowedRepos(cfg.AllowedRepos); err != nil {
+		return nil, err
+	}
 	if cfg.IdleTimeout <= 0 {
 		cfg.IdleTimeout = 120 * time.Second
 	}
@@ -143,27 +147,69 @@ type runState struct {
 	// streaming (protocol v2) state
 	ingest    *ingest
 	heartbeat *heartbeat
+
+	// cancel stops the session context, and with it a publication the
+	// client gave up on.
+	cancel context.CancelFunc
 }
 
 // sessionStream serialises everything the server writes. The session loop is
 // not the only writer any more: while the pipeline holds it, a heartbeat keeps
 // the wire warm beside it, and a protocol message must never be interleaved
 // with another halfway through its frame.
+//
+// It also owns the stream's deadline. While the loop waits for the client,
+// the deadline it armed is authoritative: a client silent for the idle window
+// is gone, whatever the heartbeat says. While the loop is busy — pushing back
+// on the client, publishing — nothing is read, and every write arms its own
+// idle window: the deadline left over from the last read would otherwise
+// expire under a long publish and fail the heartbeat and the final BackupEnd
+// of a backup already pushed. TCP streams rearm on every write and hid this;
+// streams with plain deadlines, as QUIC's are, did not.
 type sessionStream struct {
 	transport.Stream
-	mu sync.Mutex
+	idle time.Duration
+	now  func() time.Time
+
+	mu      sync.Mutex
+	reading bool
 }
 
 func (s *sessionStream) send(msg *protocol.ServerMessage) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if !s.reading && s.idle > 0 {
+		if err := s.Stream.SetDeadline(s.now().Add(s.idle)); err != nil {
+			return fmt.Errorf("set session deadline: %w", err)
+		}
+	}
 	return protocol.WriteServerMessage(s.Stream, msg)
 }
 
-func (s *sessionStream) setDeadline(t time.Time) error {
+// armRead starts a wait for the client's next frame, which must arrive by t.
+func (s *sessionStream) armRead(t time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.reading = true
 	return s.Stream.SetDeadline(t)
+}
+
+// readDone ends the wait armRead started.
+func (s *sessionStream) readDone() {
+	s.mu.Lock()
+	s.reading = false
+	s.mu.Unlock()
+}
+
+// extend arms one more idle window, as a write does, unless the loop is
+// waiting for the client: that deadline stays authoritative.
+func (s *sessionStream) extend() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.reading || s.idle <= 0 {
+		return nil
+	}
+	return s.Stream.SetDeadline(s.now().Add(s.idle))
 }
 
 // heartbeat reports progress on a timer while a streaming session runs. A
@@ -226,9 +272,11 @@ const maxKeepaliveOnly = 15 * time.Minute
 
 // Run serves the stream until the backup commits or a protocol error occurs.
 func (s *Session) Run(ctx context.Context, raw transport.Stream) error {
-	stream := &sessionStream{Stream: raw}
+	stream := &sessionStream{Stream: raw, idle: s.cfg.IdleTimeout, now: s.cfg.Now}
 	defer stream.Close()
-	rs := &runState{state: stateNew}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	rs := &runState{state: stateNew, cancel: cancel}
 	// The pipeline of a session belongs to the session, and nothing outside
 	// this function will free it: the ingest goroutine holds the spool of the
 	// layer it is assembling, and the blob receiver holds an upload the
@@ -250,11 +298,12 @@ func (s *Session) Run(ctx context.Context, raw transport.Stream) error {
 			s.abort(ctx, rs)
 			return err
 		}
-		if err := stream.setDeadline(s.cfg.Now().Add(s.cfg.IdleTimeout)); err != nil {
+		if err := stream.armRead(s.cfg.Now().Add(s.cfg.IdleTimeout)); err != nil {
 			s.abort(ctx, rs)
 			return fmt.Errorf("set session deadline: %w", err)
 		}
 		typ, payload, err := protocol.ReadFrame(stream, buf)
+		stream.readDone()
 		if err != nil {
 			s.abort(ctx, rs)
 			return err
@@ -515,6 +564,11 @@ func (s *Session) layerEnd(ctx context.Context, stream *sessionStream, rs *runSt
 		if got != rs.current.Sha256 {
 			return s.fail(ctx, stream, rs, ErrorIntegrity, "layer digest mismatch", "")
 		}
+	}
+	if uint32(len(rs.layers))+1 == rs.start.LayerCount {
+		return s.publishLastLayer(ctx, stream, rs)
+	}
+	if !rs.skipped {
 		if err := rs.receiver.Commit(ctx); err != nil {
 			return s.fail(ctx, stream, rs, ErrorNetwork, "registry upload commit failed", err.Error())
 		}
@@ -533,17 +587,82 @@ func (s *Session) layerEnd(ctx context.Context, stream *sessionStream, rs *runSt
 	}}}); err != nil {
 		return err
 	}
-	if uint32(len(rs.layers)) != rs.start.LayerCount {
+	return nil
+}
+
+// publishLastLayer commits the last layer and the index of a v1 session. The
+// client waits for the answer, so the step runs while the session keeps
+// reading it: the registry token the commit needs may be the one the client
+// sends meanwhile. Of the session state the step only clears the receiver it
+// committed, which the loop does not touch until the step has returned.
+func (s *Session) publishLastLayer(ctx context.Context, stream *sessionStream, rs *runState) error {
+	receiver, skipped := rs.receiver, rs.skipped
+	size := rs.current.Size
+	layers := append(append([]Layer(nil), rs.layers...), Layer{
+		Index: rs.current.Index, Size: int64(rs.current.Size), Digest: rs.current.Sha256,
+		DiffID: rs.current.DiffId, MediaType: rs.current.MediaType,
+	})
+	progress := &protocol.Progress{Layer: uint32(len(layers) - 1), Uploaded: rs.totalBytes, Skipped: skipped}
+	backup := Backup{SessionID: rs.sessionID, Start: rs.start, Layers: layers}
+	var digest string
+	publishErr, sessionErr := s.publishWhileReading(ctx, stream, rs, func() error {
+		if !skipped {
+			if err := receiver.Commit(ctx); err != nil {
+				return &publishFailure{kind: ErrorNetwork, message: "registry upload commit failed", err: err}
+			}
+			// Committed: a later failure must not abort an upload the
+			// registry has already completed.
+			rs.receiver = nil
+			if s.cfg.Metrics != nil {
+				s.cfg.Metrics.addUploaded(size)
+			}
+		}
+		if err := stream.send(&protocol.ServerMessage{Msg: &protocol.ServerMessage_Progress{Progress: progress}}); err != nil {
+			return err
+		}
+		var err error
+		if digest, err = s.sink.CommitBackup(ctx, backup); err != nil {
+			return &publishFailure{kind: commitErrorKind(err), message: "publishing OCI index failed", err: err}
+		}
 		return nil
+	})
+	if sessionErr != nil {
+		return sessionErr
 	}
-	digest, err := s.sink.CommitBackup(ctx, Backup{SessionID: rs.sessionID, Start: rs.start, Layers: rs.layers})
-	if err != nil {
-		return s.fail(ctx, stream, rs, ErrorNetwork, "publishing OCI index failed", err.Error())
+	var failure *publishFailure
+	if errors.As(publishErr, &failure) {
+		return s.fail(ctx, stream, rs, failure.kind, failure.message, failure.err.Error())
 	}
+	if publishErr != nil {
+		return publishErr
+	}
+	rs.layers = layers
+	rs.current, rs.receiver, rs.hash = nil, nil, nil
 	rs.state = stateClosed
 	return stream.send(&protocol.ServerMessage{Msg: &protocol.ServerMessage_BackupEnd{BackupEnd: &protocol.BackupEnd{
 		Digest: digest, BytesUploaded: rs.totalBytes, BlobsSkipped: rs.skipCount,
 	}}})
+}
+
+// publishFailure is a failed publication step with the kind and message the
+// session reports for it.
+type publishFailure struct {
+	kind    uint32
+	message string
+	err     error
+}
+
+func (f *publishFailure) Error() string { return f.message + ": " + f.err.Error() }
+func (f *publishFailure) Unwrap() error { return f.err }
+
+// commitErrorKind classifies a failed publish: a read-back that found the
+// registry holding something else is an integrity failure, anything else is
+// the registry being unreachable or refusing.
+func commitErrorKind(err error) uint32 {
+	if errors.Is(err, backregistry.ErrPublishedMismatch) {
+		return ErrorIntegrity
+	}
+	return ErrorNetwork
 }
 
 func (s *Session) unexpected(ctx context.Context, stream *sessionStream, rs *runState, message string) error {
@@ -589,16 +708,54 @@ type SessionError struct {
 
 func (e *SessionError) Error() string { return e.Message }
 
+// repoAllowed reports whether the reference ref names a repository under one
+// of prefixes; no prefixes allow everything. A prefix covers whole path
+// components: "ghcr.io/team/a" admits ghcr.io/team/a, its tags, digests and
+// sub-repositories, never ghcr.io/team/abc. A prefix without a slash names a
+// registry, so only a slash may follow it: "localhost" is not
+// "localhost:5000".
 func repoAllowed(ref string, prefixes []string) bool {
 	if len(prefixes) == 0 {
 		return true
 	}
 	for _, prefix := range prefixes {
-		if strings.HasPrefix(ref, prefix) {
+		if prefixCovers(prefix, ref) {
 			return true
 		}
 	}
 	return false
+}
+
+func prefixCovers(prefix, ref string) bool {
+	if prefix == "" || !strings.HasPrefix(ref, prefix) {
+		return false
+	}
+	if len(ref) == len(prefix) || strings.HasSuffix(prefix, "/") {
+		return true
+	}
+	switch ref[len(prefix)] {
+	case '/':
+		return true
+	case ':', '@':
+		// A tag or a digest only follows a repository path.
+		return strings.Contains(prefix, "/")
+	}
+	return false
+}
+
+// ValidateAllowedRepos checks repository prefixes for --allow-repo. They are
+// compared literally, so a glob would match nothing and refuse every backup,
+// and an empty entry would match nothing either while reading as "any".
+func ValidateAllowedRepos(prefixes []string) error {
+	for _, p := range prefixes {
+		if strings.TrimSpace(p) == "" {
+			return errors.New("empty repository prefix")
+		}
+		if strings.ContainsAny(p, "*?[") {
+			return fmt.Errorf("repository prefix %q contains a glob: prefixes are literal, e.g. ghcr.io/team/", p)
+		}
+	}
+	return nil
 }
 
 func validDigest(s string) bool {

@@ -28,7 +28,12 @@ type scanStats struct {
 //
 // TarOffset uses the same convention as archive.Writer: the logical start of
 // the entry header, rounded up to the next 512-byte boundary.
-func scanArchive(r io.Reader) ([]index.FileEntry, scanStats, error) {
+//
+// The scan keeps every entry in memory, so it enforces the index limits as it
+// goes — at most maxEntries entries, no name longer than any index can hold —
+// instead of leaving them to the index writer at the end, after an
+// authenticated client has already made the server hold all of it.
+func scanArchive(r io.Reader, maxEntries int) ([]index.FileEntry, scanStats, error) {
 	var stats scanStats
 	counter := &countingReader{r: r}
 	tr := tar.NewReader(counter)
@@ -41,6 +46,13 @@ func scanArchive(r io.Reader) ([]index.FileEntry, scanStats, error) {
 		}
 		if err != nil {
 			return entries, stats, fmt.Errorf("read archive stream: %w", err)
+		}
+		if len(entries) >= maxEntries {
+			return entries, stats, fmt.Errorf("%w: the stream holds more than the %d entries an index can take",
+				index.ErrBadSchema, maxEntries)
+		}
+		if err := checkScannedNames(hdr); err != nil {
+			return entries, stats, err
 		}
 		entry := index.FileEntry{
 			Path:       archive.CleanPath(hdr.Name),
@@ -72,6 +84,23 @@ func scanArchive(r io.Reader) ([]index.FileEntry, scanStats, error) {
 		countEntry(&stats, hdr.Typeflag)
 		entries = append(entries, entry)
 	}
+}
+
+// maxOwnerNameBytes bounds the user and group names of an entry. No system
+// this tool reads from has longer ones (Linux caps a login name at 256), and a
+// PAX record could otherwise make each entry cost up to a megabyte.
+const maxOwnerNameBytes = 256
+
+func checkScannedNames(hdr *tar.Header) error {
+	if len(hdr.Name) > index.MaxPathBytes || len(hdr.Linkname) > index.MaxPathBytes {
+		return fmt.Errorf("%w: tar entry name or link target longer than %d bytes",
+			index.ErrBadSchema, index.MaxPathBytes)
+	}
+	if len(hdr.Uname) > maxOwnerNameBytes || len(hdr.Gname) > maxOwnerNameBytes {
+		return fmt.Errorf("%w: tar entry %q has an owner name longer than %d bytes",
+			index.ErrBadSchema, hdr.Name, maxOwnerNameBytes)
+	}
+	return nil
 }
 
 func countEntry(stats *scanStats, typeflag byte) {

@@ -26,6 +26,7 @@ type streamSink struct {
 	commit  StreamCommit
 	commits int
 	failAt  string
+	aborts  int
 }
 
 func newStreamSink() *streamSink { return &streamSink{memorySink: newMemorySink()} }
@@ -50,7 +51,7 @@ func (s *streamSink) OpenBlob(ctx context.Context, ref, digest string, size int6
 		return nil, err
 	}
 	if s.failAt == "commit" || s.failAt == "write" {
-		return &brokenBlobWriter{BlobWriter: writer, mode: s.failAt}, nil
+		return &brokenBlobWriter{BlobWriter: writer, mode: s.failAt, sink: s}, nil
 	}
 	return writer, nil
 }
@@ -58,6 +59,14 @@ func (s *streamSink) OpenBlob(ctx context.Context, ref, digest string, size int6
 type brokenBlobWriter struct {
 	BlobWriter
 	mode string
+	sink *streamSink
+}
+
+func (w *brokenBlobWriter) Abort(ctx context.Context) error {
+	w.sink.mu.Lock()
+	w.sink.aborts++
+	w.sink.mu.Unlock()
+	return w.BlobWriter.Abort(ctx)
 }
 
 func (w *brokenBlobWriter) Write(p []byte) (int, error) {
@@ -301,6 +310,28 @@ func TestIngestPropagatesUploadFailureAndCleansUp(t *testing.T) {
 		t.Fatal("upload failure was not reported")
 	}
 	assertNoSpool(t, temp)
+}
+
+// TestARefusedCommitReleasesTheUploadSession: every other failure of a
+// chunked layer upload aborted the registry upload session, a refused commit
+// did not, and left it open on the registry until it expired.
+func TestARefusedCommitReleasesTheUploadSession(t *testing.T) {
+	for _, mode := range []string{"write", "commit"} {
+		t.Run(mode, func(t *testing.T) {
+			stream, _ := testArchive(t, 12<<20)
+			sink := newStreamSink()
+			sink.failAt = mode
+			start, _ := streamStartFor(t, len(stream), false)
+			if _, err := runIngest(t, sink, start, stream); err == nil {
+				t.Fatal("the upload failure was not reported")
+			}
+			sink.mu.Lock()
+			defer sink.mu.Unlock()
+			if sink.aborts == 0 {
+				t.Fatalf("a failed %s left the registry upload session open", mode)
+			}
+		})
+	}
 }
 
 func TestIngestAbortReleasesSpool(t *testing.T) {

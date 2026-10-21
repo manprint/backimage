@@ -79,6 +79,10 @@ func (c *Client) uploadStreamOnce(ctx context.Context, backup StreamBackup) (Res
 	if ack == nil {
 		return result, errors.New("remote server returned an invalid HelloAck")
 	}
+	if ack.ProtocolVersion > protocol.Version {
+		return result, fmt.Errorf("remote server returned an invalid HelloAck: protocol version %d, this client speaks up to %d",
+			ack.ProtocolVersion, protocol.Version)
+	}
 	if !ack.Streaming || ack.ProtocolVersion < 2 {
 		// Not a transient condition: fail without burning the retry budget.
 		return result, &Error{Kind: 2, Message: ErrNoStreaming.Error(), Hint: "upgrade the server or use --remote-mode layers"}
@@ -241,6 +245,15 @@ func (r *streamReader) run() {
 			}
 		case msg.GetBackupEnd() != nil:
 			r.end <- msg.GetBackupEnd()
+			return
+		default:
+			// Anything else is outside the streaming protocol. Dropping it
+			// left the client waiting for a BackupEnd that a peer in this
+			// state will never send.
+			r.setErr(fmt.Errorf("unexpected %T from remote server during a stream", msg.GetMsg()))
+			if !readyClosed {
+				close(r.ready)
+			}
 			return
 		}
 	}

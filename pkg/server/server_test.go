@@ -74,7 +74,7 @@ func TestMetricsHealthAndPrometheusOutput(t *testing.T) {
 		{"/healthz", "ok\n"},
 		{"/metrics", "backimage_bytes_received_total 12\n"},
 	} {
-		req := httptest.NewRequest(http.MethodGet, tc.path, nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, tc.path, nil)
 		rec := httptest.NewRecorder()
 		m.Handler().ServeHTTP(rec, req)
 		if rec.Code != http.StatusOK || !strings.Contains(rec.Body.String(), tc.want) {
@@ -83,7 +83,7 @@ func TestMetricsHealthAndPrometheusOutput(t *testing.T) {
 	}
 	body := func() string {
 		rec := httptest.NewRecorder()
-		m.Handler().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/metrics", nil))
+		m.Handler().ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/metrics", nil))
 		return rec.Body.String()
 	}()
 	for _, want := range []string{

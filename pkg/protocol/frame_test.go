@@ -90,3 +90,20 @@ func FuzzReadFrame(f *testing.F) {
 		_, _, _ = ReadFrame(bytes.NewReader(data), nil)
 	})
 }
+
+// TestFrameRejectsSizesAboveTheIntRange is the regression for the panic on
+// 32-bit targets: the declared size was converted to int before the limit
+// check, so 2^31 and above became negative, passed it, and buf[:n] panicked
+// on the very first frame a server reads — the one that carries the
+// authentication.
+func TestFrameRejectsSizesAboveTheIntRange(t *testing.T) {
+	for _, size := range []uint32{1 << 31, 1<<31 + 1, 1<<32 - 1} {
+		var header [5]byte
+		header[0] = byte(FrameControl)
+		binary.BigEndian.PutUint32(header[1:], size)
+		_, _, err := ReadFrame(bytes.NewReader(header[:]), nil)
+		if !errors.Is(err, ErrFrameTooLarge) {
+			t.Fatalf("size %d: err = %v, want ErrFrameTooLarge", size, err)
+		}
+	}
+}

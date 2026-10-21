@@ -68,6 +68,7 @@ type quicListener struct {
 	closed   chan struct{}
 	once     sync.Once
 	closeErr error
+	stopErr  error // why the accept loop stopped, when it was not Close
 }
 
 func newQUICListener(addr string, cfg Config) (Listener, error) {
@@ -98,11 +99,18 @@ func (l *quicListener) Name() string { return "quic" }
 func (l *quicListener) Addr() net.Addr { return l.listener.Addr() }
 
 func (l *quicListener) Close() error {
+	l.stop(nil)
+	return l.closeErr
+}
+
+// stop closes the listener; cause, when not nil, is the accept error that
+// made the loop give up, and every later Accept reports it.
+func (l *quicListener) stop(cause error) {
 	l.once.Do(func() {
+		l.stopErr = cause
 		close(l.closed)
 		l.closeErr = l.listener.Close()
 	})
-	return l.closeErr
 }
 
 // acceptLoop waits for the session stream off the accept path. A QUIC peer
@@ -113,6 +121,11 @@ func (l *quicListener) acceptLoop() {
 	for {
 		conn, err := l.listener.Accept(context.Background())
 		if err != nil {
+			// quic-go only fails an accept once its listener is gone: say
+			// so, or Accept waits forever on a dead socket.
+			if !isClosed(l.closed) {
+				l.stop(err)
+			}
 			return
 		}
 		select {
@@ -146,7 +159,7 @@ func (l *quicListener) Accept(ctx context.Context) (Stream, error) {
 	case <-ctx.Done():
 		return nil, ctx.Err()
 	case <-l.closed:
-		return nil, net.ErrClosed
+		return nil, closedError(l.stopErr)
 	case stream := <-l.ready:
 		return stream, nil
 	}

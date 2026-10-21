@@ -81,6 +81,9 @@ type ingestConfig struct {
 	Sink      Sink
 	Metrics   *Metrics
 	Now       func() time.Time
+	// MaxEntries bounds the entries of the received tar; 0 means
+	// index.MaxIndexEntries.
+	MaxEntries int
 }
 
 // streamStats is shared with the session loop, which reports progress to the
@@ -323,9 +326,20 @@ func newStreamBuilder(cfg ingestConfig, stats *streamStats) (*streamBuilder, err
 func (b *streamBuilder) run(ctx context.Context, r io.Reader) (StreamResult, error) {
 	var res StreamResult
 	scanned := make(chan scanOutcome, 1)
+	// scanFailed carries the scanner's error as soon as it has one, so the
+	// receiver stops at a refused entry instead of building and pushing every
+	// layer of a stream that can never be published.
+	scanFailed := make(chan error, 1)
 	scanReader, scanWriter := io.Pipe()
+	maxEntries := b.cfg.MaxEntries
+	if maxEntries <= 0 {
+		maxEntries = index.MaxIndexEntries
+	}
 	go func() {
-		entries, stats, err := scanArchive(scanReader)
+		entries, stats, err := scanArchive(scanReader, maxEntries)
+		if err != nil {
+			scanFailed <- err
+		}
 		// Keep draining so the chunker is never blocked by a failed scan. A
 		// drain error is irrelevant: the pipeline reports the real cause.
 		if _, drainErr := io.Copy(io.Discard, scanReader); drainErr != nil {
@@ -359,6 +373,11 @@ func (b *streamBuilder) run(ctx context.Context, r io.Reader) (StreamResult, err
 		// spooling into a backup that can no longer be published.
 		if err := b.failure(); err != nil {
 			return abort(err)
+		}
+		select {
+		case err := <-scanFailed:
+			return abort(err)
+		default:
 		}
 		ck, err := splitter.Next()
 		if errors.Is(err, io.EOF) {
@@ -687,7 +706,7 @@ func (b *streamBuilder) upload(ctx context.Context, layer ociimgLayer, descripto
 		return abort(fmt.Errorf("layer size mismatch: wrote %d, want %d", written, descriptor.Size))
 	}
 	if err := writer.Commit(ctx); err != nil {
-		return fmt.Errorf("registry upload commit failed: %w", err)
+		return abort(fmt.Errorf("registry upload commit failed: %w", err))
 	}
 	if b.cfg.Metrics != nil {
 		b.cfg.Metrics.addUploaded(uint64(descriptor.Size))

@@ -77,10 +77,14 @@ func ReadFrame(r io.Reader, buf []byte) (FrameType, []byte, error) {
 	if !validFrameType(t) {
 		return 0, buf[:0], fmt.Errorf("%w: %d", ErrFrameType, t)
 	}
-	n := int(binary.BigEndian.Uint32(header[1:]))
-	if n > MaxFrameSize {
-		return 0, buf[:0], fmt.Errorf("%w: %d > %d", ErrFrameTooLarge, n, MaxFrameSize)
+	// The limit is checked on the wire's uint32: converted first, a size of
+	// 2^31 or more is negative on a 32-bit target, passes the check and
+	// panics the reader on the slice below.
+	size := binary.BigEndian.Uint32(header[1:])
+	if size > MaxFrameSize {
+		return 0, buf[:0], fmt.Errorf("%w: %d > %d", ErrFrameTooLarge, size, MaxFrameSize)
 	}
+	n := int(size)
 	if cap(buf) < n {
 		buf = make([]byte, n)
 	} else {
