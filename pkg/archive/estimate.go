@@ -48,6 +48,9 @@ type estimator struct {
 
 func (e *estimator) root(root string) error {
 	base := filepath.Base(root)
+	if excludedBy(e.opts.Excludes, base) {
+		return nil
+	}
 	src := source{name: base, path: root}
 	st, err := src.lstat()
 	if err != nil {
@@ -89,6 +92,10 @@ func (e *estimator) children(arcDir, dirPath string, l *listing) error {
 }
 
 func (e *estimator) entry(arcPath string, src source) error {
+	// The same rule, at the same point, as tarWriter.walkEntry.
+	if excludedBy(e.opts.Excludes, arcPath) {
+		return nil
+	}
 	st, err := src.lstat()
 	if err != nil {
 		return e.fail(fmt.Errorf("lstat %q: %w", src.path, err))
@@ -121,7 +128,7 @@ func (e *estimator) otherDevice(st os.FileInfo) bool {
 }
 
 func (e *estimator) count(arcPath string, st os.FileInfo) {
-	if st.Mode().IsRegular() && !excludedBy(e.opts.Excludes, arcPath) {
+	if st.Mode().IsRegular() {
 		e.totals.Files++
 		e.totals.Bytes += st.Size()
 	}

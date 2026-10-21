@@ -27,6 +27,7 @@ type extractor struct {
 	warned   map[string]bool
 	degraded map[string]int64
 	examples map[string]string
+	repl     *replacements
 }
 
 // show renders an archive-relative name the way the user typed the
@@ -162,15 +163,18 @@ func (x *extractor) Extract(ctx context.Context, r io.Reader, dest string) (stat
 	}
 	type dirFix struct {
 		name string
+		step int
 		hdr  *tar.Header
 		at   time.Time
 		mt   time.Time
 	}
 	var dirFixes []dirFix
 	// materialised holds the archive names of the regular files this run has
-	// actually written. It is the only thing a hardlink is allowed to point
-	// at; see the tar.TypeLink case in createOne.
-	materialised := make(map[string]bool)
+	// actually written, with the step that wrote them. It is the only thing
+	// a hardlink is allowed to point at; see the tar.TypeLink case in
+	// createOne.
+	materialised := make(map[string]int)
+	x.repl = newReplacements()
 
 	for {
 		if err := ctx.Err(); err != nil {
@@ -178,6 +182,13 @@ func (x *extractor) Extract(ctx context.Context, r io.Reader, dest string) (stat
 		}
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {
+			n, err := drainTrailing(r)
+			if err != nil {
+				return stats, err
+			}
+			if n > 0 {
+				x.warn("trailing", trailingWarning(n))
+			}
 			break
 		}
 		if err != nil {
@@ -209,6 +220,7 @@ func (x *extractor) Extract(ctx context.Context, r io.Reader, dest string) (stat
 			}
 			hdr.Linkname = link
 		}
+		step := x.repl.next()
 		if err := checkArchivePath(name); err != nil {
 			// A hostile name used to vanish without a trace outside strict
 			// mode. It is an entry that was not created, like any other.
@@ -236,6 +248,7 @@ func (x *extractor) Extract(ctx context.Context, r io.Reader, dest string) (stat
 		if hdr.Typeflag == tar.TypeDir {
 			dirFixes = append(dirFixes, dirFix{
 				name: name,
+				step: step,
 				hdr:  hdr,
 				at:   hdr.AccessTime,
 				mt:   hdr.ModTime,
@@ -246,11 +259,22 @@ func (x *extractor) Extract(ctx context.Context, r io.Reader, dest string) (stat
 	if x.opts.Progress != nil {
 		x.opts.Progress("restore: filesystem: finalizzazione metadati directory")
 	}
-	sort.Slice(dirFixes, func(i, j int) bool {
+	// Stable: a directory the archive recreated after replacing it keeps its
+	// archive order, so its own fix is the one applied last.
+	sort.SliceStable(dirFixes, func(i, j int) bool {
 		return len(dirFixes[i].name) > len(dirFixes[j].name)
 	})
 	for _, d := range dirFixes {
-		if err := root.Chmod(d.name, headerMode(d.hdr)); err != nil {
+		// A later entry removed the directory, or one of its parents, to make
+		// room for something else: the fix belongs to an object that no
+		// longer exists, and applying it would go through the replacement.
+		if x.repl.since(d.name, d.step) {
+			continue
+		}
+		if err := chmodDirIn(root, d.name, headerMode(d.hdr)); err != nil {
+			if errors.Is(err, errNotADirectory) {
+				continue
+			}
 			if err := x.degrade("mode", "mode-dir", modeDegradeMsg,
 				fmt.Errorf("chmod dir %q: %w", x.show(d.name), err)); err != nil {
 				return stats, err
@@ -304,6 +328,49 @@ func openParent(root *os.Root, name string) (*os.File, string, error) {
 	return f, base, nil
 }
 
+// errNotADirectory reports that a name recorded as a directory no longer is
+// one: something replaced it while the restore ran.
+var errNotADirectory = errors.New("not a directory any more")
+
+// chmodDirIn applies mode to the directory name through a descriptor opened
+// without following a final symlink. os.Root.Chmod follows one, and a
+// directory replaced by a symlink to a file already in the destination handed
+// that file the directory's mode.
+func chmodDirIn(root *os.Root, name string, mode fs.FileMode) error {
+	parent, base, err := openParent(root, name)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) || errors.Is(err, syscall.ENOTDIR) {
+			return errNotADirectory
+		}
+		return err
+	}
+	defer parent.Close()
+	fd, err := unix.Openat(int(parent.Fd()), base, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		if errors.Is(err, unix.ELOOP) || errors.Is(err, unix.ENOTDIR) || errors.Is(err, unix.ENOENT) {
+			return errNotADirectory
+		}
+		return err
+	}
+	defer unix.Close(fd)
+	return unix.Fchmod(fd, unixMode(mode))
+}
+
+// unixMode converts the permission and special bits of m for chmod(2).
+func unixMode(m fs.FileMode) uint32 {
+	bits := uint32(m.Perm())
+	if m&fs.ModeSetuid != 0 {
+		bits |= unix.S_ISUID
+	}
+	if m&fs.ModeSetgid != 0 {
+		bits |= unix.S_ISGID
+	}
+	if m&fs.ModeSticky != 0 {
+		bits |= unix.S_ISVTX
+	}
+	return bits
+}
+
 // utimesIn applies timestamps to name without following a final symlink.
 func utimesIn(root *os.Root, name string, ts []unix.Timespec) error {
 	parent, base, err := openParent(root, name)
@@ -320,7 +387,7 @@ func (x *extractor) createOne(
 	name string,
 	hdr *tar.Header,
 	tr *tar.Reader,
-	materialised map[string]bool,
+	materialised map[string]int,
 	stats *Stats,
 ) error {
 	shown := x.show(name)
@@ -347,9 +414,11 @@ func (x *extractor) createOne(
 			if err := root.RemoveAll(name); err != nil {
 				return fmt.Errorf("remove existing %q: %w", shown, err)
 			}
-			// The name no longer holds what this run put there, so it stops
-			// being a legal hardlink target until something recreates it.
+			// The name, and everything that was below it, no longer holds
+			// what this run put there: none of it is a legal hardlink target
+			// or directory fix until something recreates it.
 			delete(materialised, name)
+			x.repl.remove(name)
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("lstat %q: %w", shown, err)
@@ -397,15 +466,21 @@ func (x *extractor) createOne(
 			return fmt.Errorf("create %q: %w", shown, err)
 		}
 		if _, err := io.CopyN(f, tr, hdr.Size); err != nil {
+			// A truncated file under its real name would read as restored:
+			// nothing else in the destination says its tail is missing.
 			f.Close()
-			return fmt.Errorf("write %q: %w", shown, err)
+			werr := fmt.Errorf("write %q: %w", shown, err)
+			if rerr := root.Remove(name); rerr != nil {
+				return errors.Join(werr, fmt.Errorf("remove partial %q: %w", shown, rerr))
+			}
+			return werr
 		}
 		if err := f.Close(); err != nil {
 			return fmt.Errorf("close %q: %w", shown, err)
 		}
 		stats.Files++
 		stats.BytesRaw += hdr.Size
-		materialised[name] = true
+		materialised[name] = x.repl.step
 	case tar.TypeSymlink:
 		if err := root.Symlink(hdr.Linkname, name); err != nil {
 			if isPerm(err) {
@@ -429,7 +504,8 @@ func (x *extractor) createOne(
 		// --strip-components, or simply appears later in the archive is not
 		// linkable. The entry is skipped and reported rather than
 		// reconstructed by reading whatever happens to sit at that path.
-		if !materialised[hdr.Linkname] {
+		written, ok := materialised[hdr.Linkname]
+		if !ok || x.repl.since(hdr.Linkname, written) {
 			return fmt.Errorf("hardlink %q -> %q: %w", shown, hdr.Linkname, errLinkTargetNotRestored)
 		}
 		if err := root.Link(hdr.Linkname, name); err != nil {
@@ -449,13 +525,13 @@ func (x *extractor) createOne(
 			}
 			stats.Files++
 			stats.BytesRaw += copied
-			materialised[name] = true
+			materialised[name] = x.repl.step
 			break
 		}
 		stats.Hardlinks++
 		// Another name for the same regular file: a later hardlink may point
 		// at this one.
-		materialised[name] = true
+		materialised[name] = x.repl.step
 	case tar.TypeChar, tar.TypeBlock:
 		typ := uint32(unix.S_IFCHR)
 		if hdr.Typeflag == tar.TypeBlock {

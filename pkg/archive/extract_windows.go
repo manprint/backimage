@@ -39,6 +39,7 @@ type windowsExtractor struct {
 	warned   map[string]bool
 	degraded map[string]int64
 	examples map[string]string
+	repl     *replacements
 }
 
 func extractorFor(opts ExtractOptions) Extractor {
@@ -133,11 +134,14 @@ func (x *windowsExtractor) Extract(ctx context.Context, r io.Reader, dest string
 
 	type dirFix struct {
 		name string
+		step int
 		mode fs.FileMode
 		mt   time.Time
 	}
 	var dirFixes []dirFix
-	materialised := make(map[string]bool)
+	// Archive name -> step that wrote it; see replacements.
+	materialised := make(map[string]int)
+	x.repl = newReplacements()
 
 	for {
 		if err := ctx.Err(); err != nil {
@@ -145,6 +149,13 @@ func (x *windowsExtractor) Extract(ctx context.Context, r io.Reader, dest string
 		}
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {
+			n, err := drainTrailing(r)
+			if err != nil {
+				return stats, err
+			}
+			if n > 0 {
+				x.warn("trailing", trailingWarning(n))
+			}
 			break
 		}
 		if err != nil {
@@ -176,10 +187,15 @@ func (x *windowsExtractor) Extract(ctx context.Context, r io.Reader, dest string
 			}
 			hdr.Linkname = link
 		}
+		step := x.repl.next()
 		if err := checkArchivePath(name); err != nil {
+			// Reported like on Unix: an entry that was not created.
 			if x.opts.Strict {
 				return stats, err
 			}
+			stats.Skipped++
+			stats.Errors = append(stats.Errors, err)
+			x.note("object", err)
 			continue
 		}
 		if err := x.createOne(root, name, hdr, tr, materialised, &stats); err != nil {
@@ -194,15 +210,18 @@ func (x *windowsExtractor) Extract(ctx context.Context, r io.Reader, dest string
 			continue
 		}
 		if hdr.Typeflag == tar.TypeDir {
-			dirFixes = append(dirFixes, dirFix{name: name, mode: headerMode(hdr), mt: hdr.ModTime})
+			dirFixes = append(dirFixes, dirFix{name: name, step: step, mode: headerMode(hdr), mt: hdr.ModTime})
 		}
 	}
 
 	if x.opts.Progress != nil {
 		x.opts.Progress("restore: filesystem: finalizzazione metadati directory")
 	}
-	sort.Slice(dirFixes, func(i, j int) bool { return len(dirFixes[i].name) > len(dirFixes[j].name) })
+	sort.SliceStable(dirFixes, func(i, j int) bool { return len(dirFixes[i].name) > len(dirFixes[j].name) })
 	for _, d := range dirFixes {
+		if x.repl.since(d.name, d.step) {
+			continue // replaced by a later entry: see replacements
+		}
 		if err := root.Chmod(d.name, d.mode); err != nil {
 			if err := x.degrade("mode", "mode-dir", modeDegradeMsg,
 				fmt.Errorf("chmod dir %q: %w", x.show(d.name), err)); err != nil {
@@ -234,7 +253,7 @@ func (x *windowsExtractor) createOne(
 	name string,
 	hdr *tar.Header,
 	tr *tar.Reader,
-	materialised map[string]bool,
+	materialised map[string]int,
 	stats *Stats,
 ) error {
 	shown := x.show(name)
@@ -255,6 +274,7 @@ func (x *windowsExtractor) createOne(
 				return fmt.Errorf("remove existing %q: %w", shown, err)
 			}
 			delete(materialised, name)
+			x.repl.remove(name)
 		}
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return fmt.Errorf("lstat %q: %w", shown, err)
@@ -279,15 +299,20 @@ func (x *windowsExtractor) createOne(
 			return fmt.Errorf("create %q: %w", shown, err)
 		}
 		if _, err := io.CopyN(f, tr, hdr.Size); err != nil {
+			// A truncated file under its real name would read as restored.
 			f.Close()
-			return fmt.Errorf("write %q: %w", shown, err)
+			werr := fmt.Errorf("write %q: %w", shown, err)
+			if rerr := root.Remove(name); rerr != nil {
+				return errors.Join(werr, fmt.Errorf("remove partial %q: %w", shown, rerr))
+			}
+			return werr
 		}
 		if err := f.Close(); err != nil {
 			return fmt.Errorf("close %q: %w", shown, err)
 		}
 		stats.Files++
 		stats.BytesRaw += hdr.Size
-		materialised[name] = true
+		materialised[name] = x.repl.step
 	case tar.TypeSymlink:
 		if err := root.Symlink(hdr.Linkname, name); err != nil {
 			// Creating a symlink needs SeCreateSymbolicLinkPrivilege or
@@ -298,7 +323,8 @@ func (x *windowsExtractor) createOne(
 		}
 		stats.Symlinks++
 	case tar.TypeLink:
-		if !materialised[hdr.Linkname] {
+		written, ok := materialised[hdr.Linkname]
+		if !ok || x.repl.since(hdr.Linkname, written) {
 			return fmt.Errorf("hardlink %q -> %q: %w", shown, hdr.Linkname, errLinkTargetNotRestored)
 		}
 		if err := root.Link(hdr.Linkname, name); err != nil {
@@ -311,11 +337,11 @@ func (x *windowsExtractor) createOne(
 			}
 			stats.Files++
 			stats.BytesRaw += copied
-			materialised[name] = true
+			materialised[name] = x.repl.step
 			break
 		}
 		stats.Hardlinks++
-		materialised[name] = true
+		materialised[name] = x.repl.step
 	default:
 		// Devices, fifos, sockets and anything else: Windows has no
 		// equivalent. They are reported, never materialised as empty files.

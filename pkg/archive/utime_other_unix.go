@@ -1,7 +1,9 @@
-//go:build unix && !linux
+//go:build unix && !linux && !darwin && !netbsd
 
 package archive
 
-// POSIX UTIME_OMIT. x/sys/unix does not expose this constant on every Unix
-// target supported by the project.
-const utimeOmit = 1<<30 - 2
+import "golang.org/x/sys/unix"
+
+// UTIME_OMIT differs between kernels: -2 on FreeBSD, -1 on OpenBSD. Using the
+// Linux value here made every timestamp a restore applied fail with EINVAL.
+const utimeOmit = unix.UTIME_OMIT

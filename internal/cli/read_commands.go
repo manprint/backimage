@@ -286,7 +286,7 @@ func runDoctor(cmd *cobra.Command, args []string) error {
 	if len(args) == 0 {
 		args = []string{"."}
 	}
-	caps, err := archive.PreflightBackup(cmd.Context(), args)
+	caps, err := archive.PreflightBackup(cmd.Context(), args, nil)
 	if err != nil {
 		return err
 	}

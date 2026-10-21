@@ -154,7 +154,7 @@ func TestWriterTarTvGated(t *testing.T) {
 	// --xattrs and --acls are GNU extensions: bsdtar, which is what `tar` is
 	// on macOS, rejects them outright and would fail the archive for the
 	// wrong reason.
-	if ver, err := exec.Command("tar", "--version").Output(); err != nil ||
+	if ver, err := exec.CommandContext(t.Context(), "tar", "--version").Output(); err != nil ||
 		!strings.Contains(string(ver), "GNU tar") {
 		t.Skip("GNU tar not available")
 	}
@@ -174,7 +174,7 @@ func TestWriterTarTvGated(t *testing.T) {
 	defer f.Close()
 	f.Write(buf.Bytes())
 	f.Close()
-	out, err := exec.Command("tar", "--xattrs", "--acls", "-tvf", f.Name()).CombinedOutput()
+	out, err := exec.CommandContext(t.Context(), "tar", "--xattrs", "--acls", "-tvf", f.Name()).CombinedOutput()
 	if err != nil {
 		t.Fatalf("GNU tar rejects our archive: %v\n%s", err, out)
 	}
@@ -184,7 +184,7 @@ func TestWriterSocketsSkipped(t *testing.T) {
 	src := t.TempDir()
 	writeTree(t, src, fixtures.FeatBasic)
 	sock := src + "/sock"
-	l, err := net.Listen("unix", sock)
+	l, err := new(net.ListenConfig).Listen(t.Context(), "unix", sock)
 	if err != nil {
 		t.Skipf("cannot create unix socket: %v", err)
 	}

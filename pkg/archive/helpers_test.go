@@ -4,6 +4,7 @@ package archive
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"io"
 	"net"
@@ -49,7 +50,7 @@ func isRootCollision(err error, target **RootCollisionError) bool {
 var _ = listenOnUnix // referenced from network-triggered test files
 
 func listenOnUnix(path string) error {
-	l, err := net.Listen("unix", path)
+	l, err := new(net.ListenConfig).Listen(context.Background(), "unix", path)
 	if err != nil {
 		return err
 	}

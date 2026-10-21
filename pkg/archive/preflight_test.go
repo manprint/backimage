@@ -51,7 +51,7 @@ func TestPreflightBackupUnreadableFile(t *testing.T) {
 			t.Fatalf("chown (needs root): %v", err)
 		}
 	}
-	caps, err := PreflightBackup(context.Background(), []string{dir})
+	caps, err := PreflightBackup(context.Background(), []string{dir}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -95,7 +95,7 @@ func TestCountUnreadableReportsAnUnlistableDirectory(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "readable"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	n, example, err := countUnreadable(context.Background(), []string{root}, preflightSampleMax)
+	n, example, err := countUnreadable(context.Background(), []string{root}, nil, preflightSampleMax)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,7 +113,7 @@ func TestCountUnreadableNeverOpensAFifo(t *testing.T) {
 	}
 	done := make(chan error, 1)
 	go func() {
-		_, _, err := countUnreadable(context.Background(), []string{root}, preflightSampleMax)
+		_, _, err := countUnreadable(context.Background(), []string{root}, nil, preflightSampleMax)
 		done <- err
 	}()
 	select {
@@ -138,7 +138,7 @@ func TestCountUnreadableStopsAtTheSample(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	n, example, err := countUnreadable(context.Background(), []string{root, root}, 2)
+	n, example, err := countUnreadable(context.Background(), []string{root, root}, nil, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +148,7 @@ func TestCountUnreadableStopsAtTheSample(t *testing.T) {
 }
 
 func TestPreflightBackupEmptyRoots(t *testing.T) {
-	if _, err := PreflightBackup(context.Background(), nil); err == nil {
+	if _, err := PreflightBackup(context.Background(), nil, nil); err == nil {
 		t.Fatal("no roots must error")
 	}
 }

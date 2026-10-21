@@ -44,10 +44,12 @@ func TestDirectoryReplacedBySymlinkDoesNotLeakTheFinalChmod(t *testing.T) {
 	if fi.Mode().Perm() != 0o700 {
 		t.Fatalf("the mode of a directory outside the destination changed to %o", fi.Mode().Perm())
 	}
-	// The refusal is a degradation, not a failure: the entry that could not be
-	// finalised is reported rather than silently dropped.
-	if stats.Degraded["mode"] == 0 {
-		t.Fatalf("the refused chmod was not reported: %+v", stats.Degraded)
+	// The archive itself replaced the directory, so its fix is dropped before
+	// anything is attempted: the final state is what the archive describes,
+	// nothing was lost, and nothing is reported — a strict restore of this
+	// archive succeeds.
+	if stats.Degraded["mode"] != 0 {
+		t.Fatalf("a dropped fix was reported as a degradation: %+v", stats.Degraded)
 	}
 }
 

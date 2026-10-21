@@ -90,6 +90,10 @@ func (w *tarWriter) AddRoot(ctx context.Context, root string) error {
 		return &RootCollisionError{Base: base, A: prev, B: root}
 	}
 	w.rootBases[base] = root
+	if w.excluded(base) {
+		w.stats.Skipped++
+		return nil
+	}
 
 	st, err := os.Lstat(root)
 	if err != nil {
@@ -170,6 +174,12 @@ func (w *tarWriter) walkChildren(ctx context.Context, arcDir, fsRoot, dirPath st
 }
 
 func (w *tarWriter) walkEntry(ctx context.Context, rel, fsRoot string, src source) error {
+	// Decided on the name alone, before anything is stat'ed, opened or
+	// listed: nothing at or below an excluded path is touched.
+	if w.excluded(rel) {
+		w.stats.Skipped++
+		return nil
+	}
 	st, err := src.lstat()
 	if err != nil {
 		return w.handleWalkError(fmt.Errorf("lstat %q: %w", src.path, err), src.path)
@@ -295,7 +305,7 @@ func (w *tarWriter) emitOne(ctx context.Context, arcPath string, src source, st 
 	if e.Type == TypeDir {
 		metaFile = dirFile
 	}
-	if err := readMeta(fsPath, metaFile, st, w.opts, e); err != nil {
+	if err := readMeta(src, metaFile, st, w.opts, e); err != nil {
 		var lost *xattrLossError
 		if !errors.As(err, &lost) || w.opts.Strict {
 			return w.handleWalkError(fmt.Errorf("metadata %q: %w", fsPath, err), fsPath)
@@ -311,23 +321,17 @@ func (w *tarWriter) emitOne(ctx context.Context, arcPath string, src source, st 
 
 func (w *tarWriter) excluded(arcPath string) bool { return excludedBy(w.opts.Excludes, arcPath) }
 
-// excludedBy reports whether an archive path matches one of the exclude
-// patterns. The estimate walk uses it too, so both walks agree on what the
-// backup contains.
+// excludedBy reports whether an archive path, or one of its ancestors,
+// matches one of the exclude patterns. The estimate and preflight walks use
+// it too, so all three agree on what the backup contains; restore, ls and
+// find apply the same pathglob.MatchTree rule.
+//
+// The ancestor rule matters even though the walks stop at an excluded
+// directory: it is what makes "**/.cache" and "alice/.cache" mean the same
+// subtree. Only literal patterns used to cover descendants, so a glob that
+// named a directory dropped the directory entry and archived its content.
 func excludedBy(patterns []string, arcPath string) bool {
-	for _, pat := range patterns {
-		// pathglob, not filepath.Match: the latter treats "**" as a
-		// single-segment wildcard, so "alice/.cache/**" used to leave
-		// alice/.cache/chromium/Default/Cookies in the archive.
-		if pathglob.Match(pat, arcPath) {
-			return true
-		}
-		trimmed := strings.TrimSuffix(pat, "/")
-		if arcPath == trimmed || strings.HasPrefix(arcPath, trimmed+"/") {
-			return true
-		}
-	}
-	return false
+	return pathglob.MatchTreeAny(patterns, arcPath)
 }
 
 func (w *tarWriter) handleWalkError(err error, _ string) error {
@@ -454,23 +458,51 @@ func (w *tarWriter) writeEntry(ctx context.Context, e *Entry, fsPath string, st 
 		// already been built, compressed and encrypted. Stats.ContentSkipped
 		// is what says the bytes are missing; the digest stays truthful about
 		// the archive.
+		//
+		// The header already promised e.Size bytes, and tar holds a writer to
+		// it: a file that grew while it was read is cut at that size, one that
+		// shrank is padded with zeros, the way GNU tar does. Copying whatever
+		// the file held used to fail with "write too long" or, on the next
+		// header, "missed writing" — the whole backup lost to one log written
+		// while it was archived, in the mode meant to tolerate a live source.
 		h := sha256.New()
 		var n int64
+		grew := false
 		if f != nil {
+			src := &ctxReader{ctx: ctx, r: f}
 			var err error
-			n, err = io.Copy(io.MultiWriter(w.tw, h), &ctxReader{ctx: ctx, r: f})
+			n, err = io.Copy(io.MultiWriter(w.tw, h), io.LimitReader(src, e.Size))
 			if err != nil {
 				return fmt.Errorf("copy %q: %w", fsPath, err)
 			}
+			if n == e.Size {
+				var probe [1]byte
+				m, err := src.Read(probe[:])
+				if err != nil && !errors.Is(err, io.EOF) {
+					return fmt.Errorf("copy %q: %w", fsPath, err)
+				}
+				grew = m > 0
+			}
 		}
-		e.SHA256 = hex.EncodeToString(h.Sum(nil))
-		if n != e.Size {
-			msg := fmt.Errorf("size changed while archiving %q: stat %d, read %d", fsPath, e.Size, n)
+		if n != e.Size || grew {
+			read := fmt.Sprint(n)
+			if grew {
+				read = fmt.Sprintf("more than %d", n)
+			}
+			msg := fmt.Errorf("size changed while archiving %q: stat %d, read %s", fsPath, e.Size, read)
 			if w.opts.Strict {
 				return msg
 			}
 			w.stats.Errors = append(w.stats.Errors, msg)
+			w.warnOnce("alcuni file sono cambiati mentre venivano letti: archiviati alla dimensione rilevata " +
+				"all'inizio (troncati o completati con zeri)")
+			if pad := e.Size - n; pad > 0 {
+				if _, err := io.CopyN(io.MultiWriter(w.tw, h), zeroReader{}, pad); err != nil {
+					return fmt.Errorf("pad %q: %w", fsPath, err)
+				}
+			}
 		}
+		e.SHA256 = hex.EncodeToString(h.Sum(nil))
 		w.stats.BytesRaw += n
 	}
 	switch e.Type {
@@ -503,6 +535,14 @@ func (w *tarWriter) Entries() []Entry { return w.entries }
 type ctxReader struct {
 	ctx context.Context
 	r   io.Reader
+}
+
+// zeroReader yields zero bytes forever.
+type zeroReader struct{}
+
+func (zeroReader) Read(p []byte) (int, error) {
+	clear(p)
+	return len(p), nil
 }
 
 func (c *ctxReader) Read(p []byte) (int, error) {

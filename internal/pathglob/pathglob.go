@@ -62,6 +62,36 @@ func MatchAny(patterns []string, name string) bool {
 	return false
 }
 
+// MatchTree reports whether pat names name or one of its ancestors. It is the
+// rule every path filter applies — backup --exclude, the estimate, the
+// preflight, restore --include/--exclude, ls and find: a pattern that names a
+// directory, however it is spelled, also names everything below it. A
+// pattern also names its own literal spelling, so a directory called "a[1]"
+// is reachable even though "[1]" is a character class.
+func MatchTree(pat, name string) bool {
+	lit := strings.TrimSuffix(pat, "/")
+	for {
+		if name == lit || Match(pat, name) {
+			return true
+		}
+		i := strings.LastIndexByte(name, '/')
+		if i <= 0 {
+			return false
+		}
+		name = name[:i]
+	}
+}
+
+// MatchTreeAny reports whether MatchTree holds for at least one pattern.
+func MatchTreeAny(patterns []string, name string) bool {
+	for _, pat := range patterns {
+		if MatchTree(pat, name) {
+			return true
+		}
+	}
+	return false
+}
+
 // Validate rejects malformed patterns segment by segment. A filter is worth
 // validating up front: path.Match answers "no match" to a pattern it could not
 // parse, so a typo in an --exclude would otherwise read as "nothing to exclude"

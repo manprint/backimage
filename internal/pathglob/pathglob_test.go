@@ -90,3 +90,39 @@ func indexOf(haystack, needle string) int {
 	}
 	return -1
 }
+
+// TestMatchTreeCoversDescendants pins the one rule every filter shares: a
+// pattern that names a directory, however it is spelled, also names what is
+// below it. backup --exclude used to apply it only to literal patterns, so
+// "**/.cache" dropped the directory entry and archived its whole content.
+func TestMatchTreeCoversDescendants(t *testing.T) {
+	cases := []struct {
+		pat, name string
+		want      bool
+	}{
+		{"**/.cache", "root/a/.cache", true},
+		{"**/.cache", "root/a/.cache/secret", true},
+		{"**/.cache", "root/a/.cache/sub/deep", true},
+		{"*/a/.cache", "root/a/.cache/sub/deep", true},
+		{"*/*/.cache", "root/a/.cache/secret", true},
+		{"root/a/.cache", "root/a/.cache/secret", true},
+		{"root/a/.cache/", "root/a/.cache/secret", true},
+		{"root/a/.cache/**", "root/a/.cache/secret", true},
+		// A literal name with glob metacharacters still names itself.
+		{"root/a[1]", "root/a[1]/f", true},
+		{"root/a[1]", "root/a1/f", true},
+
+		{"**/.cache", "root/a/.cacheable/x", false},
+		{"*/a/.cache", "root/b/.cache/x", false},
+		{"root/a/.cache", "root/a", false},
+		{"root/a/.cache/x", "root/a/.cache", false},
+	}
+	for _, c := range cases {
+		if got := MatchTree(c.pat, c.name); got != c.want {
+			t.Errorf("MatchTree(%q, %q) = %v, want %v", c.pat, c.name, got, c.want)
+		}
+	}
+	if !MatchTreeAny([]string{"x", "**/.cache"}, "r/.cache/f") || MatchTreeAny(nil, "r/f") {
+		t.Fatal("MatchTreeAny does not agree with MatchTree")
+	}
+}

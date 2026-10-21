@@ -13,36 +13,14 @@ import (
 // ignored --include, --exclude and --strip-components entirely, so a selective
 // restore silently produced the whole backup.
 
-// selects reports whether name passes the include/exclude filters.
-//
-// A pattern ending in "/" also selects everything below it, which is what a
-// user means by `--include 'var/log/'`.
+// selects reports whether name passes the include/exclude filters, with the
+// rule every filter shares (pathglob.MatchTree): a pattern naming a directory
+// also names everything below it, however it is spelled.
 func selects(opts ExtractOptions, name string) bool {
-	if len(opts.Includes) > 0 {
-		ok := false
-		for _, pat := range opts.Includes {
-			if pathglob.Match(pat, name) {
-				ok = true
-				break
-			}
-			if strings.HasSuffix(pat, "/") && strings.HasPrefix(name, strings.TrimSuffix(pat, "/")+"/") {
-				ok = true
-				break
-			}
-		}
-		if !ok {
-			return false
-		}
+	if len(opts.Includes) > 0 && !pathglob.MatchTreeAny(opts.Includes, name) {
+		return false
 	}
-	for _, pat := range opts.Excludes {
-		if pathglob.Match(pat, name) {
-			return false
-		}
-		if strings.HasSuffix(pat, "/") && strings.HasPrefix(name, strings.TrimSuffix(pat, "/")+"/") {
-			return false
-		}
-	}
-	return true
+	return !pathglob.MatchTreeAny(opts.Excludes, name)
 }
 
 // stripComponents drops count leading path components, reporting false when

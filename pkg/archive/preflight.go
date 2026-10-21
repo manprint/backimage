@@ -69,8 +69,10 @@ func readCapEff() uint64 {
 func hasCap(eff uint64, bit uint) bool { return eff&(1<<bit) != 0 }
 
 // PreflightBackup inspects the environment and the given roots, and reports
-// what will and will not be preserved. Nothing is written.
-func PreflightBackup(ctx context.Context, roots []string) ([]Capability, error) {
+// what will and will not be preserved. Nothing is written. excludes are the
+// backup's exclude patterns: an excluded path is neither opened nor counted,
+// the same as in the archive.
+func PreflightBackup(ctx context.Context, roots, excludes []string) ([]Capability, error) {
 	if len(roots) == 0 {
 		return nil, errors.New("preflight: no roots given")
 	}
@@ -83,7 +85,7 @@ func PreflightBackup(ctx context.Context, roots []string) ([]Capability, error) 
 	capable := func(bit uint) bool { return amRoot || hasCap(eff, bit) }
 
 	// read-all-files: root, CAP_DAC_READ_SEARCH, or a light sample scan.
-	unreadable, example, err := countUnreadable(ctx, roots, preflightSampleMax)
+	unreadable, example, err := countUnreadable(ctx, roots, excludes, preflightSampleMax)
 	if err != nil {
 		return nil, err
 	}
@@ -142,7 +144,7 @@ func PreflightRestore(ctx context.Context, dest string) ([]Capability, error) {
 	if err := os.MkdirAll(dest, 0o755); err != nil {
 		return nil, fmt.Errorf("preflight restore %q: %w", dest, err)
 	}
-	return PreflightBackup(ctx, []string{dest})
+	return PreflightBackup(ctx, []string{dest}, nil)
 }
 
 // countUnreadable inspects at most max regular files and reports how many
@@ -152,11 +154,12 @@ func PreflightRestore(ctx context.Context, dest string) ([]Capability, error) {
 // time — because it reads the same source the backup must leave untouched.
 // A directory that cannot be listed counts as unreadable: its content would
 // be missing from the backup just the same.
-func countUnreadable(ctx context.Context, roots []string, max int) (int, string, error) {
-	c := unreadableCounter{ctx: ctx, max: max}
+func countUnreadable(ctx context.Context, roots, excludes []string, max int) (int, string, error) {
+	c := unreadableCounter{ctx: ctx, max: max, excludes: excludes}
 	for _, root := range roots {
 		root = filepath.Clean(root)
-		if err := c.visit(source{name: filepath.Base(root), path: root}); err != nil {
+		base := filepath.Base(root)
+		if err := c.visit(source{name: base, path: root}, base); err != nil {
 			if errors.Is(err, fs.SkipAll) {
 				break
 			}
@@ -169,6 +172,7 @@ func countUnreadable(ctx context.Context, roots []string, max int) (int, string,
 type unreadableCounter struct {
 	ctx        context.Context
 	max        int
+	excludes   []string
 	inspected  int
 	unreadable int
 	example    string
@@ -181,9 +185,12 @@ func (c *unreadableCounter) note(path string) {
 	}
 }
 
-func (c *unreadableCounter) visit(src source) error {
+func (c *unreadableCounter) visit(src source, arcPath string) error {
 	if err := c.ctx.Err(); err != nil {
 		return err
+	}
+	if excludedBy(c.excludes, arcPath) {
+		return nil
 	}
 	if c.inspected >= c.max {
 		return fs.SkipAll
@@ -213,7 +220,7 @@ func (c *unreadableCounter) visit(src source) error {
 		defer l.close()
 		l.releaseFile()
 		for _, name := range l.names {
-			if err := c.visit(source{dir: l.dir, name: name, path: filepath.Join(src.path, name)}); err != nil {
+			if err := c.visit(source{dir: l.dir, name: name, path: filepath.Join(src.path, name)}, arcPath+"/"+name); err != nil {
 				return err
 			}
 		}

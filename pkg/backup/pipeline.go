@@ -228,7 +228,7 @@ func Run(ctx context.Context, cfg Config) (Result, error) {
 	// 0) privilege preflight (01.7): in strict mode a missing capability
 	// aborts before any work.
 	if !cfg.AllowDegraded {
-		caps, perr := archive.PreflightBackup(ctx, cfg.RootPaths)
+		caps, perr := archive.PreflightBackup(ctx, cfg.RootPaths, cfg.Exclude)
 		if perr != nil {
 			return res, fmt.Errorf("preflight: %w", perr)
 		}

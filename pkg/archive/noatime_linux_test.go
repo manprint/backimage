@@ -34,7 +34,7 @@ func TestBackupLeavesSourceAccessTimesAlone(t *testing.T) {
 		}
 	}
 	archivePaths(t, root, Options{Strict: true, PreserveXattrs: true})
-	if _, err := PreflightBackup(context.Background(), []string{root}); err != nil {
+	if _, err := PreflightBackup(context.Background(), []string{root}, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Estimate(context.Background(), []string{root}, Options{Strict: true}); err != nil {

@@ -14,11 +14,13 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-// readMeta fills the platform-specific fields of e from fi and path. f, when
-// not nil, is the checked descriptor of the entry: its extended attributes
-// are then read from it rather than by path, so they belong to the same
-// object as the content.
-func readMeta(path string, f *os.File, fi os.FileInfo, opts Options, e *Entry) error {
+// readMeta fills the platform-specific fields of e from fi and the entry
+// src. f, when not nil, is the checked descriptor of the entry: its extended
+// attributes are then read from it, so they belong to the same object as the
+// content. Without one they are read through the directory handle that
+// listed the entry (entryXattrs).
+func readMeta(src source, f *os.File, fi os.FileInfo, opts Options, e *Entry) error {
+	path := src.path
 	st, ok := fi.Sys().(*syscall.Stat_t)
 	if !ok {
 		return fmt.Errorf("stat %q: no platform metadata", path)
@@ -38,7 +40,7 @@ func readMeta(path string, f *os.File, fi os.FileInfo, opts Options, e *Entry) e
 		if f != nil {
 			xs, err = readXattrsFile(path, f)
 		} else {
-			xs, err = readXattrs(path)
+			xs, err = entryXattrs(src, fi)
 		}
 		if err != nil {
 			// Only the attributes are lost, and only for this path: the
@@ -54,11 +56,56 @@ func readMeta(path string, f *os.File, fi os.FileInfo, opts Options, e *Entry) e
 	return nil
 }
 
+// entryXattrs reads the attributes of an entry the walk did not open — a
+// symlink, a device, a FIFO, a file it could not open — which st, the walk's
+// lstat, describes. The read never follows the final symlink and, where the
+// platform allows, resolves only the entry's own name in the directory the
+// walk listed (xattrPath). The entry is checked to be the object st
+// describes before and after the read, so a swap of the entry, or of a parent
+// on a platform that reads by full path, fails the read instead of archiving
+// another object's attributes under this entry's name.
+func entryXattrs(src source, st os.FileInfo) (map[string][]byte, error) {
+	at, release, err := xattrPath(src)
+	if err != nil {
+		return nil, fmt.Errorf("xattrs %s: %w", src.path, err)
+	}
+	defer release()
+	same := func() error {
+		fi, err := os.Lstat(at)
+		if err != nil {
+			return fmt.Errorf("xattrs %s: %w", src.path, err)
+		}
+		if !sameEntry(fi, st) {
+			return fmt.Errorf("xattrs %s: %w", src.path, errSourceChanged)
+		}
+		return nil
+	}
+	if err := same(); err != nil {
+		return nil, err
+	}
+	xs, err := readXattrsFrom(xattrSource{path: at, name: src.path, fd: -1})
+	if err != nil {
+		return nil, err
+	}
+	if err := same(); err != nil {
+		return nil, err
+	}
+	return xs, nil
+}
+
 // xattrSource reads the attributes of one entry, either through an open
 // descriptor or by path without following a final symlink.
 type xattrSource struct {
-	path string
-	fd   int // -1: by path
+	path string // what a by-path read resolves
+	name string // what errors call the entry; path when empty
+	fd   int    // -1: by path
+}
+
+func (s xattrSource) shown() string {
+	if s.name != "" {
+		return s.name
+	}
+	return s.path
 }
 
 func (s xattrSource) list(buf []byte) (int, error) {
@@ -92,7 +139,7 @@ func readXattrsFile(path string, f *os.File) (map[string][]byte, error) {
 		readErr error
 	)
 	if err := rc.Control(func(fd uintptr) {
-		xs, readErr = readXattrsFrom(xattrSource{path: path, fd: int(fd)})
+		xs, readErr = readXattrsFrom(xattrSource{name: path, fd: int(fd)})
 	}); err != nil {
 		return nil, fmt.Errorf("xattrs %s: %w", path, err)
 	}
@@ -100,7 +147,7 @@ func readXattrsFile(path string, f *os.File) (map[string][]byte, error) {
 }
 
 func readXattrsFrom(src xattrSource) (map[string][]byte, error) {
-	path := src.path
+	path := src.shown()
 	// List, growing the buffer on ERANGE (max 3 attempts).
 	size, err := src.list(nil)
 	if err != nil {
@@ -145,7 +192,7 @@ func readXattrsFrom(src xattrSource) (map[string][]byte, error) {
 }
 
 func readOneXattr(src xattrSource, name string) ([]byte, error) {
-	path := src.path
+	path := src.shown()
 	size, err := src.get(name, nil)
 	if err != nil {
 		if isMissingXattr(err) {
