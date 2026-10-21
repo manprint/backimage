@@ -217,70 +217,65 @@ func usernamesOf(creds []Credentials) []string {
 }
 
 func (s *fileStore) Put(c Credentials) error {
-	f, err := s.read()
-	if err != nil {
-		return err
-	}
-	if f.Auths == nil {
-		f.Auths = make(map[string]authEntry)
-	}
-	host := CanonicalHost(c.Registry)
-	// The first account of a host keeps the bare host key, which is what Docker
-	// and older backimage versions read; further accounts get a "host#user"
-	// key. Re-logging in as a known user overwrites that user's own key.
-	key := host
-	if existing, ok := f.Auths[host]; ok {
-		old, derr := decodeEntry(existing.Auth)
-		if derr != nil || old.Username != c.Username {
-			key = accountKey(host, c.Username)
+	return s.update(func(f *authFile) (bool, error) {
+		if f.Auths == nil {
+			f.Auths = make(map[string]authEntry)
 		}
-	}
-	f.Auths[key] = authEntry{Auth: encodeEntry(c.Username, c.Secret)}
-	return s.write(f)
+		host := CanonicalHost(c.Registry)
+		// The first account of a host keeps the bare host key, which is what
+		// Docker and older backimage versions read; further accounts get a
+		// "host#user" key. Re-logging in as a known user overwrites that
+		// user's own key.
+		key := host
+		if existing, ok := f.Auths[host]; ok {
+			old, derr := decodeEntry(existing.Auth)
+			if derr != nil || old.Username != c.Username {
+				key = accountKey(host, c.Username)
+			}
+		}
+		f.Auths[key] = authEntry{Auth: encodeEntry(c.Username, c.Secret)}
+		return true, nil
+	})
 }
 
 func (s *fileStore) Delete(key string) error {
-	f, err := s.read()
-	if err != nil {
-		return err
-	}
 	host := CanonicalHost(key)
-	removed := false
-	for k := range f.Auths {
-		if h, _ := splitAccountKey(k); CanonicalHost(h) == host {
-			delete(f.Auths, k)
-			removed = true
+	return s.update(func(f *authFile) (bool, error) {
+		removed := false
+		for k := range f.Auths {
+			if h, _ := splitAccountKey(k); CanonicalHost(h) == host {
+				delete(f.Auths, k)
+				removed = true
+			}
 		}
-	}
-	if !removed {
-		return nil
-	}
-	return s.write(f)
+		return removed, nil
+	})
 }
 
 func (s *fileStore) DeleteFor(key, username string) (bool, error) {
-	f, err := s.read()
-	if err != nil {
-		return false, err
-	}
 	host := CanonicalHost(key)
-	for k := range f.Auths {
-		h, u := splitAccountKey(k)
-		if CanonicalHost(h) != host {
-			continue
-		}
-		if u == "" {
-			// Bare host key: the username lives inside the entry.
-			if c, derr := decodeEntry(f.Auths[k].Auth); derr == nil {
-				u = c.Username
+	removed := false
+	err := s.update(func(f *authFile) (bool, error) {
+		for k := range f.Auths {
+			h, u := splitAccountKey(k)
+			if CanonicalHost(h) != host {
+				continue
+			}
+			if u == "" {
+				// Bare host key: the username lives inside the entry.
+				if c, derr := decodeEntry(f.Auths[k].Auth); derr == nil {
+					u = c.Username
+				}
+			}
+			if u == username || (u == tokenUsername && (username == "" || username == TokenAccountName)) {
+				delete(f.Auths, k)
+				removed = true
+				return true, nil
 			}
 		}
-		if u == username || (u == tokenUsername && (username == "" || username == TokenAccountName)) {
-			delete(f.Auths, k)
-			return true, s.write(f)
-		}
-	}
-	return false, nil
+		return false, nil
+	})
+	return removed && err == nil, err
 }
 
 func (s *fileStore) Accounts() ([]Account, error) {
@@ -327,6 +322,43 @@ func (s *fileStore) List() ([]string, error) {
 	}
 	sort.Strings(out)
 	return out, nil
+}
+
+// update runs one read-modify-write of the file under an exclusive lock: two
+// concurrent logins each read the file, added their account and renamed their
+// copy over the other's, losing one. The lock lives in a sibling file because
+// the rename replaces auth.json itself. Readers take no lock: a rename is
+// atomic, so they see one whole version or the other.
+func (s *fileStore) update(change func(f *authFile) (bool, error)) (err error) {
+	if err := os.MkdirAll(filepath.Dir(s.path), 0o700); err != nil {
+		return fmt.Errorf("creating store directory: %w", err)
+	}
+	lock, err := os.OpenFile(s.path+".lock", os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return fmt.Errorf("opening credentials lock: %w", err)
+	}
+	defer func() {
+		if cerr := lock.Close(); cerr != nil && err == nil {
+			err = fmt.Errorf("closing credentials lock: %w", cerr)
+		}
+	}()
+	if err := lockFile(lock); err != nil {
+		return fmt.Errorf("locking %s: %w", s.path, err)
+	}
+	defer func() {
+		if uerr := unlockFile(lock); uerr != nil && err == nil {
+			err = fmt.Errorf("unlocking %s: %w", s.path, uerr)
+		}
+	}()
+	f, err := s.read()
+	if err != nil {
+		return err
+	}
+	changed, err := change(f)
+	if err != nil || !changed {
+		return err
+	}
+	return s.write(f)
 }
 
 // read loads the file, tolerating absence.

@@ -36,7 +36,7 @@ func (a *ociAdapter) options(ctx context.Context) []remote.Option {
 	return o
 }
 func (a *ociAdapter) ListTags(ctx context.Context, repo name.Repository) ([]TagInfo, error) {
-	tags, err := remote.List(repo, a.options(ctx)...)
+	tags, err := ListTagNames(ctx, repo, a.options(ctx)...)
 	if err != nil {
 		return nil, fmt.Errorf("list tags: %w", err)
 	}

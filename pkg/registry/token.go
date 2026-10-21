@@ -233,10 +233,16 @@ func (p *provider) realm(ctx context.Context) (string, url.Values, error) {
 		return "", nil, fmt.Errorf("registry %s: unsupported authentication", p.registry)
 	}
 	if baseURL != nil {
-		realm = resolveRealm(realm, baseURL)
+		if realm, err = resolveRealm(realm, baseURL); err != nil {
+			return "", nil, fmt.Errorf("registry %s: %w", p.registry, err)
+		}
 	}
 	return realm, params, nil
 }
+
+// maxTokenLifetime caps the expires_in an issuer announces. A longer token
+// is only refreshed earlier than announced.
+const maxTokenLifetime = 365 * 24 * time.Hour
 
 func (p *provider) mint(ctx context.Context, scope Scope) (*Token, error) {
 	if p.auth != nil {
@@ -310,12 +316,16 @@ func (p *provider) mint(ctx context.Context, scope Scope) (*Token, error) {
 	if resp.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("token request (%s): %s answered %d", req.URL.String(), p.registry, resp.StatusCode)
 	}
+	data, err := readBounded(resp.Body, maxTokenAnswer)
+	if err != nil {
+		return nil, fmt.Errorf("token body: %w", err)
+	}
 	var body struct {
 		Token     string `json:"token"`
-		ExpiresIn int    `json:"expires_in"`
+		ExpiresIn int64  `json:"expires_in"`
 		IssuedAt  string `json:"issued_at"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+	if err := json.Unmarshal(data, &body); err != nil {
 		return nil, fmt.Errorf("token body: %w", err)
 	}
 	if body.Token == "" {
@@ -323,7 +333,9 @@ func (p *provider) mint(ctx context.Context, scope Scope) (*Token, error) {
 	}
 	ttl := DefaultTokenTTL
 	if body.ExpiresIn > 0 {
-		ttl = time.Duration(body.ExpiresIn) * time.Second
+		// Capped before the multiplication, which overflows past ~292
+		// years: 2^62 seconds used to become a zero lifetime.
+		ttl = time.Duration(min(body.ExpiresIn, int64(maxTokenLifetime/time.Second))) * time.Second
 	}
 	issued := p.now()
 	if body.IssuedAt != "" {

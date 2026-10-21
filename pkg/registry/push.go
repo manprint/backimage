@@ -798,10 +798,10 @@ func (p *pusher) verifyPushed() (int, int, error) {
 			return blobs, 0, fmt.Errorf("verifica blob %s: %w", t.digest, err)
 		}
 		if !ok {
-			return blobs, 0, fmt.Errorf("verifica: il registry non conserva il blob %s appena pubblicato", t.digest)
+			return blobs, 0, mismatchf("verifica: il registry non conserva il blob %s appena pubblicato", t.digest)
 		}
 		if size > 0 && size != t.size {
-			return blobs, 0, fmt.Errorf("verifica: blob %s conservato con %d byte invece di %d", t.digest, size, t.size) //nolint:misspell // Messaggio in italiano.
+			return blobs, 0, mismatchf("verifica: blob %s conservato con %d byte invece di %d", t.digest, size, t.size) //nolint:misspell // Messaggio in italiano.
 		}
 		blobs++
 	}
@@ -837,22 +837,46 @@ func (p *pusher) verifyManifest(digest string, m rawManifest) error {
 		return err
 	}
 	defer resp.Body.Close()
-	body, err := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return &httpError{code: resp.StatusCode, msg: fmt.Sprintf("verifica manifest %s: risposta %d", digest, resp.StatusCode)}
+	}
+	// What was pushed bounds what may come back: a longer answer is already
+	// another manifest, and reading it whole would let a registry stream
+	// without end into memory.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, int64(len(m.body))+1))
 	if err != nil {
 		return fmt.Errorf("verifica manifest %s: %w", digest, err)
 	}
-	if resp.StatusCode != http.StatusOK {
-		return &httpError{code: resp.StatusCode, msg: fmt.Sprintf("verifica manifest %s: risposta %d", digest, resp.StatusCode)}
+	if len(body) > len(m.body) {
+		return mismatchf("verifica manifest %s: il registry risponde con più dei %d byte pubblicati", digest, len(m.body))
 	}
 	sum := sha256.Sum256(body)
 	got := "sha256:" + hex.EncodeToString(sum[:])
 	if got != digest {
-		return fmt.Errorf("verifica manifest %s: il body scaricato ha digest %s", digest, got)
+		return mismatchf("verifica manifest %s: il body scaricato ha digest %s", digest, got)
 	}
 	if !bytes.Equal(body, m.body) {
-		return fmt.Errorf("verifica manifest %s: il body scaricato differisce da quello pubblicato", digest)
+		return mismatchf("verifica manifest %s: il body scaricato differisce da quello pubblicato", digest)
 	}
 	return nil
+}
+
+// ErrPublishedMismatch marks a read-back that found the registry holding
+// something other than what was pushed: a lost or resized blob, a manifest
+// with another body, a tag that resolves elsewhere. The registry answered, so
+// it is an integrity failure, never a network one.
+var ErrPublishedMismatch = errors.New("the registry does not hold what was published")
+
+// publishedMismatch keeps the message of the failed check and still matches
+// ErrPublishedMismatch.
+type publishedMismatch struct{ msg string }
+
+func (e *publishedMismatch) Error() string { return e.msg }
+
+func (e *publishedMismatch) Is(target error) bool { return target == ErrPublishedMismatch }
+
+func mismatchf(format string, args ...any) error {
+	return &publishedMismatch{msg: fmt.Sprintf(format, args...)}
 }
 
 // verifyTag proves that the caller's reference resolves to the index we
@@ -877,7 +901,7 @@ func (p *pusher) verifyTag() error {
 	// Not every registry sends the header on a HEAD; when it does it must
 	// name the index we tagged.
 	if got := resp.Header.Get("Docker-Content-Digest"); got != "" && got != p.taggedDigest {
-		return fmt.Errorf("verifica tag %s: risolve a %s invece di %s", ident, got, p.taggedDigest)
+		return mismatchf("verifica tag %s: risolve a %s invece di %s", ident, got, p.taggedDigest)
 	}
 	return nil
 }

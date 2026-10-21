@@ -2,6 +2,7 @@ package registry
 
 import (
 	"errors"
+	"fmt"
 	"path"
 	"regexp"
 	"sort"
@@ -327,14 +328,34 @@ func markFirst(tags []TagInfo, selected map[string]bool, n int, bucket func(TagI
 	}
 }
 
+// matchesAny reports whether tag matches one of the KeepTags patterns. A
+// pattern that cannot be evaluated counts as a match: it belongs to a keep
+// rule, and a keep rule that fails must keep. Validate refuses such a pattern
+// before it gets here.
 func matchesAny(tag string, patterns []string) bool {
 	for _, pattern := range patterns {
 		ok, err := path.Match(pattern, tag)
-		if err == nil && ok {
+		if err != nil || ok {
 			return true
 		}
 	}
 	return false
+}
+
+// Validate refuses a policy whose rules cannot do what they say. A KeepTags
+// pattern that is malformed, or empty, matches no tag: as the only keep rule
+// it would protect nothing, and every dated tag would be removed. Callers
+// validate before listing a single tag.
+func (p Policy) Validate() error {
+	for _, pattern := range p.KeepTags {
+		if pattern == "" {
+			return errors.New("--keep-tag: empty pattern")
+		}
+		if _, err := path.Match(pattern, ""); err != nil {
+			return fmt.Errorf("--keep-tag %q: %w", pattern, err)
+		}
+	}
+	return nil
 }
 
 func tagKey(t TagInfo) string { return t.Tag + "\x00" + t.Digest.String() }

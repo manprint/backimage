@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -73,6 +74,8 @@ type fakeRegistry struct {
 	dropAfterPublish   bool // HEAD of a blob answers 404
 	resizeAfterPublish bool // HEAD of a blob answers a wrong Content-Length
 	tamperManifest     bool // GET of a manifest answers a mutated body
+	floodManifest      int  // GET of a manifest answers this many bytes
+	floodSent          int64
 }
 
 func newFakeRegistry() *fakeRegistry {
@@ -215,6 +218,23 @@ func (f *fakeRegistry) server() *httptest.Server {
 			f.mu.Unlock()
 			if tamper && r.Method == http.MethodGet {
 				body += " "
+			}
+			f.mu.Lock()
+			flood := 0
+			if f.published {
+				flood = f.floodManifest
+			}
+			f.mu.Unlock()
+			if flood > 0 && r.Method == http.MethodGet {
+				chunk := bytes.Repeat([]byte(" "), 64<<10)
+				for sent := 0; sent < flood; sent += len(chunk) {
+					n, err := w.Write(chunk)
+					atomic.AddInt64(&f.floodSent, int64(n))
+					if err != nil {
+						return
+					}
+				}
+				return
 			}
 			sum := sha256.Sum256([]byte(body))
 			w.Header().Set("Content-Type", mediaType)

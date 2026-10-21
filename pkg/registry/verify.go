@@ -97,7 +97,10 @@ func VerifyCredentials(ctx context.Context, host string, c Credentials) error {
 	if err != nil {
 		return fmt.Errorf("registry %s: %w", host, err)
 	}
-	realm = resolveRealm(realm, first.Request.URL)
+	realm, err = resolveRealm(realm, first.Request.URL)
+	if err != nil {
+		return fmt.Errorf("registry %s: %w", host, err)
+	}
 	if realm == "" {
 		return fmt.Errorf("credentials rejected: %s answered %d", host, code)
 	}
@@ -156,10 +159,14 @@ func exchangeToken(ctx context.Context, client *http.Client, realm string, param
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("token status %d", resp.StatusCode)
 	}
+	data, err := readBounded(resp.Body, maxTokenAnswer)
+	if err != nil {
+		return "", fmt.Errorf("token body: %w", err)
+	}
 	var body struct {
 		Token string `json:"token"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+	if err := json.Unmarshal(data, &body); err != nil {
 		return "", fmt.Errorf("token body: %w", err)
 	}
 	if body.Token == "" {
@@ -168,31 +175,103 @@ func exchangeToken(ctx context.Context, client *http.Client, realm string, param
 	return body.Token, nil
 }
 
-// parseBearerChallenge extracts realm/service/scope from a
-// WWW-Authenticate: Bearer ... header.
 // resolveRealm absolutizes a realm returned by WWW-Authenticate when the
-// registry omitted the scheme (allowed per RFC 6750; tests do it).
-func resolveRealm(realm string, base *url.URL) string {
-	if realm == "" || strings.Contains(realm, "://") {
-		return realm
+// registry omitted the scheme (allowed per RFC 6750; tests do it). It refuses
+// a realm reached over a weaker scheme than the registry itself: the token
+// request carries the Basic credentials, and an https registry naming an
+// http realm would have them sent in clear text.
+func resolveRealm(realm string, base *url.URL) (string, error) {
+	if realm == "" {
+		return "", nil
 	}
-	// realm is a bare authority + path: absolutize with the request scheme.
-	return base.Scheme + "://" + realm
+	if !strings.Contains(realm, "://") {
+		// realm is a bare authority + path: absolutize with the request scheme.
+		realm = base.Scheme + "://" + realm
+	}
+	u, err := url.Parse(realm)
+	if err != nil {
+		return "", fmt.Errorf("token realm: %w", err)
+	}
+	switch u.Scheme {
+	case "https":
+	case "http":
+		if base.Scheme != "http" {
+			return "", fmt.Errorf("token realm %s is plain http for an %s registry", u.Redacted(), base.Scheme)
+		}
+	default:
+		return "", fmt.Errorf("token realm %s: unsupported scheme %q", u.Redacted(), u.Scheme)
+	}
+	return realm, nil
 }
 
+// parseBearerChallenge extracts realm/service/scope from a
+// WWW-Authenticate: Bearer ... header. Parameter names are case-insensitive
+// and a quoted value is taken whole (RFC 7235): a scope may itself hold
+// commas, as in "repository:x:pull,push".
 func parseBearerChallenge(h string) (string, url.Values, error) {
 	if len(h) < 7 || !strings.EqualFold(h[:7], "Bearer ") {
 		return "", nil, fmt.Errorf("unsupported challenge %q", h)
 	}
 	params := url.Values{}
-	for _, kv := range strings.Split(h[7:], ",") {
-		parts := strings.SplitN(strings.TrimSpace(kv), "=", 2)
-		if len(parts) != 2 {
-			continue
+	rest := h[7:]
+	for {
+		rest = strings.TrimLeft(rest, " \t,")
+		eq := strings.IndexByte(rest, '=')
+		if eq < 0 {
+			break
 		}
-		params.Set(parts[0], strings.Trim(parts[1], `"`))
+		key := strings.ToLower(strings.TrimSpace(rest[:eq]))
+		rest = strings.TrimLeft(rest[eq+1:], " \t")
+		var value string
+		if strings.HasPrefix(rest, `"`) {
+			var b strings.Builder
+			closed := false
+			i := 1
+			for ; i < len(rest); i++ {
+				c := rest[i]
+				if c == '\\' && i+1 < len(rest) {
+					i++
+					b.WriteByte(rest[i])
+					continue
+				}
+				if c == '"' {
+					closed = true
+					break
+				}
+				b.WriteByte(c)
+			}
+			if !closed {
+				return "", nil, fmt.Errorf("challenge parameter %q: unterminated quoted value", key)
+			}
+			value, rest = b.String(), rest[i+1:]
+		} else {
+			end := strings.IndexByte(rest, ',')
+			if end < 0 {
+				end = len(rest)
+			}
+			value, rest = strings.TrimSpace(rest[:end]), rest[end:]
+		}
+		params.Set(key, value)
 	}
 	return params.Get("realm"), params, nil
+}
+
+// maxTokenAnswer bounds the answer of a token endpoint: a bearer token is a
+// few KiB, the largest issued in practice a few tens.
+const maxTokenAnswer = 1 << 20
+
+// readBounded reads r to the end and fails, instead of truncating, once it
+// holds more than limit bytes: a peer that streams without end must not
+// exhaust the memory of the client.
+func readBounded(r io.Reader, limit int64) ([]byte, error) {
+	data, err := io.ReadAll(io.LimitReader(r, limit+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > limit {
+		return nil, fmt.Errorf("answer exceeds %d bytes", limit)
+	}
+	return data, nil
 }
 
 func basicAuthHeader(user, secret string) string {

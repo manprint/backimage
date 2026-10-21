@@ -2,6 +2,7 @@ package registry
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sort"
 
@@ -34,7 +35,7 @@ func Stats(ctx context.Context, repo name.Repository, kc Keychain) (RepositorySt
 	if kc != nil {
 		opts = append(opts, remote.WithAuthFromKeychain(kc))
 	}
-	tags, err := remote.List(repo, opts...)
+	tags, err := ListTagNames(ctx, repo, opts...)
 	if err != nil {
 		return RepositoryStats{}, fmt.Errorf("listing tags: %w", err)
 	}
@@ -90,7 +91,8 @@ func countIndex(idx v1.ImageIndex, counts map[string]countedBlob) error {
 		}
 		child, childErr := idx.ImageIndex(desc.Digest)
 		if childErr != nil {
-			return err
+			// Neither an image nor an index: both answers say why.
+			return fmt.Errorf("manifest %s: %w", desc.Digest, errors.Join(err, childErr))
 		}
 		if err := countIndex(child, counts); err != nil {
 			return err

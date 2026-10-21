@@ -202,9 +202,12 @@ func TestVerifyCredentialFallbackAndHelpers(t *testing.T) {
 	}
 
 	base, _ := url.Parse("https://registry.test/v2/")
-	if resolveRealm("https://auth.test/token", base) != "https://auth.test/token" ||
-		resolveRealm("", base) != "" || resolveRealm("auth.test/token", base) != "https://auth.test/token" {
-		t.Fatal("realm resolution failed")
+	for realm, want := range map[string]string{
+		"https://auth.test/token": "https://auth.test/token", "": "", "auth.test/token": "https://auth.test/token",
+	} {
+		if got, err := resolveRealm(realm, base); err != nil || got != want {
+			t.Fatalf("realm resolution of %q = %q, %v", realm, got, err)
+		}
 	}
 	if got, err := httpBase("localhost:5000"); err != nil || got != "http://localhost:5000" {
 		t.Fatalf("localhost base = %q, %v", got, err)

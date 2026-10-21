@@ -2,6 +2,7 @@ package registry
 
 import (
 	"bytes"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -22,6 +23,11 @@ func TestPushVerificationCatchesLostBlob(t *testing.T) {
 	if !strings.Contains(err.Error(), "non conserva il blob") {
 		t.Fatalf("error must name the missing blob: %v", err)
 	}
+	// A read-back that disagrees is an integrity answer (exit 5), however
+	// the message is worded.
+	if !errors.Is(err, ErrPublishedMismatch) {
+		t.Fatalf("verification failure is not ErrPublishedMismatch: %v", err)
+	}
 }
 
 func TestPushVerificationCatchesWrongStoredSize(t *testing.T) {
@@ -37,6 +43,11 @@ func TestPushVerificationCatchesWrongStoredSize(t *testing.T) {
 	if !strings.Contains(err.Error(), "byte invece di") {
 		t.Fatalf("error must report both sizes: %v", err)
 	}
+	// A read-back that disagrees is an integrity answer (exit 5), however
+	// the message is worded.
+	if !errors.Is(err, ErrPublishedMismatch) {
+		t.Fatalf("verification failure is not ErrPublishedMismatch: %v", err)
+	}
 }
 
 func TestPushVerificationCatchesTamperedManifest(t *testing.T) {
@@ -51,6 +62,11 @@ func TestPushVerificationCatchesTamperedManifest(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "manifest") {
 		t.Fatalf("error must name the manifest: %v", err)
+	}
+	// A read-back that disagrees is an integrity answer (exit 5), however
+	// the message is worded.
+	if !errors.Is(err, ErrPublishedMismatch) {
+		t.Fatalf("verification failure is not ErrPublishedMismatch: %v", err)
 	}
 }
 
