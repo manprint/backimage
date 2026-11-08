@@ -28,7 +28,7 @@ cleanup() {
 	rc=$?
 	if [ "$rc" -ne 0 ]; then
 		echo "phase 08 stream diagnostics (exit $rc)" >&2
-		for log in server.log client.err quic.err layers.err; do
+		for log in server.log client.err par1.err par2.err quic.err layers.err; do
 			if [ -f "$work/$log" ]; then echo "[$log]" >&2; sed -n '1,80p' "$work/$log" >&2; fi
 		done
 	fi

@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.2] - 2026-11-08
+
+Solo test: nessuna modifica al codice del prodotto, al formato né agli exit code.
+
+- **Diagnostica e2e.** `phase_08_stream.sh` stampa anche `par1.err` e `par2.err`
+  in caso di errore, cioè i log delle due sessioni concorrenti del test
+  `--work-dir` condiviso. Prima il dettaglio del fallimento non compariva.
+
 ## [0.7.1] - 2026-11-08
 
 Solo aggiornamento di dipendenze: nessuna modifica al codice del progetto, al
