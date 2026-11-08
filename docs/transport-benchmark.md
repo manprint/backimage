@@ -48,7 +48,7 @@ The following hidden options exist only for a controlled benchmark run:
 - `--x-quic-window N` changes the initial QUIC stream receive window.
 - `--x-quic-gso=false` sets `QUIC_GO_DISABLE_GSO=true` before opening QUIC.
 - `--x-quic-streams` is intentionally fixed to `1` by protocol v1.
-- `--x-quic-cc` accepts only `cubic`: quic-go v0.61.0 exposes no alternative
+- `--x-quic-cc` accepts only `cubic`: quic-go v0.65.0 exposes no alternative
   congestion-controller selector.
 
 Normal remote backups need none of these options.
