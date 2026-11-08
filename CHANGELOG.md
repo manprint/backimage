@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.1] - 2026-11-08
+
+Solo aggiornamento di dipendenze: nessuna modifica al codice del progetto, al
+formato né agli exit code. Toolchain `go1.27.3` invariata.
+
+- **Dipendenze.** `github.com/quic-go/quic-go` 0.64.1 → 0.65.0 (trasporto
+  QUIC) e `github.com/spf13/pflag` 1.0.10 → 1.1.0. Aggiornati anche i moduli
+  indiretti (fra cui `golang.org/x/net` 0.62.0, `docker/cli` 29.9.3,
+  `golang/protobuf` 1.5.4, `go.uber.org/mock` 0.6.0).
+- **Documentazione.** `docs/transport-benchmark.md` indica quic-go 0.65.0.
+
 ## [0.7.0] - 2026-10-21
 
 Correzioni da una revisione del codice file per file (rapporto del
