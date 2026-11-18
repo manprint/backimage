@@ -46,7 +46,7 @@ jobs:
       - name: Install govulncheck
         # make check ends in the vuln gate, which fails outright when the tool
         # is missing.
-        run: go install golang.org/x/vuln/cmd/govulncheck@v1.9.0
+        run: go install golang.org/x/vuln/cmd/govulncheck@v1.10.0
       - run: go mod download
       - name: Install protobuf toolchain
         run: |

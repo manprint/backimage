@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"runtime/debug"
 	"sort"
 	"testing"
 )
@@ -17,7 +18,8 @@ import (
 // goldenCompressed pins the output of the libraries go.mod requires. A change
 // here is a decision, not a test to fix: the CHANGELOG has to say that
 // deduplication against older backups restarts, and the failure message
-// prints the entries to paste.
+// prints the entries to paste. TestGoldenPinsMatchDependencyVersion makes a
+// library bump fail even when the digests happen not to move.
 func TestCodecOutputMatchesThePinnedDigests(t *testing.T) {
 	fixtures := determinismFixtures(1<<12, 1<<20)
 	checked := 0
@@ -64,24 +66,24 @@ func goldenLevels(c Codec) []int {
 
 // goldenCompressed: codec/level/fixture -> sha256 of the compressed bytes.
 var goldenCompressed = map[string]string{
-	"gzip/1/noise-1048576":  "246ba6e99540cbebe43497072eef389030111ae5f5f3b60731fbed5747236821",
-	"gzip/1/noise-4096":     "b0c627a421d2849496ecdf5d849f7bb8e3bcf0babfefc43c1643b52363a5c96f",
-	"gzip/1/text-1048576":   "484dcdc0efb2ae19d870f3e6df2b138d6b124eca0b87c46191245f9d48c5c2c7",
-	"gzip/1/text-4096":      "61fcab8102c6b41ee68ad7d0e408e393c3f5220ed1fa927b115cf149b629d6c2",
-	"gzip/1/zeros-1048576":  "7b179c71f5f2fcec86ab1bde45bf56be2f2af495a78618fc463d29b20b334063",
-	"gzip/1/zeros-4096":     "163e8f95d193b21500a0cd620d114f5f2cd217ea72330ba613fcb6c24d7cb701",
-	"gzip/6/noise-1048576":  "b5a4712114ae01f457186f4f39e941caab10c7ae20202c1ccf5b9f0ce7a9c65c",
-	"gzip/6/noise-4096":     "ef13b3bc265f1aedc60b821845a12d62390dca2ea3be6b4cb22fbc805f36867e",
-	"gzip/6/text-1048576":   "f7257aa4c4fdeee9e15c724c403fd388b4a39df277e63780b8fc75ba62b3c075",
-	"gzip/6/text-4096":      "89a1575b8d8bb91b5964cddb39b4beb459ef3d52efe7df2b040c4f063605dcc0",
-	"gzip/6/zeros-1048576":  "5206a18e19e0d447a6cb3ec225661bdc59d49dc1893045a0e1b9bf15c113f0d7",
-	"gzip/6/zeros-4096":     "c8367b2040f9cb8fb27bdc545e27cb1c08b07de455d98d936242cdc313227a1b",
-	"gzip/9/noise-1048576":  "615ff6495ab0869f1c1eb892b97693138f18d567ec46722d4d5943e4ee3a2662",
-	"gzip/9/noise-4096":     "9d5e78de50efb3bf57065a97c908ebc4fe790d5556e1bb0c617271b6958c2a83",
-	"gzip/9/text-1048576":   "97915906ab27090423753df722708725d4a93d85e7992ea26185121e7de21a5f",
-	"gzip/9/text-4096":      "01840cd36d78e384e7da342410b5ff6158a7aa0967e93b18440dcc2e7cfa2646",
-	"gzip/9/zeros-1048576":  "3d37d1c8b952153dde990513e4db1c8b35b51872318f492996aa30c2c9efa94f",
-	"gzip/9/zeros-4096":     "844ae725040c2889024213898c7f4d5c13ac2b74f702cba3d46cd2952bd7a39f",
+	"gzip/1/noise-1048576":  "4f6b5ff642b77268e5d6d2e4942041ad7cf784010b03497b68278efe3b804872",
+	"gzip/1/noise-4096":     "e8a49dfa643343c5425926c03eb1e283b48a71ea12f30ac9ee3415e6f48d9c8a",
+	"gzip/1/text-1048576":   "b5e15ec63a3cf0fa4abfbc417d9175afc06cc9b17fd9c56fe30b94f99623a988",
+	"gzip/1/text-4096":      "3bb0fd7cb88df884e7ab7309ad31a4dc09970952491d87db7878f435f105be4a",
+	"gzip/1/zeros-1048576":  "f9c45f0a7d7391ae91ec1ddcb9201d633f9bbe40ad52e1ea7ada0d8a44f8d6f3",
+	"gzip/1/zeros-4096":     "82da27d488d11d79618d2a6d5a89f872d2507ad822f7b23424033c11fd132f2f",
+	"gzip/6/noise-1048576":  "5e3a453f744383d4b124e39338896158ce86b31415b2f31e4b653109ec4d578b",
+	"gzip/6/noise-4096":     "9757e7791aeb176aaf5014bcf4657ee4e90112b77d6d74c474e449a370ba1ddc",
+	"gzip/6/text-1048576":   "7a4eea85b83fb810963849b4bd2420485511fa2b00704e7742a49f8d51b79972",
+	"gzip/6/text-4096":      "d7b221122352242697623715858b1afbcd1f2ed12f6292bef1ef566d006bdf10",
+	"gzip/6/zeros-1048576":  "83c95878b4198fcb9fbe8ea034c5476377601fdce7b5715783adee9b9933149f",
+	"gzip/6/zeros-4096":     "662cdaec9de87d4c2372e28309d2471932aa22035cf3d0ba82f55f52667d7837",
+	"gzip/9/noise-1048576":  "0441a38d60f8e1831687f62da996e476bd46e5eca4797c9175041ae62a884968",
+	"gzip/9/noise-4096":     "3d20266109f2c95705f12187856d84f7cc6528fef78ae546d6fb16b28fb02b5b",
+	"gzip/9/text-1048576":   "0b2f8a11e0a9a0bebeb72cda86f7edea512b6d497c33b073d0e89c79927fb0f1",
+	"gzip/9/text-4096":      "accbb39cafe587bf031ae90789c6b8caec0448c63ec1587d9fc0e4e7f67e0d3c",
+	"gzip/9/zeros-1048576":  "d7851fe46f7c0b2b0fd180f32f26158818ddf3a026a8ecd9b6edd56fee5a2b29",
+	"gzip/9/zeros-4096":     "651a6d48f1a20f7a933c2b41b4ca7db1ab2070d32173e720c7e17ab2537b5e2c",
 	"lz4/0/noise-1048576":   "df2029f73a5905d6eb1deb5a803de1eed005b98a3b5c5f89f23167c4f7c49380",
 	"lz4/0/noise-4096":      "ff6b838715444c97a263d46475355d368542288b75e7147ab2a63118817a3cc3",
 	"lz4/0/text-1048576":    "05436186148017db34a4820976907c97a9a6f5b116d1b012d76e141333e02b27",
@@ -142,4 +144,32 @@ var goldenCompressed = map[string]string{
 	"zstd/4/text-4096":      "3c38179f3867592cb15c237e8efb03725fb45ffd2db5f0123c75bd2c74e74b92",
 	"zstd/4/zeros-1048576":  "c86cf7bfca49b446d0d0806e0a2ecf1c069526345eb76ca63d6a28e93e30e880",
 	"zstd/4/zeros-4096":     "3f6eb289782a5e7edc82aae9f37d424a6fe76171fc0ee720459c931071391e40",
+}
+
+// pinnedCompressVersion is the module version whose bytes goldenCompressed
+// records. Bumping klauspost/compress must update it in the same change set,
+// even when the output happens to stay byte-identical: the upgrade still has
+// to be reviewed for the one-time --dedup reload documented in the CHANGELOG.
+const pinnedCompressVersion = "v1.20.4"
+
+// TestGoldenPinsMatchDependencyVersion closes the gap in the byte check: a
+// library can change its encoder internals without changing these particular
+// fixtures. Without this guard such a bump would go unnoticed by both tests,
+// and the next --dedup run would silently re-upload under a new library.
+func TestGoldenPinsMatchDependencyVersion(t *testing.T) {
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		t.Fatal("no build info: cannot verify which compression library produced the golden pins")
+	}
+	for _, dep := range info.Deps {
+		if dep.Path != "github.com/klauspost/compress" {
+			continue
+		}
+		if dep.Version != pinnedCompressVersion {
+			t.Fatalf("golden pins are for %s, build uses %s: update goldenCompressed, "+
+				"pinnedCompressVersion and the CHANGELOG before shipping", pinnedCompressVersion, dep.Version)
+		}
+		return
+	}
+	t.Fatal("github.com/klauspost/compress missing from build info")
 }

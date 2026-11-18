@@ -5,6 +5,31 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.3] - 2026-11-17
+
+Solo aggiornamento di toolchain e dipendenze: nessuna modifica al formato,
+agli exit code o ai codec.
+
+- **Toolchain.** `toolchain go1.27.3` → `go1.27.4` in `go.mod`. La patch del
+  2026-11-10 chiude 12 advisory (11 nel toolchain/cgo, una in `net/http`);
+  `govulncheck` non riporta advisory raggiungibili con questa toolchain.
+- **Gate.** `govulncheck` v1.9.0 → v1.10.0 in `.github/workflows/ci.yml` e
+  `.github/workflows/release.yml`.
+- **Dipendenze.** `github.com/moby/moby/client` 0.6.2 → 0.6.3, con
+  `github.com/moby/moby/api` 1.56.1 → 1.57.0; `golang.org/x/sys` 0.49.0 →
+  0.50.0; `golang.org/x/term` 0.47.0 → 0.48.0; `golang.org/x/crypto` 0.58.0 →
+  0.59.0, che non contiene più il pacchetto `openpgp` non manutenuto di
+  GO-2026-5932.
+- **Compressione.** `klauspost/compress` 1.20.3 → 1.20.4. Cambia l'output gzip
+  ai livelli 1, 6 e 9 sui vettori da 4 KiB e 1 MiB; zstd, lz4, xz e store
+  restano byte-identici. Il primo backup con `--dedup` e codec gzip fatto dopo
+  l'aggiornamento ricarica i blob una volta sola, poi la dedup riprende.
+  Client e riceventi remoto v2 devono usare la stessa versione della libreria:
+  con produttori misti il ricarico si ripete a ogni cambio. I pin dei digest in
+  `pkg/compress/golden_test.go` sono aggiornati; il nuovo
+  `TestGoldenPinsMatchDependencyVersion` blocca un bump che non aggiorni i pin
+  e questa nota, anche quando i byte non cambiano.
+
 ## [0.7.2] - 2026-11-08
 
 Solo test: nessuna modifica al codice del prodotto, al formato né agli exit code.

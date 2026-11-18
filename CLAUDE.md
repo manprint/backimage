@@ -4,8 +4,8 @@ Guida completa: `AGENTS.md` (leggerla prima di modificare codice).
 
 ## Toolchain e dipendenze
 
-- Go: `toolchain go1.27.3` in `go.mod` (ultima patch stabile verificata 2026-11-08).
-- golangci-lint pinzato `v2.15.0` (Makefile `GOLANGCI_VERSION`), govulncheck in `~/go/bin`.
+- Go: `toolchain go1.27.4` in `go.mod` (ultima patch stabile verificata 2026-11-17).
+- golangci-lint pinzato `v2.15.0` (Makefile `GOLANGCI_VERSION`); govulncheck `v1.10.0` pinzato nei due workflow, binario in `~/go/bin`.
 - Aggiornamento moduli: `go get -u all && go mod tidy`, poi `make check`.
   Moduli solo nel grafo (non compilati) possono restare indietro: non è un problema di build.
 

@@ -255,6 +255,10 @@ senza rete e senza backimage installato sull'host di destinazione.
   byte fra versioni delle librerie: se un aggiornamento lo fa fallire, i nuovi
   digest si aggiornano solo annunciando nel `CHANGELOG.md` il ricaricamento
   una tantum dei backup `--dedup` con quel codec.
+  `TestGoldenPinsMatchDependencyVersion` lega inoltre i pin alla versione
+  esatta di `klauspost/compress`: un bump non passa inosservato nemmeno se i
+  digest restano uguali. Con v1.20.4 sono cambiati i 18 pin gzip (livelli 1,
+  6, 9); zstd, lz4, xz e store sono invariati.
 - La passphrase del backup non è una credenziale del registry.
 - Da file e da stdin la passphrase è la **prima riga**, senza `\n` o `\r\n`
   finale, con la stessa regola per entrambi; le letture delle versioni
@@ -433,8 +437,9 @@ corrente, non un elenco file obsoleto nel piano.
 
 Requisiti base:
 
-- Go 1.27 o superiore, con `toolchain go1.27.3` come minimo pinzato in `go.mod`;
+- Go 1.27 o superiore, con `toolchain go1.27.4` come minimo pinzato in `go.mod`;
 - `golangci-lint` v2.15.0 in `$HOME/go/bin/golangci-lint` (la configurazione è sullo schema v2; un binario della serie 1 non la sa leggere e `make lint` lo rifiuta prima di partire; il controllo accetta la versione con o senza la `v` iniziale). Va compilato con un Go non più vecchio di quello del modulo, come in CI: compilato con la 1.26 non sa leggere la standard library della 1.27 e riempie il rapporto di falsi `typecheck`. Un binario installato altrove si passa con `make lint GOLANGCI=/percorso/golangci-lint`;
+- `govulncheck` v1.10.0, pinzato in `.github/workflows/ci.yml` e `.github/workflows/release.yml`; il `Makefile` lo invoca senza pin;
 - `protoc` 36.2 e `protoc-gen-go` v1.36.12 per `proto-check`, la stessa versione del runtime `google.golang.org/protobuf` in `go.mod`. Con la v1.34.2 il file generato dipendeva dal Go con cui era compilato il plugin (un commento cambiava fra 1.26 e 1.27): la v1.36.12 produce gli stessi byte con entrambe;
 - Docker e QEMU solo per e2e/cross-arch;
 - CGO disabilitato per build normali; il race detector lo abilita.
@@ -478,15 +483,17 @@ make vuln
 ```
 
 `make vuln` esegue `govulncheck ./...`. Fa parte di `check`: `go.mod`
-pinza `toolchain go1.27.3`, con cui nessuna advisory della standard library
-risulta raggiungibile da questo codice (con la 1.26.6 erano 11, e la 1.27.2
-aveva ancora GO-2026-6809). Resta una sola advisory di modulo, non chiamata e
-senza correzione: GO-2026-5932 (`golang.org/x/crypto/openpgp`), elencata nel
-`CHANGELOG.md` della 0.5.0. `govulncheck` giudica la standard library del Go
-in uso, non il minimo: un Go locale senza la patch che chiude un'advisory fa
-fallire il gate anche se il codice è a posto, e `GOTOOLCHAIN=go1.27.3 make
-vuln` riproduce la toolchain della CI. Il minimo va rialzato quando una nuova
-advisory raggiungibile viene chiusa da una patch successiva.
+pinza `toolchain go1.27.4`, patch del 2026-11-10 che chiude 12 advisory (11
+nel toolchain/cgo, una in `net/http`); `govulncheck` non riporta advisory
+raggiungibili da questo codice. Le patch precedenti no: con la 1.26.6 erano
+11 e la 1.27.2 aveva ancora GO-2026-6809. La dipendenza indiretta
+`golang.org/x/crypto` è alla v0.59.0, che non contiene più il pacchetto
+`openpgp` non manutenuto di GO-2026-5932. `govulncheck` giudica la standard
+library del Go in uso, non il minimo: un Go locale senza la patch che chiude
+un'advisory fa fallire il gate anche se il codice è a posto, e
+`GOTOOLCHAIN=go1.27.4 make vuln` riproduce la toolchain della CI. Il minimo va
+rialzato quando una nuova advisory raggiungibile viene chiusa da una patch
+successiva.
 
 I test root-gated e alcuni e2e richiedono privilegi reali, xattr, ACL,
 capability, device/FIFO, Docker o rete. Non sostituirli con mock quando il gate
@@ -647,6 +654,15 @@ locale verde tranne la 06, che richiede QEMU arm64; immagine Docker avviata
 come `nonroot:nonroot` con nuovo named volume, coppia TLS persistente creata e
 riusata dopo il restart, nessun errore di permessi. Questa è una fotografia,
 non sostituisce il gate dopo nuove modifiche.
+
+Aggiornamento 2026-11-17: toolchain pinzata a go1.27.4, `govulncheck` v1.10.0,
+`klauspost/compress` 1.20.4, `moby/client` 0.6.3, `x/sys` 0.50.0, `x/term`
+0.48.0 e `x/crypto` 0.59.0. I 18 pin gzip sono stati ricalcolati e il ricarico
+una tantum di `--dedup` è annunciato nel `CHANGELOG.md`.
+Verifica locale parziale: `go build ./...`, test dei package e `govulncheck`
+verdi, `deps-check`, `docs-check` ed e2e 10 verdi. `make check` completo non
+eseguito: `golangci-lint` e la toolchain protobuf non sono installati in questa
+sandbox.
 
 ## Documentazione autorevole
 

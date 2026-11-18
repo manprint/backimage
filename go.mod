@@ -2,26 +2,27 @@ module github.com/manprint/backimage
 
 go 1.27
 
-// Minimum toolchain: go1.27.3 is the latest patch of the language version
-// above, and govulncheck reports no standard-library advisory reachable from
-// this code with it (go1.26.6 left 11, crypto/x509 GO-2026-6809 among them,
-// and go1.27.2 still had that one). This line is what stops a release from
-// being built with an older patch.
-toolchain go1.27.3
+// Minimum toolchain: go1.27.4 is the latest patch of the language version
+// above. It closes the 12 advisories fixed on 2026-11-10 (11 in the
+// toolchain/cgo, one in net/http); govulncheck reports no advisory reachable
+// from this code with it. Earlier patches did not: go1.26.6 left 11, and
+// go1.27.2 still had crypto/x509 GO-2026-6809. This line is what stops a
+// release from being built with an older patch.
+toolchain go1.27.4
 
 require (
 	filippo.io/age v1.3.2
 	github.com/google/go-containerregistry v0.22.1
-	github.com/klauspost/compress v1.20.3
-	github.com/moby/moby/client v0.6.2
+	github.com/klauspost/compress v1.20.4
+	github.com/moby/moby/client v0.6.3
 	github.com/pierrec/lz4/v4 v4.1.33
 	github.com/quic-go/quic-go v0.65.0
 	github.com/restic/chunker v0.5.0
 	github.com/spf13/cobra v1.10.2
 	github.com/spf13/pflag v1.1.0
 	github.com/ulikunitz/xz v0.5.17
-	golang.org/x/sys v0.49.0
-	golang.org/x/term v0.47.0
+	golang.org/x/sys v0.50.0
+	golang.org/x/term v0.48.0
 	google.golang.org/protobuf v1.36.12
 )
 
@@ -42,7 +43,7 @@ require (
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/inconshreveable/mousetrap v1.1.0 // indirect
 	github.com/moby/docker-image-spec v1.3.1 // indirect
-	github.com/moby/moby/api v1.56.1 // indirect
+	github.com/moby/moby/api v1.57.0 // indirect
 	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/opencontainers/image-spec v1.1.1 // indirect
 	github.com/russross/blackfriday/v2 v2.1.0 // indirect
@@ -55,7 +56,7 @@ require (
 	go.opentelemetry.io/otel/trace v1.47.0 // indirect
 	go.uber.org/mock v0.6.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.6 // indirect
-	golang.org/x/crypto v0.58.0 // indirect
+	golang.org/x/crypto v0.59.0 // indirect
 	golang.org/x/mod v0.42.0 // indirect
 	golang.org/x/net v0.62.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect
