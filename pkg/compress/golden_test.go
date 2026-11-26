@@ -80,7 +80,7 @@ var goldenCompressed = map[string]string{
 	"gzip/6/zeros-4096":     "662cdaec9de87d4c2372e28309d2471932aa22035cf3d0ba82f55f52667d7837",
 	"gzip/9/noise-1048576":  "0441a38d60f8e1831687f62da996e476bd46e5eca4797c9175041ae62a884968",
 	"gzip/9/noise-4096":     "3d20266109f2c95705f12187856d84f7cc6528fef78ae546d6fb16b28fb02b5b",
-	"gzip/9/text-1048576":   "0b2f8a11e0a9a0bebeb72cda86f7edea512b6d497c33b073d0e89c79927fb0f1",
+	"gzip/9/text-1048576":   "fd26da9b690fd3a3e70d207ea4946a1f61911a9c1cc6535050464fe663cedd8b",
 	"gzip/9/text-4096":      "accbb39cafe587bf031ae90789c6b8caec0448c63ec1587d9fc0e4e7f67e0d3c",
 	"gzip/9/zeros-1048576":  "d7851fe46f7c0b2b0fd180f32f26158818ddf3a026a8ecd9b6edd56fee5a2b29",
 	"gzip/9/zeros-4096":     "651a6d48f1a20f7a933c2b41b4ca7db1ab2070d32173e720c7e17ab2537b5e2c",
@@ -128,19 +128,19 @@ var goldenCompressed = map[string]string{
 	"xz/9/zeros-4096":       "5624945294ddf8ed37dc559e2a8b2d0464a4dbf4b87dad399219c2e262131089",
 	"zstd/1/noise-1048576":  "df8555248f0f13f2922ba9e4314a5170ec34ef4793790a820b2fe94ac70c44f7",
 	"zstd/1/noise-4096":     "25fe655355d37dad452781e2857d7f721997bec9f127a5f2230d2865bf0412d3",
-	"zstd/1/text-1048576":   "21407a9becac4149deed402f9586f7cab738652f8f79312fbee55ac53e64e546",
+	"zstd/1/text-1048576":   "47f83c261ce1d70ff907ea663dccac41baf46f02d2458242308145f5558aac73",
 	"zstd/1/text-4096":      "a4b00a95bea13bfce97d7069b2927388981fe3cb23c36f60e0fa9eaa7c652d95",
 	"zstd/1/zeros-1048576":  "8d02ada5b391ea3ab520818c320d0d3d95ce7e974ea22680f90962ebd3e429e7",
 	"zstd/1/zeros-4096":     "3f6eb289782a5e7edc82aae9f37d424a6fe76171fc0ee720459c931071391e40",
 	"zstd/2/noise-1048576":  "2ea0659ac52388fb7919c659eda3b8e330a56122f3f6bda01c293eb326b62737",
 	"zstd/2/noise-4096":     "25fe655355d37dad452781e2857d7f721997bec9f127a5f2230d2865bf0412d3",
-	"zstd/2/text-1048576":   "78968d2bd8961c25395d6018fe49466671f0cdeeb33540f4cf1aa262d7ed2745",
+	"zstd/2/text-1048576":   "59b79ed8f3e93abd2551c5dbf026ac3b9f3c56e569705e28d3825bed32d35fa5",
 	"zstd/2/text-4096":      "d46329bdd36cad4703ccdacc3caed09ac169ee251e1fef0880d4821de7d5e17e",
 	"zstd/2/zeros-1048576":  "e4f5a0c53f8a6bda0af0e6cfcf4501ab9840ccd037f5dfa1d187720441b25744",
 	"zstd/2/zeros-4096":     "3f6eb289782a5e7edc82aae9f37d424a6fe76171fc0ee720459c931071391e40",
 	"zstd/4/noise-1048576":  "2ea0659ac52388fb7919c659eda3b8e330a56122f3f6bda01c293eb326b62737",
 	"zstd/4/noise-4096":     "25fe655355d37dad452781e2857d7f721997bec9f127a5f2230d2865bf0412d3",
-	"zstd/4/text-1048576":   "bbc1a6fca96a466e204a2df5e121673301094e5358d15d99470741d1a6f76cef",
+	"zstd/4/text-1048576":   "a95bd8a73a3f14c93421cc90f165e3c725986000fd75c95f214fcd34bd07f9b6",
 	"zstd/4/text-4096":      "3c38179f3867592cb15c237e8efb03725fb45ffd2db5f0123c75bd2c74e74b92",
 	"zstd/4/zeros-1048576":  "c86cf7bfca49b446d0d0806e0a2ecf1c069526345eb76ca63d6a28e93e30e880",
 	"zstd/4/zeros-4096":     "3f6eb289782a5e7edc82aae9f37d424a6fe76171fc0ee720459c931071391e40",
@@ -150,7 +150,7 @@ var goldenCompressed = map[string]string{
 // records. Bumping klauspost/compress must update it in the same change set,
 // even when the output happens to stay byte-identical: the upgrade still has
 // to be reviewed for the one-time --dedup reload documented in the CHANGELOG.
-const pinnedCompressVersion = "v1.20.4"
+const pinnedCompressVersion = "v1.20.5"
 
 // TestGoldenPinsMatchDependencyVersion closes the gap in the byte check: a
 // library can change its encoder internals without changing these particular

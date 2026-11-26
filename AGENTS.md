@@ -659,6 +659,14 @@ Aggiornamento 2026-11-17: toolchain pinzata a go1.27.4, `govulncheck` v1.10.0,
 `klauspost/compress` 1.20.4, `moby/client` 0.6.3, `x/sys` 0.50.0, `x/term`
 0.48.0 e `x/crypto` 0.59.0. I 18 pin gzip sono stati ricalcolati e il ricarico
 una tantum di `--dedup` è annunciato nel `CHANGELOG.md`.
+
+Aggiornamento 2026-11-26 (release 0.7.4):
+`klauspost/compress` 1.20.5 (pin zstd 1/2/4 e gzip 9 ricalcolati, nuovo
+ricarico `--dedup`), `lz4` 4.1.34, `quic-go` 0.66.0, indirette `x/net`
+0.63.0, `x/sync` 0.25.0, `x/tools` 0.53.0. Dockerfile su
+`golang:1.27-trixie` e `distroless/static-debian13:nonroot`. Action GitHub
+alle ultime major (Node 24); `cosign-installer` v4 installa cosign v3, quindi
+le release pubblicano bundle `<file>.sigstore.json` invece di `.sig`/`.pem`.
 Verifica locale parziale: `go build ./...`, test dei package e `govulncheck`
 verdi, `deps-check`, `docs-check` ed e2e 10 verdi. `make check` completo non
 eseguito: `golangci-lint` e la toolchain protobuf non sono installati in questa

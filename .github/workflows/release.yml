@@ -30,11 +30,11 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.tag || github.ref }}
           fetch-depth: 0
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
@@ -75,16 +75,16 @@ jobs:
     timeout-minutes: 30
     needs: verify
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.tag || github.ref }}
           fetch-depth: 0
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache: true
       - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v6
+        uses: goreleaser/goreleaser-action@v7
         with:
           distribution: goreleaser
           version: '~> v2'
@@ -92,16 +92,16 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - name: Install Cosign
-        uses: sigstore/cosign-installer@v3.8.1
+        uses: sigstore/cosign-installer@v4.1.4
       - name: Sign archives and checksums
-        env:
-          COSIGN_EXPERIMENTAL: '1'
+        # cosign v3 (installed by cosign-installer v4) writes signature,
+        # certificate and transparency-log proof into one Sigstore bundle;
+        # the separate --output-signature/--output-certificate files are gone.
         run: |
           shopt -s nullglob
           for artifact in dist/*.tar.gz dist/*.zip dist/checksums.txt; do
             cosign sign-blob --yes \
-              --output-signature "${artifact}.sig" \
-              --output-certificate "${artifact}.pem" \
+              --bundle "${artifact}.sigstore.json" \
               "${artifact}"
           done
       - name: Upload signatures
@@ -110,7 +110,7 @@ jobs:
           RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
         run: |
           shopt -s nullglob
-          gh release upload "$RELEASE_TAG" dist/*.sig dist/*.pem --clobber
+          gh release upload "$RELEASE_TAG" dist/*.sigstore.json --clobber
       - name: Verify published release assets
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -125,23 +125,23 @@ jobs:
     timeout-minutes: 30
     needs: verify
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ inputs.tag || github.ref }}
           fetch-depth: 0
-      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-qemu-action@v4
         with:
           platforms: arm64
-      - uses: docker/setup-buildx-action@v3
+      - uses: docker/setup-buildx-action@v4
       - name: Log in to GHCR
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Extract image metadata
         id: meta
-        uses: docker/metadata-action@v5
+        uses: docker/metadata-action@v6
         with:
           images: ghcr.io/${{ github.repository }}
           # A prerelease tag (v0.2.3-dev.1) publishes only its own image tag:
@@ -150,7 +150,7 @@ jobs:
             type=raw,value=${{ inputs.tag || github.ref_name }}
             type=raw,value=latest,enable=${{ !contains(inputs.tag || github.ref_name, '-') }}
       - name: Build and push image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: Dockerfile

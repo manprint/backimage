@@ -5,6 +5,43 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.7.4] - 2026-11-26
+
+Aggiornamento di dipendenze, immagini base e workflow: nessuna modifica al
+formato né agli exit code. Toolchain invariata (`go1.27.4` è l'ultima patch).
+
+- **Compressione.** `klauspost/compress` 1.20.4 → 1.20.5. Cambia l'output
+  zstd ai livelli 1, 2 e 4 e gzip al livello 9 sul vettore testuale da 1 MiB;
+  lz4, xz e store restano byte-identici. Il primo backup con `--dedup` e codec
+  zstd (il default) o gzip fatto dopo l'aggiornamento ricarica i blob una
+  volta sola, poi la dedup riprende. Client e riceventi remoto v2 devono usare
+  la stessa versione della libreria. Pin aggiornati in
+  `pkg/compress/golden_test.go`.
+- **Dipendenze.** `pierrec/lz4/v4` 4.1.33 → 4.1.34 (output invariato);
+  `quic-go/quic-go` 0.65.0 → 0.66.0; indirette `golang.org/x/net` 0.63.0,
+  `x/sync` 0.25.0, `x/tools` 0.53.0, `docker/cli` 29.10.1,
+  `docker-credential-helpers` 0.9.13, `go.opentelemetry.io/auto/sdk` 1.2.2.
+- **Immagine tool.** Build su `golang:1.27-trixie`, runtime
+  `gcr.io/distroless/static-debian13:nonroot` (prima bookworm/debian12),
+  frontend `docker/dockerfile:1.29`. Utente `nonroot:nonroot` e `/data`
+  `65532:65532` `0700` invariati.
+- **CI/release.** Action alle ultime major (runtime Node 24, runner ≥
+  2.327.1): `checkout` v7, `setup-go` v7, `upload-artifact` v7,
+  `docker/build-push-action` v7, `login-action` v4, `metadata-action` v6,
+  `setup-buildx-action` v4, `setup-qemu-action` v4, `goreleaser-action` v7,
+  `cosign-installer` v4.1.4.
+- **Firme release.** `cosign-installer` v4 installa cosign v3, che non produce
+  più firma e certificato separati. Ogni archivio e `checksums.txt` sono ora
+  accompagnati da un unico bundle Sigstore `<file>.sigstore.json` al posto di
+  `<file>.sig` e `<file>.pem`. Verifica:
+
+  ```console
+  cosign verify-blob --bundle checksums.txt.sigstore.json \
+    --certificate-identity-regexp 'https://github.com/manprint/backimage/' \
+    --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+    checksums.txt
+  ```
+
 ## [0.7.3] - 2026-11-17
 
 Solo aggiornamento di toolchain e dipendenze: nessuna modifica al formato,

@@ -57,7 +57,8 @@ massimo, su vettori di 4 KiB e 1 MiB, e fallisce stampando il valore nuovo. Un a
 va annunciato nel changelog insieme al ricaricamento che comporta: è successo con
 `klauspost/compress` v1.20.3, il cui zstd produce altri byte dalla v1.19.2 sui
 vettori da 1 MiB, e ancora con v1.20.4, che cambia gzip ai livelli 1, 6 e 9 sui
-vettori da 4 KiB e 1 MiB. `TestGoldenPinsMatchDependencyVersion` lega quei pin
+vettori da 4 KiB e 1 MiB, e con v1.20.5, che cambia zstd ai livelli 1, 2 e 4 e
+gzip al livello 9 sul vettore testuale da 1 MiB. `TestGoldenPinsMatchDependencyVersion` lega quei pin
 alla versione esatta del modulo: un bump senza aggiornare pin e changelog fa
 fallire il test anche se i digest non si muovono.
 
